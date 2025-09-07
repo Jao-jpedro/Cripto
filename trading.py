@@ -1,7 +1,3 @@
-# joao bonito
-# Databricks notebook source
-# MAGIC %pip install ccxt
-
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
@@ -29,7 +25,8 @@ def _excepthook(exc_type, exc, tb):  # pragma: no cover
 _sys.excepthook = _excepthook
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
+datetime.now(timezone.utc)
 import os
 
 # --- Compat: stubs para ambiente local (sem Databricks) ---
@@ -53,56 +50,41 @@ except NameError:  # pragma: no cover
     def displayHTML(html: str):
         print(html)
 
-# URL(s) base da API da Binance com failover (sem depender de env)
+# URL(s) base da API da Binance com failover
 import time as _time
 
-# Configurações locais (sem necessidade de ENV)
-_BINANCE_CFG = {
-    "BASES": [
-        "https://data-api.binance.vision/api/v3/",
-    ],
-    "TIMEOUT": 10,
-    "RETRIES": 3,
-    "BACKOFF": 0.5,
-    "UA": "Mozilla/5.0 (X11; Linux x86_64) PythonRequests/2.x",
-    "ACCEPTED_RETRIES": 2,  # 202 por gateway
-    "TRY_UIKLINES": True,
-    "FALLBACK_CCXT": True,
-    "FORCE_CCXT_FIRST": False,
-    "FORCE_VISION_ONLY": True,
-    "MAX_REQUESTS": 200,
-    "DEBUG_FETCH": True,
-    "MAX_EMPTY_BATCHES": 3,
-    "MAX_STALE_BATCHES": 3,
-}
-
 def _binance_bases():
-    if _BINANCE_CFG.get("FORCE_VISION_ONLY"):
-        return ["https://data-api.binance.vision/api/v3/"]
-    return list(_BINANCE_CFG["BASES"])  # cópia
+    env_override = os.getenv("BINANCE_BASE_URL")
+    if env_override:
+        base = env_override.rstrip("/")
+        return [f"{base}/api/v3/"]
+    return [
+        "https://api.binance.com/api/v3/",
+        "https://api1.binance.com/api/v3/",
+        "https://api2.binance.com/api/v3/",
+        "https://api3.binance.com/api/v3/",
+        "https://api-gateway.binance.com/api/v3/",
+        "https://api-gcp.binance.com/api/v3/",
+        "https://data-api.binance.vision/api/v3/",
+    ]
 
 def _binance_session():
     s = requests.Session()
-    # permite uso de proxies do ambiente (HTTP(S)_PROXY)
-    try:
-        s.trust_env = True
-    except Exception:
-        pass
     try:
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
         retry = Retry(
-            total=_BINANCE_CFG["RETRIES"],
-            backoff_factor=_BINANCE_CFG["BACKOFF"],
+            total=int(os.getenv("BINANCE_RETRIES", "3")),
+            backoff_factor=float(os.getenv("BINANCE_BACKOFF", "0.5")),
             status_forcelist=[429, 451, 500, 502, 503, 504],
-            allowed_methods=["GET"],
+            allowed_methods=["GET", "POST"],
         )
         adapter = HTTPAdapter(max_retries=retry)
         s.mount("https://", adapter); s.mount("http://", adapter)
     except Exception:
         pass
     s.headers.update({
-        "User-Agent": _BINANCE_CFG["UA"],
+        "User-Agent": os.getenv("BINANCE_UA", "Mozilla/5.0 (X11; Linux x86_64) PythonRequests/2.x"),
         "Accept": "application/json",
     })
     return s
@@ -110,7 +92,7 @@ def _binance_session():
 # Função para buscar todos os pares de criptomoedas disponíveis na Binance
 def get_all_symbols():
     session = _binance_session()
-    timeout = _BINANCE_CFG["TIMEOUT"]
+    timeout = int(os.getenv("BINANCE_TIMEOUT", "10"))
     last_err = None
     for base in _binance_bases():
         url = f"{base}exchangeInfo"
@@ -133,82 +115,19 @@ def get_all_symbols():
 
 # Função para buscar os dados da criptomoeda
 # Aceita datetime diretamente
-def get_binance_data(symbol, interval, start_date, end_date, **kwargs):
-    # Garante janela máxima de 48h
-    if end_date is None:
-        end_date = datetime.now()
-    max_window = timedelta(hours=48)
-    min_start = end_date - max_window
-    if start_date is None or start_date < min_start:
-        start_date = min_start
-    # Se configurado para forçar CCXT primeiro, tenta imediatamente
-    if _BINANCE_CFG.get("FORCE_CCXT_FIRST"):
-        data_ccxt = []
-        try:
-            def _ccxt_try(exchange_id: str):
-                import ccxt  # type: ignore
-                ex = getattr(ccxt, exchange_id)({"enableRateLimit": True})
-                # mapeia símbolo para formato CCXT
-                sym = f"{symbol[:-4]}/USDT" if symbol.endswith("USDT") else symbol
-                tf = interval
-                start_ms = int(start_date.timestamp() * 1000)
-                end_ms = int(end_date.timestamp() * 1000)
-                ohlcv_all, since = [], start_ms
-                while since < end_ms:
-                    batch = ex.fetch_ohlcv(sym, timeframe=tf, since=since, limit=1000)
-                    if not batch:
-                        break
-                    ohlcv_all.extend(batch)
-                    since = batch[-1][0] + 1
-                    if len(ohlcv_all) >= 5000:
-                        break
-                return [{
-                    "data": o[0],
-                    "valor_fechamento": round(float(o[4]), 7),
-                    "criptomoeda": symbol,
-                    "volume_compra": float(o[5] or 0.0),
-                    "volume_venda": float(o[5] or 0.0),
-                } for o in ohlcv_all]
-            # tenta binance spot; se falhar, tenta binanceusdm (perp USDT-M)
-            try:
-                data_ccxt = _ccxt_try("binance")
-            except Exception as e1:
-                print(f"[WARN] CCXT binance falhou: {type(e1).__name__}: {e1}", flush=True)
-                try:
-                    data_ccxt = _ccxt_try("binanceusdm")
-                except Exception as e2:
-                    print(f"[WARN] CCXT binanceusdm falhou: {type(e2).__name__}: {e2}", flush=True)
-            if data_ccxt:
-                print("[INFO] CCXT-first OK — dados obtidos.", flush=True)
-                return data_ccxt
-        except Exception as e:
-            print(f"[WARN] CCXT-first indisponível: {type(e).__name__}: {e}", flush=True)
+def get_binance_data(symbol, interval, start_date, end_date):
     start_timestamp = int(start_date.timestamp() * 1000)
     end_timestamp = int(end_date.timestamp() * 1000)
 
     session = _binance_session()
-    timeout = _BINANCE_CFG["TIMEOUT"]
+    timeout = int(os.getenv("BINANCE_TIMEOUT", "10"))
 
     all_data = []
     current_start = start_timestamp
     bases = _binance_bases()
     base_idx = 0
-    req_count = 0
-    empty_batches = 0
-    stale_batches = 0
 
-    def _interval_to_ms(iv: str) -> int:
-        table = {
-            "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
-            "30m": 1_800_000, "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
-            "6h": 21_600_000, "8h": 28_800_000, "12h": 43_200_000,
-            "1d": 86_400_000, "3d": 259_200_000, "1w": 604_800_000,
-            "1M": 2_592_000_000,
-        }
-        return table.get(iv, 900_000)  # default 15m
-    interval_ms = _interval_to_ms(interval)
-
-    while current_start < end_timestamp and req_count < _BINANCE_CFG["MAX_REQUESTS"]:
+    while current_start < end_timestamp:
         tried = 0
         success = False
         last_status = None
@@ -222,80 +141,25 @@ def get_binance_data(symbol, interval, start_date, end_date, **kwargs):
                 "endTime": end_timestamp,
                 "limit": 1000
             }
-            accepted_retries = _BINANCE_CFG["ACCEPTED_RETRIES"]
-            accepted_count = 0
             try:
-                while accepted_count <= accepted_retries:
-                    resp = session.get(url, params=params, timeout=timeout)
-                    last_status = resp.status_code
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if not data:
-                            empty_batches += 1
-                            if _BINANCE_CFG["DEBUG_FETCH"]:
-                                print(f"[DEBUG] empty batch base={base} cs={current_start} empty_seq={empty_batches}", flush=True)
-                            success = True
-                            break
-                        all_data.extend(data)
-                        last_open = int(data[-1][0])
-                        if _BINANCE_CFG["DEBUG_FETCH"]:
-                            print(f"[DEBUG] {symbol} base={base} batch={len(data)} first={data[0][0]} last={last_open} cs={current_start}", flush=True)
-                        # evita travar caso a API retorne o mesmo timestamp
-                        if last_open <= current_start:
-                            stale_batches += 1
-                            print(f"[WARN] timestamp não avançou (last={last_open} <= cs={current_start}); forçando avanço por intervalo. stale_seq={stale_batches}", flush=True)
-                            current_start = current_start + interval_ms
-                        else:
-                            stale_batches = 0
-                            current_start = last_open + 1
+                resp = session.get(url, params=params, timeout=timeout)
+                last_status = resp.status_code
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if not data:
                         success = True
-                        base_idx = (base_idx + tried) % len(bases)
                         break
-                    elif resp.status_code == 202:
-                        print(f"[WARN] klines {symbol} retornou 202 em {base} (tentativa {accepted_count+1}/{accepted_retries})", flush=True)
-                        accepted_count += 1
-                        _time.sleep(1.0)
-                        continue
-                    elif resp.status_code in (429, 451, 403):
-                        # fallback alternativo: uiKlines
-                        if _BINANCE_CFG["TRY_UIKLINES"]:
-                            alt_url = f"{base}uiKlines"
-                            try:
-                                alt_resp = session.get(alt_url, params=params, timeout=timeout)
-                                if alt_resp.status_code == 200:
-                                    data = alt_resp.json()
-                                    if not data:
-                                        empty_batches += 1
-                                        if _BINANCE_CFG["DEBUG_FETCH"]:
-                                            print(f"[DEBUG] empty uiKlines base={base} cs={current_start} empty_seq={empty_batches}", flush=True)
-                                        success = True
-                                        break
-                                    all_data.extend(data)
-                                    last_open = int(data[-1][0])
-                                    if last_open <= current_start:
-                                        stale_batches += 1
-                                        print(f"[WARN] uiKlines: timestamp não avançou; forçando +{interval_ms}ms. stale_seq={stale_batches}", flush=True)
-                                        current_start = current_start + interval_ms
-                                    else:
-                                        stale_batches = 0
-                                        current_start = last_open + 1
-                                    success = True
-                                    base_idx = (base_idx + tried) % len(bases)
-                                    print(f"[INFO] Fallback uiKlines OK em {base}", flush=True)
-                                    break
-                                else:
-                                    print(f"[WARN] uiKlines {symbol} falhou em {base} -> {alt_resp.status_code}", flush=True)
-                            except Exception as e_alt:
-                                print(f"[WARN] uiKlines {symbol} erro em {base}: {type(e_alt).__name__}: {e_alt}", flush=True)
-                        # quebra o ciclo accepted e troca de gateway
-                        break
-                    else:
-                        print(f"[WARN] klines {symbol} falhou em {base} -> {resp.status_code}", flush=True)
-                        break
-                if not success and accepted_count > accepted_retries:
-                    print(f"[WARN] 202 persistente em {base} após {accepted_retries} tentativas; trocando de gateway.", flush=True)
-                    tried += 1
-                elif not success and last_status != 202:
+                    all_data.extend(data)
+                    current_start = int(data[-1][0]) + 1
+                    success = True
+                    base_idx = (base_idx + tried) % len(bases)
+                elif resp.status_code == 202:
+                    # Some Binance gateways return 202 Accepted; wait briefly and retry same base
+                    print(f"[WARN] klines {symbol} retornou 202 em {base} → aguardando e tentando novamente...", flush=True)
+                    _time.sleep(1.0)
+                    continue  # não avança base
+                else:
+                    print(f"[WARN] klines {symbol} falhou em {base} -> {resp.status_code}", flush=True)
                     tried += 1
             except Exception as e:
                 print(f"[WARN] klines {symbol} erro em {base}: {type(e).__name__}: {e}", flush=True)
@@ -305,17 +169,6 @@ def get_binance_data(symbol, interval, start_date, end_date, **kwargs):
         if not success:
             print(f"Erro ao buscar dados da API para {symbol}: {last_status}", flush=True)
             break
-        req_count += 1
-        # Paradas adicionais
-        if empty_batches >= _BINANCE_CFG["MAX_EMPTY_BATCHES"]:
-            print(f"[INFO] Muitas respostas vazias seguidas ({empty_batches}); parando.", flush=True)
-            break
-        if stale_batches >= _BINANCE_CFG["MAX_STALE_BATCHES"]:
-            print(f"[INFO] Timestamp não avança há {stale_batches} lotes; parando.", flush=True)
-            break
-
-    if req_count >= _BINANCE_CFG["MAX_REQUESTS"]:
-        print(f"[WARN] Limite de requisições atingido ({req_count}). Ult. cs={current_start}", flush=True)
 
     formatted_data = [{
         "data": item[0],
@@ -324,63 +177,6 @@ def get_binance_data(symbol, interval, start_date, end_date, **kwargs):
         "volume_compra": float(item[5]),
         "volume_venda": float(item[7])
     } for item in all_data]
-    # Se nada veio pelos endpoints HTTP, tente fallback via CCXT (se habilitado)
-    if not formatted_data and _BINANCE_CFG["FALLBACK_CCXT"]:
-        try:
-            def _to_ccxt_symbol(sym: str) -> str:
-                if "/" in sym:
-                    return sym
-                if sym.endswith("USDT"):
-                    return f"{sym[:-4]}/USDT"
-                return sym
-            def _map_interval(iv: str) -> str:
-                valid = {"1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M"}
-                return iv if iv in valid else "15m"
-
-            ccxt_symbol = _to_ccxt_symbol(symbol)
-            tf = _map_interval(interval)
-            start_ms = int(start_date.timestamp() * 1000)
-            end_ms = int(end_date.timestamp() * 1000)
-
-            try:
-                import ccxt  # type: ignore
-            except Exception as e:
-                print(f"[WARN] CCXT indisponível para fallback: {type(e).__name__}: {e}", flush=True)
-                return formatted_data
-
-            ex = ccxt.binance({
-                "enableRateLimit": True,
-                "options": {"adjustForTimeDifference": True}
-            })
-            ohlcv_all = []
-            since = start_ms
-            limit = 1000
-            while since < end_ms:
-                try:
-                    batch = ex.fetch_ohlcv(ccxt_symbol, timeframe=tf, since=since, limit=limit)
-                except Exception as e:
-                    print(f"[WARN] CCXT fetch_ohlcv falhou: {type(e).__name__}: {e}", flush=True)
-                    break
-                if not batch:
-                    break
-                ohlcv_all.extend(batch)
-                since = batch[-1][0] + 1
-                # prevenção contra loops muito longos
-                if len(ohlcv_all) >= 5000:
-                    break
-
-            if ohlcv_all:
-                formatted_data = [{
-                    "data": o[0],
-                    "valor_fechamento": round(float(o[4]), 7),
-                    "criptomoeda": symbol,
-                    "volume_compra": float(o[5] or 0.0),
-                    "volume_venda": float(o[5] or 0.0),
-                } for o in ohlcv_all]
-                print("[INFO] Fallback CCXT OK — dados obtidos pela fetch_ohlcv.", flush=True)
-        except Exception as e:
-            print(f"[WARN] Fallback CCXT falhou: {type(e).__name__}: {e}", flush=True)
-
     return formatted_data
 
 # Função para calcular o RSI para cada criptomoeda individualmente
@@ -431,73 +227,68 @@ def calcular_macd(df, short_window=7, long_window=40, signal_window=9):
     return df
 
 # Configurações do símbolo, intervalo e datas
-start_date = datetime.now() - timedelta(hours=48)
+start_date = (datetime.now() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 end_date = datetime.now()  # hoje com horário atual
 interval = "15m"
 
-# Símbolos padrão
-SYMBOL_BINANCE = "SOLUSDT"
-SYMBOL_HL = "SOL/USDC:USDC"
-RUN_DEMO_BLOCKS = False  # desativa blocos de demonstração/teste interativos
-RUN_LEGACY_MAIN = False  # desativa execução direta deste bloco; use run_pipeline()
+# Buscar todos os pares de criptomoedas disponíveis (ou usar apenas SOLUSDT)
+all_symbols = ["SOL/USDC:USDC"]
 
-# Buscar todos os pares de criptomoedas disponíveis (ou usar apenas SYMBOL_BINANCE)
-if RUN_LEGACY_MAIN:
-    all_symbols = [SYMBOL_BINANCE]
+if not all_symbols:
+    print("Nenhum símbolo contendo 'USDT' foi encontrado.")
+else:
+    all_data = []
+    for symbol in all_symbols:
+        print(f"Buscando dados para {symbol}...", flush=True)
+        symbol_data = get_binance_data(symbol, interval, start_date, end_date)
+        if symbol_data:
+            all_data.extend(symbol_data)
 
-    if not all_symbols:
-        print("Nenhum símbolo contendo 'USDT' foi encontrado.")
+    if all_data:
+        df = pd.DataFrame(all_data)
+        df["data"] = pd.to_datetime(df["data"], unit="ms")  # Converter timestamp para datetime
+        df = calcular_rsi_por_criptomoeda(df, window=14)
+        df["variacao_diaria"] = df.groupby("criptomoeda")["valor_fechamento"].pct_change() * 100
+        df["total_linhas"] = df.groupby("criptomoeda")["criptomoeda"].transform("count")
+        df["ano"] = df["data"].dt.year
+        df["mes"] = df["data"].dt.month
+        df = calcular_macd(df)
+
+        # Gradientes do EMA curto para múltiplas janelas padronizadas (3,5,7,10)
+        import numpy as _np
+        import pandas as _pd
+        def _slope_arr(arr):
+            if arr.size < 2 or _np.isnan(arr).all():
+                return _np.nan
+            # remove NaN internos para estabilidade
+            a = arr[~_np.isnan(arr)].astype(float)
+            if a.size < 2:
+                return _np.nan
+            x = _np.arange(a.size, dtype=float)
+            m, _b = _np.polyfit(x, a, 1)
+            return float(m)
+        def _rolling_slope(series: _pd.Series, n: int) -> _pd.Series:
+            return series.rolling(window=n, min_periods=2).apply(_slope_arr, raw=True)
+        for n in (3, 5, 7, 10):
+            col = f"grad_n{n}"
+            try:
+                df[col] = (
+                    df.groupby("criptomoeda", group_keys=False)["ema_short"]
+                      .apply(lambda s: _rolling_slope(_pd.to_numeric(s, errors="coerce"), n))
+                )
+            except Exception:
+                # fallback sem groupby
+                df[col] = _rolling_slope(_pd.to_numeric(df["ema_short"], errors="coerce"), n)
+
+        pd.set_option('display.float_format', lambda x: f'{x:.7f}')
+        pd.set_option('display.max_columns', None)
     else:
-        all_data = []
-        for symbol in all_symbols:
-            print(f"Buscando dados para {symbol}...", flush=True)
-            symbol_data = get_binance_data(symbol, interval, start_date, end_date)
-            if symbol_data:
-                all_data.extend(symbol_data)
+        print("Nenhum dado disponível para processar.", flush=True)
 
-        if all_data:
-            df = pd.DataFrame(all_data)
-            df["data"] = pd.to_datetime(df["data"], unit="ms")  # Converter timestamp para datetime
-            df = calcular_rsi_por_criptomoeda(df, window=14)
-            df["variacao_diaria"] = df.groupby("criptomoeda")["valor_fechamento"].pct_change() * 100
-            df["total_linhas"] = df.groupby("criptomoeda")["criptomoeda"].transform("count")
-            df["ano"] = df["data"].dt.year
-            df["mes"] = df["data"].dt.month
-            df = calcular_macd(df)
-
-            # Gradientes do EMA curto para múltiplas janelas padronizadas (3,5,7,10)
-            import numpy as _np
-            import pandas as _pd
-            def _slope_arr(arr):
-                if arr.size < 2 or _np.isnan(arr).all():
-                    return _np.nan
-                # remove NaN internos para estabilidade
-                a = arr[~_np.isnan(arr)].astype(float)
-                if a.size < 2:
-                    return _np.nan
-                x = _np.arange(a.size, dtype=float)
-                m, _b = _np.polyfit(x, a, 1)
-                return float(m)
-            def _rolling_slope(series: _pd.Series, n: int) -> _pd.Series:
-                return series.rolling(window=n, min_periods=2).apply(_slope_arr, raw=True)
-            for n in (3, 5, 7, 10):
-                col = f"grad_n{n}"
-                try:
-                    df[col] = (
-                        df.groupby("criptomoeda", group_keys=False)["ema_short"]
-                          .apply(lambda s: _rolling_slope(_pd.to_numeric(s, errors="coerce"), n))
-                    )
-                except Exception:
-                    # fallback sem groupby
-                    df[col] = _rolling_slope(_pd.to_numeric(df["ema_short"], errors="coerce"), n)
-
-            pd.set_option('display.float_format', lambda x: f'{x:.7f}')
-            pd.set_option('display.max_columns', None)
-        else:
-            print("Nenhum dado disponível para processar.", flush=True)
+# COMMAND ----------
 
 # Guarda contra falta de dados (ex.: erro 451/sem retorno da API)
-if RUN_LEGACY_MAIN and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
     max_date = df["data"].max()
     df_filtered = df[df["data"] == max_date]
 
@@ -505,11 +296,15 @@ if RUN_LEGACY_MAIN and 'df' in locals() and isinstance(df, pd.DataFrame) and not
     ma_short = df_filtered["ema_short"].values[0] if "ema_short" in df_filtered.columns else None
     ma_long = df_filtered["ema_long"].values[0] if "ema_long" in df_filtered.columns else None
 
+    # COMMAND ----------
+
     if ma_long is not None: print(ma_long, flush=True)
     if ma_short is not None: print(ma_short, flush=True)
     if RSI_ATUAL is not None: print(RSI_ATUAL, flush=True)
-elif RUN_LEGACY_MAIN:
+else:
     print("[INFO] Sem DF válido para métricas intradiárias (df vazio/não definido).", flush=True)
+
+# COMMAND ----------
 
 """
 DEX (Hyperliquid via ccxt)
@@ -523,6 +318,7 @@ dex = ccxt.hyperliquid({
     "privateKey": "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
 })
 
+# COMMAND ----------
 
 if dex:
     try:
@@ -530,12 +326,16 @@ if dex:
     except Exception as e:
         print(f"[WARN] Falha ao buscar saldo do DEX: {type(e).__name__}: {e}", flush=True)
 
+# COMMAND ----------
+
+# COMMAND ----------
 # =========================
 # 🔔 LOGGER (CSV + XLSX em DBFS com workaround /tmp → dbutils.fs.cp)
 # =========================
 import os
 import pandas as pd
 from datetime import datetime, timezone
+datetime.now(timezone.utc)
 try:
     from zoneinfo import ZoneInfo  # Py3.9+
     TZ_BRT = ZoneInfo("America/Sao_Paulo")
@@ -693,7 +493,7 @@ class TradeLogger:
 # 📣 NOTIFICAÇÕES DISCORD
 # =========================
 import requests as _req
-_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM"
+_DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 _HTTP_TIMEOUT = 10
 _SESSION = _req.Session()
 try:
@@ -738,10 +538,22 @@ def _hl_get_account_value(wallet: str) -> float:
     except Exception:
         return 0.0
 
+# COMMAND ----------
+
+
+# COMMAND ----------
+
+
+# COMMAND ----------
+
+# DBTITLE 1,Gatilho de entrada
+# =========================
 # 🧠 ESTRATÉGIA (HL + stop inicial 6% da margem + trailing BE±0,05% + logger com fallback + DEBUG)
+# =========================
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+datetime.now(timezone.utc)
 import numpy as np
 import pandas as pd
 
@@ -806,10 +618,7 @@ class EMAGradientStrategy:
         return None
 
     def _wallet_address(self) -> Optional[str]:
-        # Busca carteira: constante local > env > dex attributes/options
-        WALLET_FALLBACK = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
-        if WALLET_FALLBACK:
-            return WALLET_FALLBACK
+        # Busca carteira: env > dex attributes/options > None
         for key in ("WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
             val = os.getenv(key)
             if val:
@@ -1507,80 +1316,104 @@ class EMAGradientStrategy:
         self._last_pos_side = lado if lado in ("buy", "sell") else None
 
 
+# COMMAND ----------
+
+# DBTITLE 1,principal
 # =========================
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
 
-def run_pipeline():
-    try:
-        # 1) Coleta
-        start_date = datetime.now() - timedelta(hours=48)
-        end_date = datetime.now()
-        print(f"[INFO] Iniciando coleta {SYMBOL_BINANCE} {interval}", flush=True)
-        data = get_binance_data(SYMBOL_BINANCE, interval, start_date, end_date, debug=_BINANCE_CFG.get("DEBUG_FETCH", True))
+if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+    # 1) Logger com as colunas do DF final
+    trade_logger = TradeLogger(df_columns=df.columns)
 
-        if not data:
-            print("[INFO] Sem dados coletados; encerrando.", flush=True)
-            return
+    # crie a estratégia:
+    strategy = EMAGradientStrategy(dex, "SOLUSDT", GradientConfig(), logger=trade_logger)
+    
+    # Corrige o símbolo para o formato aceito pela Binance
+    all_symbols = ["SOLUSDT"]
+    
+    # ...existing code...
+    
+    if not all_symbols:
+        print("Nenhum símbolo contendo 'USDT' foi encontrado.")
+    else:
+        all_data = []
+        for symbol in all_symbols:
+            print(f"Buscando dados para {symbol}...", flush=True)
+            symbol_data = get_binance_data(symbol, interval, start_date, end_date)
+            if symbol_data:
+                all_data.extend(symbol_data)
+    
+        if all_data:
+            df = pd.DataFrame(all_data)
+            df["data"] = pd.to_datetime(df["data"], unit="ms")  # Converter timestamp para datetime
+            df = calcular_rsi_por_criptomoeda(df, window=14)
+            df["variacao_diaria"] = df.groupby("criptomoeda")["valor_fechamento"].pct_change() * 100
+            df["total_linhas"] = df.groupby("criptomoeda")["criptomoeda"].transform("count")
+            df["ano"] = df["data"].dt.year
+            df["mes"] = df["data"].dt.month
+            df = calcular_macd(df)
+    
+            # Gradientes do EMA curto para múltiplas janelas padronizadas (3,5,7,10)
+            import numpy as _np
+            import pandas as _pd
+            def _slope_arr(arr):
+                if arr.size < 2 or _np.isnan(arr).all():
+                    return _np.nan
+                a = arr[~_np.isnan(arr)].astype(float)
+                if a.size < 2:
+                    return _np.nan
+                x = _np.arange(a.size, dtype=float)
+                m, _b = _np.polyfit(x, a, 1)
+                return float(m)
+            def _rolling_slope(series: _pd.Series, n: int) -> _pd.Series:
+                return series.rolling(window=n, min_periods=2).apply(_slope_arr, raw=True)
+            for n in (3, 5, 7, 10):
+                col = f"grad_n{n}"
+                try:
+                    df[col] = (
+                        df.groupby("criptomoeda", group_keys=False)["ema_short"]
+                          .apply(lambda s: _rolling_slope(_pd.to_numeric(s, errors="coerce"), n))
+                    )
+                except Exception:
+                    df[col] = _rolling_slope(_pd.to_numeric(df["ema_short"], errors="coerce"), n)
+    
+            pd.set_option('display.float_format', lambda x: f'{x:.7f}')
+            pd.set_option('display.max_columns', None)
+        else:
+            print("Nenhum dado disponível para processar.", flush=True)
+    
+    # ...existing code...
+    
+    # Ajusta instâncias da estratégia para o símbolo correto
+    if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+        trade_logger = TradeLogger(df_columns=df.columns)
+        strategy = EMAGradientStrategy(dex, "SOLUSDT", GradientConfig(), logger=trade_logger)
+        strategy.step(df, usd_to_spend=10)
+    else:
+        print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
+    
+    # ...existing code...
+    
+    if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+        bot = EMAGradientStrategy(
+            dex, 
+            "SOLUSDT",   # símbolo corrigido
+            logger=None,
+            debug=True
+        )
+    
+    # ...existing code...
+    
+    # Ajuste todos os usos de "SOL/USDC:USDC" para "SOLUSDT" no restante do arquivo.
+    
+    # ...existing/USDC:USDC", GradientConfig(), logger=trade_logger)  # logger opcional
 
-        # 2) Monta DF e indicadores
-        df_local = pd.DataFrame(data)
-        df_local["data"] = pd.to_datetime(df_local["data"], unit="ms")
-        df_local = calcular_rsi_por_criptomoeda(df_local, window=14)
-        df_local["variacao_diaria"] = df_local.groupby("criptomoeda")["valor_fechamento"].pct_change() * 100
-        df_local["total_linhas"] = df_local.groupby("criptomoeda")["criptomoeda"].transform("count")
-        df_local["ano"] = df_local["data"].dt.year
-        df_local["mes"] = df_local["data"].dt.month
-        df_local = calcular_macd(df_local)
-
-        # 3) Gradientes multi-janela
-        import numpy as _np, pandas as _pd
-        def _slope_arr(arr):
-            if arr.size < 2 or _np.isnan(arr).all():
-                return _np.nan
-            a = arr[~_np.isnan(arr)].astype(float)
-            if a.size < 2:
-                return _np.nan
-            x = _np.arange(a.size, dtype=float)
-            m, _b = _np.polyfit(x, a, 1)
-            return float(m)
-        def _rolling_slope(series: _pd.Series, n: int) -> _pd.Series:
-            return series.rolling(window=n, min_periods=2).apply(_slope_arr, raw=True)
-        for n in (3, 5, 7, 10):
-            col = f"grad_n{n}"
-            try:
-                df_local[col] = (
-                    df_local.groupby("criptomoeda", group_keys=False)["ema_short"]
-                        .apply(lambda s: _rolling_slope(_pd.to_numeric(s, errors="coerce"), n))
-                )
-            except Exception:
-                df_local[col] = _rolling_slope(_pd.to_numeric(df_local["ema_short"], errors="coerce"), n)
-
-        # 4) Salva snapshots
-        try:
-            df_local.to_csv("df_log.csv", index=False)
-            from datetime import datetime as _dt
-            tsn = _dt.now().strftime("%Y%m%d_%H%M%S")
-            df_local.to_csv(f"df_log_{tsn}.csv", index=False)
-            print("[INFO] DF salvo (df_log*.csv)", flush=True)
-        except Exception as e:
-            print(f"[WARN] Falha ao salvar DF: {type(e).__name__}: {e}", flush=True)
-
-        # 5) Estratégia (DEX)
-        if dex is None:
-            print("[INFO] DEX indisponível; pulando estratégia.", flush=True)
-            return
-        trade_logger = TradeLogger(df_columns=df_local.columns)
-        strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
-        strategy.step(df_local, usd_to_spend=10)
-    except Exception as e:
-        import traceback as _tb
-        print(f"[ERRO] run_pipeline: {type(e).__name__}: {e}", flush=True)
-        _tb.print_exc()
-
-# Executa pipeline principal
-if __name__ == "__main__":
-    run_pipeline()
+    # chame a cada atualização de candle:
+    strategy.step(df, usd_to_spend=10)
+else:
+    print("[INFO] Sem dados ou DEX disponível; pulando estratégia.", flush=True)
 
 
 # 4) (Opcional) Exibir histórico salvo com guard de vazio
@@ -1595,12 +1428,21 @@ else:
     print("Histórico ainda não existe. Execute um trade para gerar registros.")
 
 
-if RUN_DEMO_BLOCKS and dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    # cria o objeto da estratégia (DEMO)
-    bot = EMAGradientStrategy(dex, SYMBOL_HL, logger=None, debug=True)
+# COMMAND ----------
+
+if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+    # cria o objeto da estratégia
+    bot = EMAGradientStrategy(
+        dex, 
+        "SOL/USDC:USDC",   # símbolo
+        logger=None,       # ou seu TradeLogger se quiser testar
+        debug=True
+    )
 
 
-if RUN_DEMO_BLOCKS and dex is not None and 'bot' in locals():
+# COMMAND ----------
+
+if dex is not None and 'bot' in locals():
     # 1) Confirme que está usando a MESMA instância
     print("bot id:", id(bot))
 
@@ -1611,7 +1453,7 @@ if RUN_DEMO_BLOCKS and dex is not None and 'bot' in locals():
     bot.force_local_log = True  # ignora logger externo
     bot._safe_log("teste_manual", df_for_log=None, tipo="info", exec_price=None, exec_amount=None)
 
-if RUN_DEMO_BLOCKS and dex is not None and 'bot' in locals():
+if dex is not None and 'bot' in locals():
     # 4) Cheque novamente
     print("len(_local_events) após teste:", len(bot._local_events))
 
@@ -1623,14 +1465,15 @@ def preview_local_events(bot, n: int = 10):
         base = {k: ev.get(k) for k in ["ts","evento","tipo","exec_price","exec_amount","order_id"]}
         print(f"{i:02d}. {base}")
 
-if RUN_DEMO_BLOCKS and dex is not None and 'bot' in locals():
+if dex is not None:
     preview_local_events(bot, 5)
 
-if RUN_DEMO_BLOCKS and dex is not None and 'bot' in locals():
+if dex is not None:
     # 6) Exporte (se houver algo)
     bot.export_local_log_csv("meu_historico_local.csv")
 
 
+# COMMAND ----------
 
 import pandas as pd
 
@@ -1640,9 +1483,12 @@ except FileNotFoundError:
     print("ℹ️ 'meu_historico_local.csv' não encontrado; pulando pré-visualização.")
 
 
+# COMMAND ----------
 
 if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
     df["max_50"] = df.groupby("criptomoeda")["valor_fechamento"].transform(lambda x: x.rolling(window=50, min_periods=1).max())
+
+# COMMAND ----------
 
 import numpy as np
 
@@ -1671,23 +1517,15 @@ if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
         .apply(gradiente_serie, raw=True)
     )
 
+# COMMAND ----------
+
 # Converte o DataFrame PySpark para Pandas
 if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
     df_pandas = df
     # Salva como um único arquivo CSV local
     df_pandas.to_csv("previsoes_df.csv", index=False)
 
-# Snapshot local do DF em CSV (nome fixo e timestamp)
-if 'df' in locals() and isinstance(df, pd.DataFrame):
-    try:
-        _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _base = "df_log.csv"
-        _tsfile = f"df_log_{_ts}.csv"
-        df.to_csv(_base, index=False)
-        df.to_csv(_tsfile, index=False)
-        print(f"[INFO] DF salvo em: {os.path.abspath(_base)} e {os.path.abspath(_tsfile)}", flush=True)
-    except Exception as _e:
-        print(f"[WARN] Falha ao salvar df em CSV: {type(_e).__name__}: {_e}", flush=True)
+# COMMAND ----------
 
 # =========================
 # 🔬 TESTE: ÚNICO GRADIENTE POR PERÍODO (sem gatilhos)
