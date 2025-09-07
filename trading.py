@@ -60,13 +60,14 @@ import time as _time
 # Configurações locais (sem necessidade de ENV)
 _BINANCE_CFG = {
     "BASES": [
+        "https://data-api.binance.vision/api/v3/",
         "https://api.binance.com/api/v3/",
         "https://api1.binance.com/api/v3/",
         "https://api2.binance.com/api/v3/",
         "https://api3.binance.com/api/v3/",
         "https://api-gateway.binance.com/api/v3/",
         "https://api-gcp.binance.com/api/v3/",
-        "https://data-api.binance.vision/api/v3/",
+        "https://www.binance.com/api/v3/",
     ],
     "TIMEOUT": 10,
     "RETRIES": 3,
@@ -75,6 +76,7 @@ _BINANCE_CFG = {
     "ACCEPTED_RETRIES": 2,  # 202 por gateway
     "TRY_UIKLINES": True,
     "FALLBACK_CCXT": True,
+    "FORCE_CCXT_FIRST": True,
 }
 
 def _binance_bases():
@@ -133,6 +135,48 @@ def get_all_symbols():
 # Função para buscar os dados da criptomoeda
 # Aceita datetime diretamente
 def get_binance_data(symbol, interval, start_date, end_date):
+    # Se configurado para forçar CCXT primeiro, tenta imediatamente
+    if _BINANCE_CFG.get("FORCE_CCXT_FIRST"):
+        data_ccxt = []
+        try:
+            def _ccxt_try(exchange_id: str):
+                import ccxt  # type: ignore
+                ex = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+                # mapeia símbolo para formato CCXT
+                sym = f"{symbol[:-4]}/USDT" if symbol.endswith("USDT") else symbol
+                tf = interval
+                start_ms = int(start_date.timestamp() * 1000)
+                end_ms = int(end_date.timestamp() * 1000)
+                ohlcv_all, since = [], start_ms
+                while since < end_ms:
+                    batch = ex.fetch_ohlcv(sym, timeframe=tf, since=since, limit=1000)
+                    if not batch:
+                        break
+                    ohlcv_all.extend(batch)
+                    since = batch[-1][0] + 1
+                    if len(ohlcv_all) >= 5000:
+                        break
+                return [{
+                    "data": o[0],
+                    "valor_fechamento": round(float(o[4]), 7),
+                    "criptomoeda": symbol,
+                    "volume_compra": float(o[5] or 0.0),
+                    "volume_venda": float(o[5] or 0.0),
+                } for o in ohlcv_all]
+            # tenta binance spot; se falhar, tenta binanceusdm (perp USDT-M)
+            try:
+                data_ccxt = _ccxt_try("binance")
+            except Exception as e1:
+                print(f"[WARN] CCXT binance falhou: {type(e1).__name__}: {e1}", flush=True)
+                try:
+                    data_ccxt = _ccxt_try("binanceusdm")
+                except Exception as e2:
+                    print(f"[WARN] CCXT binanceusdm falhou: {type(e2).__name__}: {e2}", flush=True)
+            if data_ccxt:
+                print("[INFO] CCXT-first OK — dados obtidos.", flush=True)
+                return data_ccxt
+        except Exception as e:
+            print(f"[WARN] CCXT-first indisponível: {type(e).__name__}: {e}", flush=True)
     start_timestamp = int(start_date.timestamp() * 1000)
     end_timestamp = int(end_date.timestamp() * 1000)
 
