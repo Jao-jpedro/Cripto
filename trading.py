@@ -133,7 +133,7 @@ def get_all_symbols():
 
 # Função para buscar os dados da criptomoeda
 # Aceita datetime diretamente
-def get_binance_data(symbol, interval, start_date, end_date):
+def get_binance_data(symbol, interval, start_date, end_date, **kwargs):
     # Garante janela máxima de 48h
     if end_date is None:
         end_date = datetime.now()
