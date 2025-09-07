@@ -54,20 +54,68 @@ except NameError:  # pragma: no cover
     def displayHTML(html: str):
         print(html)
 
-# URL base da API da Binance
-BASE_URL = "https://api.binance.com/api/v3/"
+# URL(s) base da API da Binance com failover
+import time as _time
+
+def _binance_bases():
+    env_override = os.getenv("BINANCE_BASE_URL")
+    if env_override:
+        base = env_override.rstrip("/")
+        return [f"{base}/api/v3/"]
+    return [
+        "https://api.binance.com/api/v3/",
+        "https://api1.binance.com/api/v3/",
+        "https://api2.binance.com/api/v3/",
+        "https://api3.binance.com/api/v3/",
+        "https://api-gateway.binance.com/api/v3/",
+        "https://api-gcp.binance.com/api/v3/",
+        "https://data-api.binance.vision/api/v3/",
+    ]
+
+def _binance_session():
+    s = requests.Session()
+    try:
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        retry = Retry(
+            total=int(os.getenv("BINANCE_RETRIES", "3")),
+            backoff_factor=float(os.getenv("BINANCE_BACKOFF", "0.5")),
+            status_forcelist=[429, 451, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"],
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        s.mount("https://", adapter); s.mount("http://", adapter)
+    except Exception:
+        pass
+    s.headers.update({
+        "User-Agent": os.getenv("BINANCE_UA", "Mozilla/5.0 (X11; Linux x86_64) PythonRequests/2.x"),
+        "Accept": "application/json",
+    })
+    return s
 
 # Função para buscar todos os pares de criptomoedas disponíveis na Binance
 def get_all_symbols():
-    url = f"{BASE_URL}exchangeInfo"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        symbols = [symbol["symbol"] for symbol in data["symbols"] if "USDT" in symbol["symbol"]]
-        return symbols
-    else:
-        print(f"Erro ao buscar pares de criptomoedas: {response.status_code}")
-        return []
+    session = _binance_session()
+    timeout = int(os.getenv("BINANCE_TIMEOUT", "10"))
+    last_err = None
+    for base in _binance_bases():
+        url = f"{base}exchangeInfo"
+        try:
+            response = session.get(url, timeout=timeout)
+            if response.status_code == 200:
+                data = response.json()
+                symbols = [symbol["symbol"] for symbol in data.get("symbols", []) if "USDT" in symbol.get("symbol", "")]
+                if symbols:
+                    return symbols
+            else:
+                print(f"[WARN] exchangeInfo falhou em {base} -> {response.status_code}", flush=True)
+                last_err = response.status_code
+        except Exception as e:
+            print(f"[WARN] exchangeInfo erro em {base}: {type(e).__name__}: {e}", flush=True)
+            last_err = e
+        _time.sleep(0.2)
+    print(f"Erro ao buscar pares de criptomoedas: {last_err}")
+    return []
 
 # Função para buscar os dados da criptomoeda
 # Aceita datetime diretamente
@@ -75,36 +123,57 @@ def get_binance_data(symbol, interval, start_date, end_date):
     start_timestamp = int(start_date.timestamp() * 1000)
     end_timestamp = int(end_date.timestamp() * 1000)
 
+    session = _binance_session()
+    timeout = int(os.getenv("BINANCE_TIMEOUT", "10"))
+
     all_data = []
     current_start = start_timestamp
+    bases = _binance_bases()
+    base_idx = 0
 
     while current_start < end_timestamp:
-        url = f"{BASE_URL}klines"
-        params = {
-            "symbol": symbol,
-            "interval": interval,
-            "startTime": current_start,
-            "endTime": end_timestamp,
-            "limit": 1000  # Limite máximo permitido pela Binance API
-        }
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if not data:
-                break
-            all_data.extend(data)
-            current_start = int(data[-1][0]) + 1  # Atualizar o timestamp inicial para o próximo lote
-        else:
-            print(f"Erro ao buscar dados da API para {symbol}: {response.status_code}")
+        tried = 0
+        success = False
+        last_status = None
+        while tried < len(bases) and not success:
+            base = bases[(base_idx + tried) % len(bases)]
+            url = f"{base}klines"
+            params = {
+                "symbol": symbol,
+                "interval": interval,
+                "startTime": current_start,
+                "endTime": end_timestamp,
+                "limit": 1000
+            }
+            try:
+                resp = session.get(url, params=params, timeout=timeout)
+                last_status = resp.status_code
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if not data:
+                        success = True
+                        break
+                    all_data.extend(data)
+                    current_start = int(data[-1][0]) + 1
+                    success = True
+                    base_idx = (base_idx + tried) % len(bases)
+                else:
+                    print(f"[WARN] klines {symbol} falhou em {base} -> {resp.status_code}", flush=True)
+            except Exception as e:
+                print(f"[WARN] klines {symbol} erro em {base}: {type(e).__name__}: {e}", flush=True)
+            tried += 1
+            _time.sleep(0.25)
+
+        if not success:
+            print(f"Erro ao buscar dados da API para {symbol}: {last_status}", flush=True)
             break
 
-    # Formatando os dados
     formatted_data = [{
-        "data": item[0],  # Timestamp de abertura
-        "valor_fechamento": round(float(item[4]), 7),  # Valor de fechamento com 7 casas decimais
+        "data": item[0],
+        "valor_fechamento": round(float(item[4]), 7),
         "criptomoeda": symbol,
-        "volume_compra": float(item[5]),  # Volume de compra
-        "volume_venda": float(item[7])  # Volume de venda
+        "volume_compra": float(item[5]),
+        "volume_venda": float(item[7])
     } for item in all_data]
     return formatted_data
 
