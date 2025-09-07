@@ -61,13 +61,6 @@ import time as _time
 _BINANCE_CFG = {
     "BASES": [
         "https://data-api.binance.vision/api/v3/",
-        "https://api.binance.com/api/v3/",
-        "https://api1.binance.com/api/v3/",
-        "https://api2.binance.com/api/v3/",
-        "https://api3.binance.com/api/v3/",
-        "https://api-gateway.binance.com/api/v3/",
-        "https://api-gcp.binance.com/api/v3/",
-        "https://www.binance.com/api/v3/",
     ],
     "TIMEOUT": 10,
     "RETRIES": 3,
@@ -76,10 +69,13 @@ _BINANCE_CFG = {
     "ACCEPTED_RETRIES": 2,  # 202 por gateway
     "TRY_UIKLINES": True,
     "FALLBACK_CCXT": True,
-    "FORCE_CCXT_FIRST": True,
+    "FORCE_CCXT_FIRST": False,
+    "FORCE_VISION_ONLY": True,
 }
 
 def _binance_bases():
+    if _BINANCE_CFG.get("FORCE_VISION_ONLY"):
+        return ["https://data-api.binance.vision/api/v3/"]
     return list(_BINANCE_CFG["BASES"])  # cópia
 
 def _binance_session():
