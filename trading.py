@@ -326,13 +326,62 @@ class TradeLogger:
         dt_brt = now_utc.astimezone(TZ_BRT).isoformat(timespec="seconds") if TZ_BRT else ""
         return dt_utc, dt_brt
 
-    def _save_xlsx_dbfs(self, df_all: pd.DataFrame):
-        # Ambiente local: grava direto no caminho alvo; mantém assinatura para mínima alteração
-        try:
-            df_all.to_excel(self.xlsx_path_dbfs, index=False)
-        except Exception:
-            # fallback silencioso (CSV já é persistido)
-            pass
+        def _save_xlsx_dbfs(self, df_all: pd.DataFrame):
+            # Ambiente local: grava direto no caminho alvo; mantém assinatura para mínima alteração
+            try:
+                df_all.to_excel(self.xlsx_path_dbfs, index=False)
+            except Exception:
+                # fallback silencioso (CSV já é persistido)
+                pass
+
+# =========================
+# 📣 NOTIFICAÇÕES DISCORD
+# =========================
+import requests as _req
+_DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
+_HTTP_TIMEOUT = 10
+_SESSION = _req.Session()
+try:
+    _ADAPTER = _req.adapters.HTTPAdapter(max_retries=3)
+    _SESSION.mount("https://", _ADAPTER)
+    _SESSION.mount("http://", _ADAPTER)
+except Exception:
+    pass
+
+_HL_INFO_URL = "https://api.hyperliquid.xyz/info"
+
+def _http_post_json(url: str, payload: dict, timeout: int = _HTTP_TIMEOUT):
+    try:
+        r = _SESSION.post(url, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:  # pragma: no cover
+        print(f"[WARN] HTTP falhou: {type(e).__name__}: {e}")
+        return None
+
+def _notify_discord(message: str):
+    if not _DISCORD_WEBHOOK or "discord.com/api/webhooks" not in _DISCORD_WEBHOOK:
+        return
+    try:
+        resp = _SESSION.post(_DISCORD_WEBHOOK, json={"content": message}, timeout=_HTTP_TIMEOUT)
+        if resp.status_code not in (200, 204):
+            print(f"[WARN] Discord status {resp.status_code}: {resp.text}")
+    except Exception as e:  # pragma: no cover
+        print(f"[WARN] Falha ao notificar Discord: {type(e).__name__}: {e}")
+
+def _hl_get_latest_fill(wallet: str):
+    if not wallet:
+        return None
+    return _http_post_json(_HL_INFO_URL, {"type": "userFills", "user": wallet})
+
+def _hl_get_account_value(wallet: str) -> float:
+    if not wallet:
+        return 0.0
+    data = _http_post_json(_HL_INFO_URL, {"type": "clearinghouseState", "user": wallet})
+    try:
+        return float(data["marginSummary"]["accountValue"]) if data else 0.0
+    except Exception:
+        return 0.0
 
     def append_event(self, df_snapshot: pd.DataFrame,
                      evento: str, tipo: str,
@@ -445,6 +494,74 @@ class EMAGradientStrategy:
         if s in ("sell", "short"):
             return "sell"
         return None
+
+    def _wallet_address(self) -> Optional[str]:
+        # Busca carteira: env > dex attributes/options > None
+        for key in ("WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
+            val = os.getenv(key)
+            if val:
+                return val
+        try:
+            val = getattr(self.dex, "walletAddress", None)
+            if val:
+                return val
+        except Exception:
+            pass
+        try:
+            opts = getattr(self.dex, "options", {}) or {}
+            val = opts.get("walletAddress")
+            if val:
+                return val
+        except Exception:
+            pass
+        return None
+
+    def _notify_trade(self, kind: str, side: Optional[str], price: Optional[float], amount: Optional[float], note: str = "", include_hl: bool = False):
+        base = self.symbol.split("/")[0] if "/" in self.symbol else self.symbol
+        side_map = {"buy": "LONG", "sell": "SHORT"}
+        side_txt = side_map.get((side or "").lower(), "?") if side else "?"
+        kind_map = {
+            "open": "Abertura",
+            "close": "Fechamento",
+            "close_external": "Fechamento Externo (stop)",
+        }
+        kind_pt = kind_map.get(kind, kind.capitalize())
+        parts = [
+            "📢 Operação",
+            f"• Tipo: {kind_pt}",
+            f"• Par: {base}",
+            f"• Lado: {side_txt}",
+        ]
+        if price is not None:
+            parts.append(f"• Preço: {price:.6f}")
+        if amount is not None:
+            parts.append(f"• Quantidade: {amount}")
+        if note:
+            parts.append(f"• Obs: {note}")
+
+        # Dados opcionais da Hyperliquid (Resultado/Valor da conta)
+        if include_hl:
+            wallet = self._wallet_address()
+            fills = _hl_get_latest_fill(wallet)
+            try:
+                last = fills[0] if isinstance(fills, list) and fills else None
+                if last:
+                    pnl_raw = last.get("closedPnl")
+                    try:
+                        pnl = float(pnl_raw)
+                        parts.append(f"• Resultado (PnL): {pnl:.2f} USDC")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                acc_val = _hl_get_account_value(wallet)
+                if acc_val:
+                    parts.append(f"• Valor da Conta: {acc_val:.2f} USDC")
+            except Exception:
+                pass
+
+        _notify_discord("\n".join(parts))
 
     # ---------- leitura de contexto para log ----------
     def _read_context(self):
@@ -760,6 +877,19 @@ class EMAGradientStrategy:
             order_id=str(oid) if oid else None
         )
 
+        # Notificação de abertura
+        try:
+            self._notify_trade(
+                kind="open",
+                side=self._norm_side(side),
+                price=price,
+                amount=amount,
+                note="entrada executada",
+                include_hl=False,
+            )
+        except Exception:
+            pass
+
         # stop inicial = 6% da margem
         capital_loss  = usd_to_spend * self.cfg.STOP_RISK_PCT
         loss_per_unit = capital_loss / amount
@@ -865,6 +995,19 @@ class EMAGradientStrategy:
                 order_id=str(oid) if oid else None
             )
             self._marcar_cooldown()
+
+            # Notificação de fechamento (inclui tentativa de PnL/valor conta)
+            try:
+                self._notify_trade(
+                    kind="close",
+                    side=lado_atual,
+                    price=price_now,
+                    amount=qty,
+                    note="fechamento por decisão/trigger",
+                    include_hl=True,
+                )
+            except Exception:
+                pass
 
     # ---------- trailing BE± ----------
     def _maybe_trailing_breakeven_plus(self, pos: Dict[str, Any], df_for_log: pd.DataFrame):
@@ -987,6 +1130,19 @@ class EMAGradientStrategy:
                 tipo=("long" if prev_side == "buy" else "short"),
                 exec_price=last_px
             )
+
+            # Notificação de fechamento externo (provável stop)
+            try:
+                self._notify_trade(
+                    kind="close_external",
+                    side=prev_side,
+                    price=last_px,
+                    amount=None,
+                    note="fechado externamente (possível stop)",
+                    include_hl=True,
+                )
+            except Exception:
+                pass
 
         if self._cooldown_ativo():
             print(f"⛔ Cooldown {self.cfg.COOLDOWN_MINUTOS} min ativo.")
