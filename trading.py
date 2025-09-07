@@ -73,6 +73,8 @@ _BINANCE_CFG = {
     "FORCE_VISION_ONLY": True,
     "MAX_REQUESTS": 200,
     "DEBUG_FETCH": True,
+    "MAX_EMPTY_BATCHES": 3,
+    "MAX_STALE_BATCHES": 3,
 }
 
 def _binance_bases():
@@ -193,6 +195,8 @@ def get_binance_data(symbol, interval, start_date, end_date):
     bases = _binance_bases()
     base_idx = 0
     req_count = 0
+    empty_batches = 0
+    stale_batches = 0
 
     def _interval_to_ms(iv: str) -> int:
         table = {
@@ -228,6 +232,9 @@ def get_binance_data(symbol, interval, start_date, end_date):
                     if resp.status_code == 200:
                         data = resp.json()
                         if not data:
+                            empty_batches += 1
+                            if _BINANCE_CFG["DEBUG_FETCH"]:
+                                print(f"[DEBUG] empty batch base={base} cs={current_start} empty_seq={empty_batches}", flush=True)
                             success = True
                             break
                         all_data.extend(data)
@@ -236,9 +243,11 @@ def get_binance_data(symbol, interval, start_date, end_date):
                             print(f"[DEBUG] {symbol} base={base} batch={len(data)} first={data[0][0]} last={last_open} cs={current_start}", flush=True)
                         # evita travar caso a API retorne o mesmo timestamp
                         if last_open <= current_start:
-                            print(f"[WARN] timestamp não avançou (last={last_open} <= cs={current_start}); forçando avanço por intervalo.", flush=True)
+                            stale_batches += 1
+                            print(f"[WARN] timestamp não avançou (last={last_open} <= cs={current_start}); forçando avanço por intervalo. stale_seq={stale_batches}", flush=True)
                             current_start = current_start + interval_ms
                         else:
+                            stale_batches = 0
                             current_start = last_open + 1
                         success = True
                         base_idx = (base_idx + tried) % len(bases)
@@ -257,10 +266,20 @@ def get_binance_data(symbol, interval, start_date, end_date):
                                 if alt_resp.status_code == 200:
                                     data = alt_resp.json()
                                     if not data:
+                                        empty_batches += 1
+                                        if _BINANCE_CFG["DEBUG_FETCH"]:
+                                            print(f"[DEBUG] empty uiKlines base={base} cs={current_start} empty_seq={empty_batches}", flush=True)
                                         success = True
                                         break
                                     all_data.extend(data)
-                                    current_start = int(data[-1][0]) + 1
+                                    last_open = int(data[-1][0])
+                                    if last_open <= current_start:
+                                        stale_batches += 1
+                                        print(f"[WARN] uiKlines: timestamp não avançou; forçando +{interval_ms}ms. stale_seq={stale_batches}", flush=True)
+                                        current_start = current_start + interval_ms
+                                    else:
+                                        stale_batches = 0
+                                        current_start = last_open + 1
                                     success = True
                                     base_idx = (base_idx + tried) % len(bases)
                                     print(f"[INFO] Fallback uiKlines OK em {base}", flush=True)
@@ -288,6 +307,13 @@ def get_binance_data(symbol, interval, start_date, end_date):
             print(f"Erro ao buscar dados da API para {symbol}: {last_status}", flush=True)
             break
         req_count += 1
+        # Paradas adicionais
+        if empty_batches >= _BINANCE_CFG["MAX_EMPTY_BATCHES"]:
+            print(f"[INFO] Muitas respostas vazias seguidas ({empty_batches}); parando.", flush=True)
+            break
+        if stale_batches >= _BINANCE_CFG["MAX_STALE_BATCHES"]:
+            print(f"[INFO] Timestamp não avança há {stale_batches} lotes; parando.", flush=True)
+            break
 
     if req_count >= _BINANCE_CFG["MAX_REQUESTS"]:
         print(f"[WARN] Limite de requisições atingido ({req_count}). Ult. cs={current_start}", flush=True)
