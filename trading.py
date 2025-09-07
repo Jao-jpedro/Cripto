@@ -3,7 +3,7 @@
 # MAGIC %pip install ccxt
 
 # COMMAND ----------
-print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========")
+print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
 import warnings as _warnings
@@ -15,6 +15,19 @@ _warnings.filterwarnings(
 )
 
 import requests
+import sys as _sys, traceback as _tb
+
+# Exceções não tratadas: imprime stack e força flush no Render/CLI
+def _excepthook(exc_type, exc, tb):  # pragma: no cover
+    try:
+        print("\n[ERRO] Exceção não tratada:", flush=True)
+        _tb.print_exception(exc_type, exc, tb)
+    finally:
+        try:
+            _sys.stdout.flush(); _sys.stderr.flush()
+        except Exception:
+            pass
+_sys.excepthook = _excepthook
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -155,7 +168,7 @@ if not all_symbols:
 else:
     all_data = []
     for symbol in all_symbols:
-        print(f"Buscando dados para {symbol}...")
+        print(f"Buscando dados para {symbol}...", flush=True)
         symbol_data = get_binance_data(symbol, interval, start_date, end_date)
         if symbol_data:
             all_data.extend(symbol_data)
@@ -199,7 +212,7 @@ else:
         pd.set_option('display.float_format', lambda x: f'{x:.7f}')
         pd.set_option('display.max_columns', None)
     else:
-        print("Nenhum dado disponível para processar.")
+        print("Nenhum dado disponível para processar.", flush=True)
 
 # COMMAND ----------
 
@@ -214,11 +227,11 @@ if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
 
     # COMMAND ----------
 
-    if ma_long is not None: print(ma_long)
-    if ma_short is not None: print(ma_short)
-    if RSI_ATUAL is not None: print(RSI_ATUAL)
+    if ma_long is not None: print(ma_long, flush=True)
+    if ma_short is not None: print(ma_short, flush=True)
+    if RSI_ATUAL is not None: print(RSI_ATUAL, flush=True)
 else:
-    print("[INFO] Sem DF válido para métricas intradiárias (df vazio/não definido).")
+    print("[INFO] Sem DF válido para métricas intradiárias (df vazio/não definido).", flush=True)
 
 # COMMAND ----------
 
@@ -240,7 +253,7 @@ if dex:
     try:
         dex.fetch_balance()
     except Exception as e:
-        print(f"[WARN] Falha ao buscar saldo do DEX: {type(e).__name__}: {e}")
+        print(f"[WARN] Falha ao buscar saldo do DEX: {type(e).__name__}: {e}", flush=True)
 
 # COMMAND ----------
 
@@ -426,7 +439,7 @@ def _http_post_json(url: str, payload: dict, timeout: int = _HTTP_TIMEOUT):
         r.raise_for_status()
         return r.json()
     except Exception as e:  # pragma: no cover
-        print(f"[WARN] HTTP falhou: {type(e).__name__}: {e}")
+        print(f"[WARN] HTTP falhou: {type(e).__name__}: {e}", flush=True)
         return None
 
 def _notify_discord(message: str):
@@ -435,9 +448,9 @@ def _notify_discord(message: str):
     try:
         resp = _SESSION.post(_DISCORD_WEBHOOK, json={"content": message}, timeout=_HTTP_TIMEOUT)
         if resp.status_code not in (200, 204):
-            print(f"[WARN] Discord status {resp.status_code}: {resp.text}")
+            print(f"[WARN] Discord status {resp.status_code}: {resp.text}", flush=True)
     except Exception as e:  # pragma: no cover
-        print(f"[WARN] Falha ao notificar Discord: {type(e).__name__}: {e}")
+        print(f"[WARN] Falha ao notificar Discord: {type(e).__name__}: {e}", flush=True)
 
 def _hl_get_latest_fill(wallet: str):
     if not wallet:
@@ -1247,7 +1260,7 @@ if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not
     # chame a cada atualização de candle:
     strategy.step(df, usd_to_spend=10)
 else:
-    print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.")
+    print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
 
 
 # 4) (Opcional) Exibir histórico salvo com guard de vazio
@@ -1425,4 +1438,4 @@ if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
     # (opcional) exportar CSV:
     df2.to_csv("gradiente_unico_por_periodo.csv", index=False)
 
-print("========== FIM DO BLOCO: HISTÓRICO DE TRADES ==========\n")
+print("========== FIM DO BLOCO: HISTÓRICO DE TRADES ==========\n", flush=True)
