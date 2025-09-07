@@ -74,6 +74,11 @@ def _binance_bases():
 
 def _binance_session():
     s = requests.Session()
+    # permite uso de proxies do ambiente (HTTP(S)_PROXY)
+    try:
+        s.trust_env = True
+    except Exception:
+        pass
     try:
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
@@ -145,25 +150,57 @@ def get_binance_data(symbol, interval, start_date, end_date):
                 "endTime": end_timestamp,
                 "limit": 1000
             }
+            accepted_retries = int(os.getenv("BINANCE_ACCEPTED_RETRIES", "3"))
+            accepted_count = 0
             try:
-                resp = session.get(url, params=params, timeout=timeout)
-                last_status = resp.status_code
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if not data:
+                while accepted_count <= accepted_retries:
+                    resp = session.get(url, params=params, timeout=timeout)
+                    last_status = resp.status_code
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if not data:
+                            success = True
+                            break
+                        all_data.extend(data)
+                        current_start = int(data[-1][0]) + 1
                         success = True
+                        base_idx = (base_idx + tried) % len(bases)
                         break
-                    all_data.extend(data)
-                    current_start = int(data[-1][0]) + 1
-                    success = True
-                    base_idx = (base_idx + tried) % len(bases)
-                elif resp.status_code == 202:
-                    # Some Binance gateways return 202 Accepted; wait briefly and retry same base
-                    print(f"[WARN] klines {symbol} retornou 202 em {base} → aguardando e tentando novamente...", flush=True)
-                    _time.sleep(1.0)
-                    continue  # não avança base
-                else:
-                    print(f"[WARN] klines {symbol} falhou em {base} -> {resp.status_code}", flush=True)
+                    elif resp.status_code == 202:
+                        print(f"[WARN] klines {symbol} retornou 202 em {base} (tentativa {accepted_count+1}/{accepted_retries})", flush=True)
+                        accepted_count += 1
+                        _time.sleep(1.0)
+                        continue
+                    elif resp.status_code in (429, 451, 403):
+                        # fallback alternativo: uiKlines (alguns gateways servem por esse endpoint)
+                        if os.getenv("BINANCE_TRY_UIKLINES", "1") == "1":
+                            alt_url = f"{base}uiKlines"
+                            try:
+                                alt_resp = session.get(alt_url, params=params, timeout=timeout)
+                                if alt_resp.status_code == 200:
+                                    data = alt_resp.json()
+                                    if not data:
+                                        success = True
+                                        break
+                                    all_data.extend(data)
+                                    current_start = int(data[-1][0]) + 1
+                                    success = True
+                                    base_idx = (base_idx + tried) % len(bases)
+                                    print(f"[INFO] Fallback uiKlines OK em {base}", flush=True)
+                                    break
+                                else:
+                                    print(f"[WARN] uiKlines {symbol} falhou em {base} -> {alt_resp.status_code}", flush=True)
+                            except Exception as e_alt:
+                                print(f"[WARN] uiKlines {symbol} erro em {base}: {type(e_alt).__name__}: {e_alt}", flush=True)
+                        # quebra o ciclo accepted e troca de gateway
+                        break
+                    else:
+                        print(f"[WARN] klines {symbol} falhou em {base} -> {resp.status_code}", flush=True)
+                        break
+                if not success and accepted_count > accepted_retries:
+                    print(f"[WARN] 202 persistente em {base} após {accepted_retries} tentativas; trocando de gateway.", flush=True)
+                    tried += 1
+                elif not success and last_status != 202:
                     tried += 1
             except Exception as e:
                 print(f"[WARN] klines {symbol} erro em {base}: {type(e).__name__}: {e}", flush=True)
