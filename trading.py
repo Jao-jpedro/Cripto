@@ -377,8 +377,12 @@ start_date = (datetime.now() - timedelta(days=1)).replace(hour=0, minute=0, seco
 end_date = datetime.now()  # hoje com horário atual
 interval = "15m"
 
-# Buscar todos os pares de criptomoedas disponíveis (ou usar apenas SOLUSDT)
-all_symbols = ["SOLUSDT"]
+# Símbolos padrão
+SYMBOL_BINANCE = "SOLUSDT"
+SYMBOL_HL = "SOL/USDC:USDC"
+
+# Buscar todos os pares de criptomoedas disponíveis (ou usar apenas SYMBOL_BINANCE)
+all_symbols = [SYMBOL_BINANCE]
 
 if not all_symbols:
     print("Nenhum símbolo contendo 'USDT' foi encontrado.")
@@ -1475,7 +1479,7 @@ if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not
     trade_logger = TradeLogger(df_columns=df.columns)
 
     # crie a estratégia:
-    strategy = EMAGradientStrategy(dex, "SOL/USDC:USDC", GradientConfig(), logger=trade_logger)  # logger opcional
+    strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)  # logger opcional
 
     # chame a cada atualização de candle:
     strategy.step(df, usd_to_spend=10)
@@ -1501,7 +1505,7 @@ if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not
     # cria o objeto da estratégia
     bot = EMAGradientStrategy(
         dex, 
-        "SOL/USDC:USDC",   # símbolo
+        SYMBOL_HL,   # símbolo
         logger=None,       # ou seu TradeLogger se quiser testar
         debug=True
     )
@@ -1532,10 +1536,10 @@ def preview_local_events(bot, n: int = 10):
         base = {k: ev.get(k) for k in ["ts","evento","tipo","exec_price","exec_amount","order_id"]}
         print(f"{i:02d}. {base}")
 
-if dex is not None:
+if dex is not None and 'bot' in locals():
     preview_local_events(bot, 5)
 
-if dex is not None:
+if dex is not None and 'bot' in locals():
     # 6) Exporte (se houver algo)
     bot.export_local_log_csv("meu_historico_local.csv")
 
