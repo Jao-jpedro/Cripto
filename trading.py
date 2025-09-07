@@ -203,18 +203,22 @@ else:
 
 # COMMAND ----------
 
-max_date = df["data"].max()
-df_filtered = df[df["data"] == max_date]
+# Guarda contra falta de dados (ex.: erro 451/sem retorno da API)
+if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+    max_date = df["data"].max()
+    df_filtered = df[df["data"] == max_date]
 
-RSI_ATUAL = df_filtered["rsi"].values[0]
-ma_short = df_filtered["ema_short"].values[0]
-ma_long = df_filtered["ema_long"].values[0]
+    RSI_ATUAL = df_filtered["rsi"].values[0] if "rsi" in df_filtered.columns else None
+    ma_short = df_filtered["ema_short"].values[0] if "ema_short" in df_filtered.columns else None
+    ma_long = df_filtered["ema_long"].values[0] if "ema_long" in df_filtered.columns else None
 
-# COMMAND ----------
+    # COMMAND ----------
 
-print(ma_long)
-print(ma_short)
-print(RSI_ATUAL)
+    if ma_long is not None: print(ma_long)
+    if ma_short is not None: print(ma_short)
+    if RSI_ATUAL is not None: print(RSI_ATUAL)
+else:
+    print("[INFO] Sem DF válido para métricas intradiárias (df vazio/não definido).")
 
 # COMMAND ----------
 
@@ -1233,7 +1237,7 @@ class EMAGradientStrategy:
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
 
-if dex is not None:
+if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
     # 1) Logger com as colunas do DF final
     trade_logger = TradeLogger(df_columns=df.columns)
 
@@ -1243,7 +1247,7 @@ if dex is not None:
     # chame a cada atualização de candle:
     strategy.step(df, usd_to_spend=10)
 else:
-    print("[INFO] DEX desabilitado; pulando execução de estratégia/ordens.")
+    print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.")
 
 
 # 4) (Opcional) Exibir histórico salvo com guard de vazio
