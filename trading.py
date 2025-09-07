@@ -293,7 +293,7 @@ class TradeLogger:
         self.xlsx_tmp = "/tmp/trade_log.xlsx"  # escreve local, depois copia
 
         self.meta_cols = [
-            "trade_evento", "trade_tipo", "exec_price", "exec_amount",
+            "trade_evento", "trade_tipo", "trade_op", "exec_price", "exec_amount",
             "order_id", "dt_evento_utc", "dt_evento_brt"
         ]
         self.all_cols = list(df_columns) + self.meta_cols
@@ -309,6 +309,21 @@ class TradeLogger:
                 if missing:
                     for c in missing:
                         _existing[c] = pd.NA
+                    # Backfill de trade_op se possível
+                    if "trade_op" in missing and {"trade_evento", "trade_tipo"}.issubset(set(_existing.columns)):
+                        def _compose_op_row(row):
+                            ev = str(row.get("trade_evento", "")).lower()
+                            tp = str(row.get("trade_tipo", "")).lower()
+                            if ev == "entrada":
+                                return f"open_{tp}" if tp in ("long", "short") else "open"
+                            if ev in ("saida", "fechado_externo"):
+                                return f"close_{tp}" if tp in ("long", "short") else "close"
+                            if ev == "ajuste_stop":
+                                return f"adjust_stop_{tp}" if tp in ("long", "short") else "adjust_stop"
+                            if ev == "preexistente":
+                                return f"preexistente_{tp}" if tp in ("long", "short") else "preexistente"
+                            return ev
+                        _existing["trade_op"] = _existing.apply(_compose_op_row, axis=1)
                     _existing = _existing[self.all_cols]
                     _existing.to_csv(self.csv_path, index=False)
             except Exception:
@@ -326,13 +341,64 @@ class TradeLogger:
         dt_brt = now_utc.astimezone(TZ_BRT).isoformat(timespec="seconds") if TZ_BRT else ""
         return dt_utc, dt_brt
 
-        def _save_xlsx_dbfs(self, df_all: pd.DataFrame):
-            # Ambiente local: grava direto no caminho alvo; mantém assinatura para mínima alteração
-            try:
-                df_all.to_excel(self.xlsx_path_dbfs, index=False)
-            except Exception:
-                # fallback silencioso (CSV já é persistido)
-                pass
+    def _save_xlsx_dbfs(self, df_all: pd.DataFrame):
+        # Ambiente local: grava direto no caminho alvo; mantém assinatura para mínima alteração
+        try:
+            df_all.to_excel(self.xlsx_path_dbfs, index=False)
+        except Exception:
+            # fallback silencioso (CSV já é persistido)
+            pass
+
+    def append_event(self, df_snapshot: pd.DataFrame,
+                     evento: str, tipo: str,
+                     exec_price: float = None,
+                     exec_amount: float = None,
+                     order_id: str = None):
+        # Garante que o snapshot possua todas as colunas do DF principal
+        missing = [c for c in self.all_cols if c not in list(df_snapshot.columns) + self.meta_cols]
+        for c in missing:
+            df_snapshot[c] = pd.NA
+
+        def _compose_op(ev: str, tp: str) -> str:
+            ev = (ev or "").lower(); tp = (tp or "").lower()
+            if ev == "entrada":
+                return f"open_{tp}" if tp in ("long", "short") else "open"
+            if ev in ("saida", "fechado_externo"):
+                return f"close_{tp}" if tp in ("long", "short") else "close"
+            if ev == "ajuste_stop":
+                return f"adjust_stop_{tp}" if tp in ("long", "short") else "adjust_stop"
+            if ev == "preexistente":
+                return f"preexistente_{tp}" if tp in ("long", "short") else "preexistente"
+            return ev
+
+        dt_utc, dt_brt = self._now_strings()
+        meta = {
+            "trade_evento": evento,
+            "trade_tipo": tipo,
+            "trade_op": _compose_op(evento, tipo),
+            "exec_price": exec_price,
+            "exec_amount": exec_amount,
+            "order_id": order_id,
+            "dt_evento_utc": dt_utc,
+            "dt_evento_brt": dt_brt,
+        }
+
+        row = df_snapshot.copy()
+        for col in self.meta_cols:
+            row[col] = meta[col]
+        row = row[self.all_cols]
+
+        if os.path.exists(self.csv_path):
+            row.to_csv(self.csv_path, mode="a", header=False, index=False)
+        else:
+            row.to_csv(self.csv_path, index=False)
+
+        full = pd.read_csv(self.csv_path)
+        try:
+            self._save_xlsx_dbfs(full)
+            print("✅ Histórico atualizado")
+        except Exception as e:
+            print(f"⚠️ XLSX não pôde ser atualizado ({type(e).__name__}: {e}). CSV salvo em {os.path.abspath(self.csv_path)}")
 
 # =========================
 # 📣 NOTIFICAÇÕES DISCORD
@@ -382,40 +448,6 @@ def _hl_get_account_value(wallet: str) -> float:
         return float(data["marginSummary"]["accountValue"]) if data else 0.0
     except Exception:
         return 0.0
-
-    def append_event(self, df_snapshot: pd.DataFrame,
-                     evento: str, tipo: str,
-                     exec_price: float = None,
-                     exec_amount: float = None,
-                     order_id: str = None):
-        missing = [c for c in self.all_cols if c not in list(df_snapshot.columns) + self.meta_cols]
-        for c in missing:
-            df_snapshot[c] = pd.NA
-
-        dt_utc, dt_brt = self._now_strings()
-        meta = {
-            "trade_evento": evento, "trade_tipo": tipo,
-            "exec_price": exec_price, "exec_amount": exec_amount,
-            "order_id": order_id, "dt_evento_utc": dt_utc, "dt_evento_brt": dt_brt,
-        }
-
-        row = df_snapshot.copy()
-        for col in self.meta_cols:
-            row[col] = meta[col]
-        row = row[self.all_cols]
-
-        if os.path.exists(self.csv_path):
-            row.to_csv(self.csv_path, mode="a", header=False, index=False)
-        else:
-            row.to_csv(self.csv_path, index=False)
-
-        full = pd.read_csv(self.csv_path)
-        try:
-            self._save_xlsx_dbfs(full)
-            print("✅ Histórico atualizado")
-        except Exception as e:
-            print(f"⚠️ XLSX não pôde ser atualizado ({type(e).__name__}: {e}). CSV salvo em {os.path.abspath(self.csv_path)}")
-
 
 # COMMAND ----------
 
