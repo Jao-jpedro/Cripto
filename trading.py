@@ -71,6 +71,8 @@ _BINANCE_CFG = {
     "FALLBACK_CCXT": True,
     "FORCE_CCXT_FIRST": False,
     "FORCE_VISION_ONLY": True,
+    "MAX_REQUESTS": 200,
+    "DEBUG_FETCH": True,
 }
 
 def _binance_bases():
@@ -131,6 +133,13 @@ def get_all_symbols():
 # Função para buscar os dados da criptomoeda
 # Aceita datetime diretamente
 def get_binance_data(symbol, interval, start_date, end_date):
+    # Garante janela máxima de 48h
+    if end_date is None:
+        end_date = datetime.now()
+    max_window = timedelta(hours=48)
+    min_start = end_date - max_window
+    if start_date is None or start_date < min_start:
+        start_date = min_start
     # Se configurado para forçar CCXT primeiro, tenta imediatamente
     if _BINANCE_CFG.get("FORCE_CCXT_FIRST"):
         data_ccxt = []
@@ -183,8 +192,20 @@ def get_binance_data(symbol, interval, start_date, end_date):
     current_start = start_timestamp
     bases = _binance_bases()
     base_idx = 0
+    req_count = 0
 
-    while current_start < end_timestamp:
+    def _interval_to_ms(iv: str) -> int:
+        table = {
+            "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+            "30m": 1_800_000, "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
+            "6h": 21_600_000, "8h": 28_800_000, "12h": 43_200_000,
+            "1d": 86_400_000, "3d": 259_200_000, "1w": 604_800_000,
+            "1M": 2_592_000_000,
+        }
+        return table.get(iv, 900_000)  # default 15m
+    interval_ms = _interval_to_ms(interval)
+
+    while current_start < end_timestamp and req_count < _BINANCE_CFG["MAX_REQUESTS"]:
         tried = 0
         success = False
         last_status = None
@@ -210,7 +231,15 @@ def get_binance_data(symbol, interval, start_date, end_date):
                             success = True
                             break
                         all_data.extend(data)
-                        current_start = int(data[-1][0]) + 1
+                        last_open = int(data[-1][0])
+                        if _BINANCE_CFG["DEBUG_FETCH"]:
+                            print(f"[DEBUG] {symbol} base={base} batch={len(data)} first={data[0][0]} last={last_open} cs={current_start}", flush=True)
+                        # evita travar caso a API retorne o mesmo timestamp
+                        if last_open <= current_start:
+                            print(f"[WARN] timestamp não avançou (last={last_open} <= cs={current_start}); forçando avanço por intervalo.", flush=True)
+                            current_start = current_start + interval_ms
+                        else:
+                            current_start = last_open + 1
                         success = True
                         base_idx = (base_idx + tried) % len(bases)
                         break
@@ -258,6 +287,10 @@ def get_binance_data(symbol, interval, start_date, end_date):
         if not success:
             print(f"Erro ao buscar dados da API para {symbol}: {last_status}", flush=True)
             break
+        req_count += 1
+
+    if req_count >= _BINANCE_CFG["MAX_REQUESTS"]:
+        print(f"[WARN] Limite de requisições atingido ({req_count}). Ult. cs={current_start}", flush=True)
 
     formatted_data = [{
         "data": item[0],
@@ -373,7 +406,7 @@ def calcular_macd(df, short_window=7, long_window=40, signal_window=9):
     return df
 
 # Configurações do símbolo, intervalo e datas
-start_date = (datetime.now() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+start_date = datetime.now() - timedelta(hours=48)
 end_date = datetime.now()  # hoje com horário atual
 interval = "15m"
 
