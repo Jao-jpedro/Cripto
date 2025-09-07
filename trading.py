@@ -54,15 +54,12 @@ except NameError:  # pragma: no cover
     def displayHTML(html: str):
         print(html)
 
-# URL(s) base da API da Binance com failover
+# URL(s) base da API da Binance com failover (sem depender de env)
 import time as _time
 
-def _binance_bases():
-    env_override = os.getenv("BINANCE_BASE_URL")
-    if env_override:
-        base = env_override.rstrip("/")
-        return [f"{base}/api/v3/"]
-    return [
+# Configurações locais (sem necessidade de ENV)
+_BINANCE_CFG = {
+    "BASES": [
         "https://api.binance.com/api/v3/",
         "https://api1.binance.com/api/v3/",
         "https://api2.binance.com/api/v3/",
@@ -70,7 +67,18 @@ def _binance_bases():
         "https://api-gateway.binance.com/api/v3/",
         "https://api-gcp.binance.com/api/v3/",
         "https://data-api.binance.vision/api/v3/",
-    ]
+    ],
+    "TIMEOUT": 10,
+    "RETRIES": 3,
+    "BACKOFF": 0.5,
+    "UA": "Mozilla/5.0 (X11; Linux x86_64) PythonRequests/2.x",
+    "ACCEPTED_RETRIES": 2,  # 202 por gateway
+    "TRY_UIKLINES": True,
+    "FALLBACK_CCXT": True,
+}
+
+def _binance_bases():
+    return list(_BINANCE_CFG["BASES"])  # cópia
 
 def _binance_session():
     s = requests.Session()
@@ -83,17 +91,17 @@ def _binance_session():
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
         retry = Retry(
-            total=int(os.getenv("BINANCE_RETRIES", "3")),
-            backoff_factor=float(os.getenv("BINANCE_BACKOFF", "0.5")),
+            total=_BINANCE_CFG["RETRIES"],
+            backoff_factor=_BINANCE_CFG["BACKOFF"],
             status_forcelist=[429, 451, 500, 502, 503, 504],
-            allowed_methods=["GET", "POST"],
+            allowed_methods=["GET"],
         )
         adapter = HTTPAdapter(max_retries=retry)
         s.mount("https://", adapter); s.mount("http://", adapter)
     except Exception:
         pass
     s.headers.update({
-        "User-Agent": os.getenv("BINANCE_UA", "Mozilla/5.0 (X11; Linux x86_64) PythonRequests/2.x"),
+        "User-Agent": _BINANCE_CFG["UA"],
         "Accept": "application/json",
     })
     return s
@@ -101,7 +109,7 @@ def _binance_session():
 # Função para buscar todos os pares de criptomoedas disponíveis na Binance
 def get_all_symbols():
     session = _binance_session()
-    timeout = int(os.getenv("BINANCE_TIMEOUT", "10"))
+    timeout = _BINANCE_CFG["TIMEOUT"]
     last_err = None
     for base in _binance_bases():
         url = f"{base}exchangeInfo"
@@ -129,7 +137,7 @@ def get_binance_data(symbol, interval, start_date, end_date):
     end_timestamp = int(end_date.timestamp() * 1000)
 
     session = _binance_session()
-    timeout = int(os.getenv("BINANCE_TIMEOUT", "10"))
+    timeout = _BINANCE_CFG["TIMEOUT"]
 
     all_data = []
     current_start = start_timestamp
@@ -150,7 +158,7 @@ def get_binance_data(symbol, interval, start_date, end_date):
                 "endTime": end_timestamp,
                 "limit": 1000
             }
-            accepted_retries = int(os.getenv("BINANCE_ACCEPTED_RETRIES", "3"))
+            accepted_retries = _BINANCE_CFG["ACCEPTED_RETRIES"]
             accepted_count = 0
             try:
                 while accepted_count <= accepted_retries:
@@ -172,8 +180,8 @@ def get_binance_data(symbol, interval, start_date, end_date):
                         _time.sleep(1.0)
                         continue
                     elif resp.status_code in (429, 451, 403):
-                        # fallback alternativo: uiKlines (alguns gateways servem por esse endpoint)
-                        if os.getenv("BINANCE_TRY_UIKLINES", "1") == "1":
+                        # fallback alternativo: uiKlines
+                        if _BINANCE_CFG["TRY_UIKLINES"]:
                             alt_url = f"{base}uiKlines"
                             try:
                                 alt_resp = session.get(alt_url, params=params, timeout=timeout)
@@ -218,6 +226,63 @@ def get_binance_data(symbol, interval, start_date, end_date):
         "volume_compra": float(item[5]),
         "volume_venda": float(item[7])
     } for item in all_data]
+    # Se nada veio pelos endpoints HTTP, tente fallback via CCXT (se habilitado)
+    if not formatted_data and _BINANCE_CFG["FALLBACK_CCXT"]:
+        try:
+            def _to_ccxt_symbol(sym: str) -> str:
+                if "/" in sym:
+                    return sym
+                if sym.endswith("USDT"):
+                    return f"{sym[:-4]}/USDT"
+                return sym
+            def _map_interval(iv: str) -> str:
+                valid = {"1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M"}
+                return iv if iv in valid else "15m"
+
+            ccxt_symbol = _to_ccxt_symbol(symbol)
+            tf = _map_interval(interval)
+            start_ms = int(start_date.timestamp() * 1000)
+            end_ms = int(end_date.timestamp() * 1000)
+
+            try:
+                import ccxt  # type: ignore
+            except Exception as e:
+                print(f"[WARN] CCXT indisponível para fallback: {type(e).__name__}: {e}", flush=True)
+                return formatted_data
+
+            ex = ccxt.binance({
+                "enableRateLimit": True,
+                "options": {"adjustForTimeDifference": True}
+            })
+            ohlcv_all = []
+            since = start_ms
+            limit = 1000
+            while since < end_ms:
+                try:
+                    batch = ex.fetch_ohlcv(ccxt_symbol, timeframe=tf, since=since, limit=limit)
+                except Exception as e:
+                    print(f"[WARN] CCXT fetch_ohlcv falhou: {type(e).__name__}: {e}", flush=True)
+                    break
+                if not batch:
+                    break
+                ohlcv_all.extend(batch)
+                since = batch[-1][0] + 1
+                # prevenção contra loops muito longos
+                if len(ohlcv_all) >= 5000:
+                    break
+
+            if ohlcv_all:
+                formatted_data = [{
+                    "data": o[0],
+                    "valor_fechamento": round(float(o[4]), 7),
+                    "criptomoeda": symbol,
+                    "volume_compra": float(o[5] or 0.0),
+                    "volume_venda": float(o[5] or 0.0),
+                } for o in ohlcv_all]
+                print("[INFO] Fallback CCXT OK — dados obtidos pela fetch_ohlcv.", flush=True)
+        except Exception as e:
+            print(f"[WARN] Fallback CCXT falhou: {type(e).__name__}: {e}", flush=True)
+
     return formatted_data
 
 # Função para calcular o RSI para cada criptomoeda individualmente
@@ -533,7 +598,7 @@ class TradeLogger:
 # 📣 NOTIFICAÇÕES DISCORD
 # =========================
 import requests as _req
-_DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
+_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM"
 _HTTP_TIMEOUT = 10
 _SESSION = _req.Session()
 try:
@@ -657,7 +722,10 @@ class EMAGradientStrategy:
         return None
 
     def _wallet_address(self) -> Optional[str]:
-        # Busca carteira: env > dex attributes/options > None
+        # Busca carteira: constante local > env > dex attributes/options
+        WALLET_FALLBACK = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
+        if WALLET_FALLBACK:
+            return WALLET_FALLBACK
         for key in ("WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
             val = os.getenv(key)
             if val:
