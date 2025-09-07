@@ -157,11 +157,17 @@ def get_binance_data(symbol, interval, start_date, end_date):
                     current_start = int(data[-1][0]) + 1
                     success = True
                     base_idx = (base_idx + tried) % len(bases)
+                elif resp.status_code == 202:
+                    # Some Binance gateways return 202 Accepted; wait briefly and retry same base
+                    print(f"[WARN] klines {symbol} retornou 202 em {base} → aguardando e tentando novamente...", flush=True)
+                    _time.sleep(1.0)
+                    continue  # não avança base
                 else:
                     print(f"[WARN] klines {symbol} falhou em {base} -> {resp.status_code}", flush=True)
+                    tried += 1
             except Exception as e:
                 print(f"[WARN] klines {symbol} erro em {base}: {type(e).__name__}: {e}", flush=True)
-            tried += 1
+                tried += 1
             _time.sleep(0.25)
 
         if not success:
