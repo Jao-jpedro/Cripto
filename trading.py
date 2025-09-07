@@ -1655,6 +1655,18 @@ if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
     # Salva como um único arquivo CSV local
     df_pandas.to_csv("previsoes_df.csv", index=False)
 
+# Snapshot local do DF em CSV (nome fixo e timestamp)
+if 'df' in locals() and isinstance(df, pd.DataFrame):
+    try:
+        _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _base = "df_log.csv"
+        _tsfile = f"df_log_{_ts}.csv"
+        df.to_csv(_base, index=False)
+        df.to_csv(_tsfile, index=False)
+        print(f"[INFO] DF salvo em: {os.path.abspath(_base)} e {os.path.abspath(_tsfile)}", flush=True)
+    except Exception as _e:
+        print(f"[WARN] Falha ao salvar df em CSV: {type(_e).__name__}: {_e}", flush=True)
+
 # COMMAND ----------
 
 # =========================
