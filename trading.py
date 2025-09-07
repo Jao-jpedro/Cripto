@@ -253,9 +253,32 @@ try:
 except Exception:
     TZ_BRT = None  # fallback sem timezone
 
+# Stub seguro de dbutils para ambientes fora do Databricks
+try:  # pragma: no cover
+    dbutils  # type: ignore[name-defined]
+except NameError:  # cria stub mínimo se não existir
+    class _DBFSStub:
+        def cp(self, src: str, dst: str, recurse: bool = False):
+            try:
+                import os as _os, shutil as _shutil
+                _os.makedirs(_os.path.dirname(dst) or ".", exist_ok=True)
+                _shutil.copy(src, dst)
+            except Exception:
+                pass
+        def mkdirs(self, path: str):
+            try:
+                import os as _os
+                _os.makedirs(path, exist_ok=True)
+            except Exception:
+                pass
+    class _DbutilsStub:
+        def __init__(self):
+            self.fs = _DBFSStub()
+    dbutils = _DbutilsStub()  # type: ignore
+
 def _has_dbutils():
     try:
-        _ = dbutils  # noqa: F821
+        _ = dbutils  # type: ignore[name-defined]
         return True
     except NameError:
         return False
