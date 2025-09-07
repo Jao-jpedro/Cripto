@@ -1264,7 +1264,7 @@ else:
 
 # COMMAND ----------
 
-if dex is not None:
+if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
     # cria o objeto da estratégia
     bot = EMAGradientStrategy(
         dex, 
@@ -1276,7 +1276,7 @@ if dex is not None:
 
 # COMMAND ----------
 
-if dex is not None:
+if dex is not None and 'bot' in locals():
     # 1) Confirme que está usando a MESMA instância
     print("bot id:", id(bot))
 
@@ -1287,7 +1287,7 @@ if dex is not None:
     bot.force_local_log = True  # ignora logger externo
     bot._safe_log("teste_manual", df_for_log=None, tipo="info", exec_price=None, exec_amount=None)
 
-if dex is not None:
+if dex is not None and 'bot' in locals():
     # 4) Cheque novamente
     print("len(_local_events) após teste:", len(bot._local_events))
 
@@ -1319,7 +1319,8 @@ except FileNotFoundError:
 
 # COMMAND ----------
 
-df["max_50"] = df.groupby("criptomoeda")["valor_fechamento"].transform(lambda x: x.rolling(window=50, min_periods=1).max())
+if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+    df["max_50"] = df.groupby("criptomoeda")["valor_fechamento"].transform(lambda x: x.rolling(window=50, min_periods=1).max())
 
 # COMMAND ----------
 
@@ -1337,25 +1338,26 @@ def gradiente_serie(y: np.ndarray) -> float:
 # tamanho da janela para o cálculo
 N_BARRAS_GRADIENTE = 5
 
-df["gradiente_ema_curto"] = (
-    df["ema_short"]
-    .rolling(window=N_BARRAS_GRADIENTE, min_periods=2)
-    .apply(gradiente_serie, raw=True)
-)
+if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+    df["gradiente_ema_curto"] = (
+        df["ema_short"]
+        .rolling(window=N_BARRAS_GRADIENTE, min_periods=2)
+        .apply(gradiente_serie, raw=True)
+    )
 
-df["gradiente_ema_longo"] = (
-    df["ema_long"]
-    .rolling(window=N_BARRAS_GRADIENTE, min_periods=2)
-    .apply(gradiente_serie, raw=True)
-)
+    df["gradiente_ema_longo"] = (
+        df["ema_long"]
+        .rolling(window=N_BARRAS_GRADIENTE, min_periods=2)
+        .apply(gradiente_serie, raw=True)
+    )
 
 # COMMAND ----------
 
 # Converte o DataFrame PySpark para Pandas
-df_pandas = df
-
-# Salva como um único arquivo CSV local
-df_pandas.to_csv("previsoes_df.csv", index=False)
+if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+    df_pandas = df
+    # Salva como um único arquivo CSV local
+    df_pandas.to_csv("previsoes_df.csv", index=False)
 
 # COMMAND ----------
 
@@ -1367,14 +1369,15 @@ df_pandas.to_csv("previsoes_df.csv", index=False)
 SERIE_BASE = "ema_short"
 
 # Garante EMAs caso ainda não existam
-if "ema_short" not in df.columns:
-    df = df.sort_values("data") if "data" in df.columns else df
-    df["ema_short"] = df["valor_fechamento"].ewm(span=7, adjust=False).mean()
-if "ema_long" not in df.columns:
-    df["ema_long"]  = df["valor_fechamento"].ewm(span=40, adjust=False).mean()
+if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+    if "ema_short" not in df.columns:
+        df = df.sort_values("data") if "data" in df.columns else df
+        df["ema_short"] = df["valor_fechamento"].ewm(span=7, adjust=False).mean()
+    if "ema_long" not in df.columns:
+        df["ema_long"]  = df["valor_fechamento"].ewm(span=40, adjust=False).mean()
 
-# Copia base
-df2 = df.copy()
+    # Copia base
+    df2 = df.copy()
 
 # Função para gradiente (slope) via regressão linear na janela N
 def _rolling_slope(series: pd.Series, n: int) -> pd.Series:
@@ -1388,37 +1391,38 @@ def _rolling_slope(series: pd.Series, n: int) -> pd.Series:
 periodos = [3, 5, 7, 10, 12, 15, 20]
 
 # Calcula UM conjunto de gradientes, todos sobre a mesma série base
-if SERIE_BASE not in df2.columns:
-    raise ValueError(f"Série base '{SERIE_BASE}' não encontrada nas colunas do DF.")
+if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
+    if SERIE_BASE not in df2.columns:
+        raise ValueError(f"Série base '{SERIE_BASE}' não encontrada nas colunas do DF.")
 
-for n in periodos:
-    df2[f"grad_n{n}"] = _rolling_slope(df2[SERIE_BASE].astype(float), n)
+    for n in periodos:
+        df2[f"grad_n{n}"] = _rolling_slope(df2[SERIE_BASE].astype(float), n)
 
-# Painel amigável
-print("====================")
-print("🗂️ Colunas incluídas:")
-cols_fixas = ["data"] if "data" in df2.columns else []
-cols_fixas += ["valor_fechamento", "ema_short", "ema_long"]
+    # Painel amigável
+    print("====================")
+    print("🗂️ Colunas incluídas:")
+    cols_fixas = ["data"] if "data" in df2.columns else []
+    cols_fixas += ["valor_fechamento", "ema_short", "ema_long"]
 
-cols_view = [c for c in cols_fixas if c in df2.columns] + [f"grad_n{n}" for n in periodos]
-with pd.option_context("display.width", 220, "display.max_columns", None, "display.float_format", "{:.6f}".format):
-    pass  # Removido o print da tabela
+    cols_view = [c for c in cols_fixas if c in df2.columns] + [f"grad_n{n}" for n in periodos]
+    with pd.option_context("display.width", 220, "display.max_columns", None, "display.float_format", "{:.6f}".format):
+        pass  # Removido o print da tabela
 
-# Resumo da última barra
-last_idx = df2.index[-1]
-print(f"📍 RESUMO (última barra) | base={SERIE_BASE}")
-print("====================")
-vals = []
-if "valor_fechamento" in df2.columns: vals.append(f"close={df2.loc[last_idx,'valor_fechamento']:.6f}")
-if "ema_short" in df2.columns:        vals.append(f"ema_short={df2.loc[last_idx,'ema_short']:.6f}")
-if "ema_long" in df2.columns:         vals.append(f"ema_long={df2.loc[last_idx,'ema_long']:.6f}")
-print("  " + "  ".join(vals))
+    # Resumo da última barra
+    last_idx = df2.index[-1]
+    print(f"📍 RESUMO (última barra) | base={SERIE_BASE}")
+    print("====================")
+    vals = []
+    if "valor_fechamento" in df2.columns: vals.append(f"close={df2.loc[last_idx,'valor_fechamento']:.6f}")
+    if "ema_short" in df2.columns:        vals.append(f"ema_short={df2.loc[last_idx,'ema_short']:.6f}")
+    if "ema_long" in df2.columns:         vals.append(f"ema_long={df2.loc[last_idx,'ema_long']:.6f}")
+    print("  " + "  ".join(vals))
 
-for n in periodos:
-    g = df2.loc[last_idx, f"grad_n{n}"]
-    print(f"  N={n:>2} → grad={g:.6f}")
+    for n in periodos:
+        g = df2.loc[last_idx, f"grad_n{n}"]
+        print(f"  N={n:>2} → grad={g:.6f}")
 
-# (opcional) exportar CSV:
-df2.to_csv("gradiente_unico_por_periodo.csv", index=False)
+    # (opcional) exportar CSV:
+    df2.to_csv("gradiente_unico_por_periodo.csv", index=False)
 
 print("========== FIM DO BLOCO: HISTÓRICO DE TRADES ==========\n")
