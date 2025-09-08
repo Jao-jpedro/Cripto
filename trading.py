@@ -303,7 +303,7 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
         if debug:
             print(f"[WARN] Indicadores falharam: {e}", flush=True)
     return df_out
-
+SYMBOL_BINANCE = "SOLUSDT"
 # Constrói df global na carga, se estiver vazio
 if isinstance(df, pd.DataFrame) and df.empty:
     try:
