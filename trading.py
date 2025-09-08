@@ -1540,7 +1540,8 @@ import time
 
 while True:
     try:
-        # Coloque aqui o bloco principal de execução (exemplo: reconstruir df e rodar estratégia)
+        END_DATE = datetime.now(UTC)
+        START_DATE = END_DATE - timedelta(hours=48)
         df = build_df(SYMBOL_BINANCE, INTERVAL, START_DATE, END_DATE)
         if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
             trade_logger = TradeLogger(df_columns=df.columns)
@@ -1550,6 +1551,5 @@ while True:
             print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
         time.sleep(60)  # espera 1 minuto antes de rodar novamente
     except Exception as e:
-        
         print(f"[ERRO] Loop principal falhou: {e}", flush=True)
         time.sleep(60)
