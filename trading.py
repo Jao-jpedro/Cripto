@@ -191,29 +191,30 @@ def calcular_macd(df, short_window=7, long_window=40, signal_window=9):
 # =========================
 def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
              start: datetime = None, end: datetime = None,
-             debug: bool = True) -> pd.DataFrame:
-    if start is None:
-        start = START_DATE
-    if end is None:
-        end = END_DATE
-    start_ms, end_ms = int(start.timestamp()*1000), int(end.timestamp()*1000)
+             debug: bool = True,
+             target_candles: int = None) -> pd.DataFrame:
+    # Sempre prioriza um número alvo de candles (inclui o atual não fechado)
+    n_target = int(os.getenv("TARGET_CANDLES", "0"))
+    if target_candles is not None:
+        n_target = int(target_candles)
+    if n_target <= 0:
+        n_target = 190  # padrão solicitado
+
     if debug:
-        print(f"[INFO] Build DF Bybit {symbol} tf={tf} start={start} end={end}", flush=True)
+        print(f"[INFO] Build DF Bybit {symbol} tf={tf} alvo={n_target} candles (inclui atual)", flush=True)
 
     symbol_bybit = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
     data = []
     try:
         import ccxt  # type: ignore
         ex = ccxt.bybit({"enableRateLimit": True})
-        cc = []
-        since = start_ms
-        while since < end_ms and len(cc) < 5000:
-            batch = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, since=since, limit=1000)
-            if not batch:
-                break
-            cc.extend(batch)
-            since = batch[-1][0] + 1
+        # Busca apenas os últimos n_target-1 candles fechados
+        lim = max(1, n_target - 1)
+        cc = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, limit=lim) or []
         if cc:
+            # Garante no máximo lim candles
+            if len(cc) > lim:
+                cc = cc[-lim:]
             data = [{
                 "data": o[0],
                 "valor_fechamento": float(o[4]),
@@ -222,8 +223,8 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
                 "volume_venda": float(o[5] or 0.0),
             } for o in cc]
             if debug:
-                print(f"[INFO] Bybit: {len(data)} candles carregados", flush=True)
-        # Adiciona o preço atual do ticker como "candle extra"
+                print(f"[INFO] Bybit: {len(data)} candles carregados (fechados)", flush=True)
+        # Adiciona o preço atual do ticker como "candle extra" (não fechado)
         try:
             ticker = ex.fetch_ticker(symbol_bybit)
             now = datetime.now()
@@ -261,6 +262,9 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
             print(f"[ERR] Sem dados para {symbol} tf={tf}", flush=True)
         return pd.DataFrame()
 
+    # Garante que retornamos no máximo n_target (fechados + atual)
+    if data and len(data) > n_target:
+        data = data[-n_target:]
     df_out = pd.DataFrame(data)
     df_out["data"] = pd.to_datetime(df_out["data"], unit="ms")
     try:
@@ -949,7 +953,7 @@ class EMAGradientStrategy:
         except Exception:
             pass
         try:
-            if os.getenv("LIVE_TRADING", "1") not in ("1", "true", "True"):
+            if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 raise RuntimeError("LIVE_TRADING desativado")
             t = self.dex.fetch_ticker(self.symbol)
             if t and t.get("last"):
@@ -960,8 +964,8 @@ class EMAGradientStrategy:
         raise RuntimeError("Não consegui obter preço atual (midPx/last).")
 
     def _posicao_aberta(self) -> Optional[Dict[str, Any]]:
-        # Permite desligar chamadas à exchange em ambientes restritos
-        if os.getenv("LIVE_TRADING", "1") not in ("1", "true", "True"):
+        # Permite desligar chamadas à exchange em ambientes restritos (default off)
+        if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
         try:
             pos = self.dex.fetch_positions([self.symbol])
@@ -974,7 +978,7 @@ class EMAGradientStrategy:
 
     def _tem_ordem_de_entrada_pendente(self) -> bool:
         try:
-            if os.getenv("LIVE_TRADING", "1") not in ("1", "true", "True"):
+            if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return False
             for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
@@ -1118,7 +1122,7 @@ class EMAGradientStrategy:
     # ---------- localizar/cancelar stop existente ----------
     def _find_existing_stop(self):
         try:
-            if os.getenv("LIVE_TRADING", "1") not in ("1", "true", "True"):
+            if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return None, None, None
             for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
@@ -1963,6 +1967,7 @@ if __name__ == "__main__":
     def executar_estrategia(df_in: pd.DataFrame, dex_in, trade_logger_in: TradeLogger,
                             usd_to_spend: float = 10.0, loop: bool = True, sleep_seconds: int = 60):
         """Compatível com chamadas antigas (Render.com)."""
+        print(f"[MODE] LIVE_TRADING={os.getenv('LIVE_TRADING', '0')} | DEX_TIMEOUT_MS={os.getenv('DEX_TIMEOUT_MS', '5000')}")
         if not isinstance(df_in, pd.DataFrame) or df_in.empty:
             print("DataFrame de candles está vazio ou inválido."); return
         strat_local = EMAGradientStrategy(dex=dex_in, symbol=SYMBOL_HL, logger=trade_logger_in, debug=True)
