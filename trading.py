@@ -10,25 +10,12 @@ _warnings.filterwarnings(
 )
 
 import requests
-import sys as _sys, traceback as _tb
-
-
-
-# Exceções não tratadas: imprime stack e força flush no Render/CLI
-def _excepthook(exc_type, exc, tb):  # pragma: no cover
-    try:
-        print("\n[ERRO] Exceção não tratada:", flush=True)
-        _tb.print_exception(exc_type, exc, tb)
-    finally:
-        try:
-            _sys.stdout.flush(); _sys.stderr.flush()
-        except Exception:
-            pass
-_sys.excepthook = _excepthook
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 import os
+
+BASE_URL = "https://api.binance.com/api/v3/"
 
 # Variáveis globais padronizadas
 try:
@@ -121,70 +108,27 @@ def get_all_symbols():
 def get_binance_data(symbol, interval, start_date, end_date):
     start_timestamp = int(start_date.timestamp() * 1000)
     end_timestamp = int(end_date.timestamp() * 1000)
-
-    session = _binance_session()
-    timeout = int(os.getenv("BINANCE_TIMEOUT", "10"))
-
     all_data = []
     current_start = start_timestamp
-    bases = _binance_bases()
-    base_idx = 0
-
-    print(f"[INFO] Kl-req {symbol} tf={interval} start={datetime.fromtimestamp(start_timestamp/1000, timezone.utc)} end={datetime.fromtimestamp(end_timestamp/1000, timezone.utc)}", flush=True)
-    req_count = 0
-    empty_seq = 0
     while current_start < end_timestamp:
-        tried = 0
-        success = False
-        last_status = None
-        while tried < len(bases) and not success:
-            base = bases[(base_idx + tried) % len(bases)]
-            url = f"{base}klines"
-            params = {
-                "symbol": symbol,
-                "interval": interval,
-                "startTime": current_start,
-                "endTime": end_timestamp,
-                "limit": 1000
-            }
-            try:
-                resp = session.get(url, params=params, timeout=timeout)
-                last_status = resp.status_code
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if not data:
-                        empty_seq += 1
-                        print(f"[DEBUG] empty batch base={base} cs={current_start} empty_seq={empty_seq}", flush=True)
-                        if empty_seq >= 3:
-                            print("[INFO] Muitas respostas vazias seguidas (3); parando.", flush=True)
-                            return [{
-                                "data": item[0],
-                                "valor_fechamento": round(float(item[4]), 7),
-                                "criptomoeda": symbol,
-                                "volume_compra": float(item[5]),
-                                "volume_venda": float(item[7])
-                            } for item in all_data]
-                        break
-                    empty_seq = 0
-                    all_data.extend(data)
-                    current_start = int(data[-1][0]) + 1
-                    req_count += 1
-                    print(f"[DEBUG] batch={len(data)} total={len(all_data)}", flush=True)
-                    success = True
-                    base_idx = (base_idx + tried) % len(bases)
-                elif resp.status_code == 202:
-                    _time.sleep(0.8)
-                    continue
-                else:
-                    tried += 1
-            except Exception as e:
-                tried += 1
-            _time.sleep(0.25)
-
-        if not success:
-            print(f"[INFO] klines sem sucesso ({last_status}) para {symbol}", flush=True)
+        url = f"{BASE_URL}klines"
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "startTime": current_start,
+            "endTime": end_timestamp,
+            "limit": 1000
+        }
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            if not data:
+                break
+            all_data.extend(data)
+            current_start = int(data[-1][0]) + 1
+        else:
+            print(f"Erro ao buscar dados da API para {symbol}: {response.status_code}")
             break
-
     formatted_data = [{
         "data": item[0],
         "valor_fechamento": round(float(item[4]), 7),
@@ -192,7 +136,6 @@ def get_binance_data(symbol, interval, start_date, end_date):
         "volume_compra": float(item[5]),
         "volume_venda": float(item[7])
     } for item in all_data]
-    print(f"[INFO] Fetched {len(formatted_data)} candles for {symbol} (tf={interval})", flush=True)
     return formatted_data
 
 # Função para calcular o RSI para cada criptomoeda individualmente
