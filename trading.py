@@ -1520,3 +1520,17 @@ while True:
     except Exception as e:
         print(f"[ERRO] Loop principal falhou: {e}", flush=True)
         time.sleep(60)
+
+from flask import Flask, send_file
+
+app = Flask(__name__)
+
+@app.route("/download-trade-log")
+def download_trade_log():
+    path = "/tmp/trade_log.csv"
+    if os.path.exists(path):
+        return send_file(path, as_attachment=True)
+    return "Arquivo não encontrado.", 404
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
