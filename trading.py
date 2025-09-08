@@ -792,7 +792,9 @@ class EMAGradientStrategy:
 
         # tenta preço atual
         try:
-            px_now = self._preco_atual()
+            live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+            if live:
+                px_now = self._preco_atual()
         except Exception:
             pass
 
@@ -2026,7 +2028,22 @@ if __name__ == "__main__":
         if not loop:
             return
         import time as _t
+        iter_count = 0
         while True:
+            iter_count += 1
+            # Heartbeat
+            try:
+                now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                last_ts = None
+                if "data" in df_in.columns and len(df_in) > 0:
+                    try:
+                        last_ts = str(df_in["data"].iloc[-1])
+                    except Exception:
+                        last_ts = str(df_in.index[-1])
+                live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+                print(f"[HB] {now_utc} | iter={iter_count} | df_len={len(df_in)} | last_ts={last_ts} | live={int(live)}", flush=True)
+            except Exception:
+                pass
             try:
                 strat_local.step(df_in, usd_to_spend=usd_to_spend)
             except Exception as e:
