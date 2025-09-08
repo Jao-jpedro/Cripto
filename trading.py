@@ -203,18 +203,36 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
     if debug:
         print(f"[INFO] Build DF Bybit {symbol} tf={tf} alvo={n_target} candles (inclui atual)", flush=True)
 
+    # Calcula timestamp do início do candle atual (alinhado ao timeframe)
+    def _tf_seconds(tf_str: str) -> int:
+        tf_str = tf_str.lower()
+        if tf_str.endswith('m'):
+            return int(tf_str[:-1]) * 60
+        if tf_str.endswith('h'):
+            return int(tf_str[:-1]) * 3600
+        if tf_str.endswith('d'):
+            return int(tf_str[:-1]) * 86400
+        # fallback: 60s
+        return 60
+
+    now_utc = datetime.now(UTC)
+    secs = _tf_seconds(tf)
+    epoch = int(now_utc.timestamp())
+    cur_open_epoch = (epoch // secs) * secs
+    cur_open_ms = cur_open_epoch * 1000
+
     symbol_bybit = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
     data = []
     try:
         import ccxt  # type: ignore
         ex = ccxt.bybit({"enableRateLimit": True})
-        # Busca apenas os últimos n_target-1 candles fechados
-        lim = max(1, n_target - 1)
+        # Busca até os últimos n_target candles (Bybit normalmente retorna fechados; alguns mercados incluem o em formação)
+        lim = max(1, n_target)
         cc = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, limit=lim) or []
         if cc:
-            # Garante no máximo lim candles
-            if len(cc) > lim:
-                cc = cc[-lim:]
+            # Garante no máximo n_target candles
+            if len(cc) > n_target:
+                cc = cc[-n_target:]
             data = [{
                 "data": o[0],
                 "valor_fechamento": float(o[4]),
@@ -223,23 +241,34 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
                 "volume_venda": float(o[5] or 0.0),
             } for o in cc]
             if debug:
-                print(f"[INFO] Bybit: {len(data)} candles carregados (fechados)", flush=True)
-        # Adiciona o preço atual do ticker como "candle extra" (não fechado)
-        try:
-            ticker = ex.fetch_ticker(symbol_bybit)
-            now = datetime.now()
-            data.append({
-                "data": int(now.timestamp() * 1000),
-                "valor_fechamento": float(ticker["last"]),
-                "criptomoeda": symbol,
-                "volume_compra": 0.0,
-                "volume_venda": 0.0,
-            })
-            if debug:
-                print(f"[INFO] Adicionado preço atual do ticker: {ticker['last']}", flush=True)
-        except Exception as e:
-            if debug:
-                print(f"[WARN] Não foi possível adicionar preço atual: {e}", flush=True)
+                print(f"[INFO] Bybit: {len(data)} candles carregados (API)", flush=True)
+        # Se o último candle não é o atual, adiciona o preço atual como candle em formação
+        need_append_live = True
+        if data:
+            last_ts = int(data[-1]["data"])
+            if last_ts == cur_open_ms:
+                need_append_live = False
+            elif last_ts > cur_open_ms:
+                # Incomum: dados já no futuro do open atual; não adiciona
+                need_append_live = False
+        if need_append_live and len(data) < n_target:
+            try:
+                ticker = ex.fetch_ticker(symbol_bybit)
+                data.append({
+                    "data": cur_open_ms,
+                    "valor_fechamento": float(ticker["last"]),
+                    "criptomoeda": symbol,
+                    "volume_compra": 0.0,
+                    "volume_venda": 0.0,
+                })
+                if debug:
+                    print(f"[INFO] Adicionado preço atual do ticker: {ticker['last']}", flush=True)
+            except Exception as e:
+                if debug:
+                    print(f"[WARN] Não foi possível adicionar preço atual: {e}", flush=True)
+        # Garante exatamente n_target no máximo (fechados + atual)
+        if data and len(data) > n_target:
+            data = data[-n_target:]
     except Exception as e:
         if debug:
             print(f"[WARN] Bybit falhou: {e}", flush=True)
@@ -262,9 +291,6 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
             print(f"[ERR] Sem dados para {symbol} tf={tf}", flush=True)
         return pd.DataFrame()
 
-    # Garante que retornamos no máximo n_target (fechados + atual)
-    if data and len(data) > n_target:
-        data = data[-n_target:]
     df_out = pd.DataFrame(data)
     df_out["data"] = pd.to_datetime(df_out["data"], unit="ms")
     try:
@@ -273,6 +299,11 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
     except Exception as e:
         if debug:
             print(f"[WARN] Indicadores falharam: {e}", flush=True)
+    if debug:
+        try:
+            print(f"[INFO] Total candles retornados: {len(df_out)}", flush=True)
+        except Exception:
+            pass
     return df_out
 SYMBOL_BINANCE = "SOLUSDT"
 # Constrói df global na carga, se estiver vazio
@@ -309,10 +340,17 @@ dex = ccxt.hyperliquid({
 # COMMAND ----------
 
 if dex:
-    try:
-        dex.fetch_balance()
-    except Exception as e:
-        print(f"[WARN] Falha ao buscar saldo do DEX: {type(e).__name__}: {e}", flush=True)
+    print(f"[DEX] Inicializado | LIVE_TRADING={os.getenv('LIVE_TRADING','0')} | DEX_TIMEOUT_MS={dex_timeout}", flush=True)
+    live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+    if live:
+        print("[DEX] fetch_balance() iniciando…", flush=True)
+        try:
+            dex.fetch_balance()
+            print("[DEX] fetch_balance() OK", flush=True)
+        except Exception as e:
+            print(f"[WARN] Falha ao buscar saldo do DEX: {type(e).__name__}: {e}", flush=True)
+    else:
+        print("[DEX] LIVE_TRADING=0 ⇒ ignorando fetch_balance()", flush=True)
 
 # COMMAND ----------
 # =========================
@@ -945,6 +983,11 @@ class EMAGradientStrategy:
 
     # ---------- exchange ----------
     def _preco_atual(self) -> float:
+        live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+        if not live:
+            if self.debug:
+                print("[DEX] LIVE_TRADING=0 ⇒ _preco_atual indisponível", flush=True)
+            raise RuntimeError("LIVE_TRADING desativado")
         try:
             mkts = self.dex.load_markets()
             info = mkts[self.symbol]["info"]
@@ -953,8 +996,6 @@ class EMAGradientStrategy:
         except Exception:
             pass
         try:
-            if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
-                raise RuntimeError("LIVE_TRADING desativado")
             t = self.dex.fetch_ticker(self.symbol)
             if t and t.get("last"):
                 return float(t["last"])
@@ -1385,6 +1426,13 @@ class EMAGradientStrategy:
 
         # entradas (sem posição), respeitando no-trade zone e intenção pós-cooldown
         if not pos:
+            # evita qualquer tentativa de ordem se LIVE_TRADING=0
+            live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+            if not live:
+                print("🧪 LIVE_TRADING=0: avaliando sinais, mas sem abrir posições.")
+                self._safe_log("paper_mode", df_for_log=df, tipo="info")
+                self._last_pos_side = None
+                return
             # no-trade zone
             if abs(float(last.ema_short - last.ema_long)) < (self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)) or \
                (last.atr_pct < self.cfg.ATR_PCT_MIN) or (last.atr_pct > self.cfg.ATR_PCT_MAX):
