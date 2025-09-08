@@ -200,7 +200,6 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
     if debug:
         print(f"[INFO] Build DF Bybit {symbol} tf={tf} start={start} end={end}", flush=True)
 
-    # Bybit usa símbolo no formato "SOL/USDT"
     symbol_bybit = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
     data = []
     try:
@@ -224,6 +223,22 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
             } for o in cc]
             if debug:
                 print(f"[INFO] Bybit: {len(data)} candles carregados", flush=True)
+        # Adiciona o preço atual do ticker como "candle extra"
+        try:
+            ticker = ex.fetch_ticker(symbol_bybit)
+            now = datetime.now()
+            data.append({
+                "data": int(now.timestamp() * 1000),
+                "valor_fechamento": float(ticker["last"]),
+                "criptomoeda": symbol,
+                "volume_compra": 0.0,
+                "volume_venda": 0.0,
+            })
+            if debug:
+                print(f"[INFO] Adicionado preço atual do ticker: {ticker['last']}", flush=True)
+        except Exception as e:
+            if debug:
+                print(f"[WARN] Não foi possível adicionar preço atual: {e}", flush=True)
     except Exception as e:
         if debug:
             print(f"[WARN] Bybit falhou: {e}", flush=True)
