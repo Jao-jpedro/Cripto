@@ -1561,3 +1561,102 @@ if __name__ == "__main__":
     t = threading.Thread(target=loop_principal, daemon=True)
     t.start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
+import os
+import time
+import json
+import base64
+import requests
+import jwt  # PyJWT
+
+def generate_jwt(app_id, private_key):
+    now = int(time.time())
+    payload = {
+        "iat": now - 60,
+        "exp": now + (10 * 60),
+        "iss": app_id
+    }
+    jwt_token = jwt.encode(payload, private_key, algorithm="RS256")
+    return jwt_token
+
+def get_installation_token(app_id, installation_id, private_key):
+    jwt_token = generate_jwt(app_id, private_key)
+    url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Accept": "application/vnd.github+json"
+    }
+    resp = requests.post(url, headers=headers)
+    if resp.status_code == 201:
+        token = resp.json()["token"]
+        return token
+    else:
+        print(f"❌ Falha ao obter Installation Token: {resp.status_code} {resp.text}")
+        return None
+
+def get_file_sha(repo, path, token):
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json"
+    }
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 200:
+        return resp.json()["sha"]
+    return None
+
+def commit_file(repo, branch, path_local, path_repo, token, commit_message):
+    # Lê e codifica o arquivo local
+    with open(path_local, "rb") as f:
+        content = base64.b64encode(f.read()).decode("utf-8")
+
+    sha = get_file_sha(repo, path_repo, token)
+    url = f"https://api.github.com/repos/{repo}/contents/{path_repo}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json"
+    }
+    data = {
+        "message": commit_message,
+        "content": content,
+        "branch": branch
+    }
+    if sha:
+        data["sha"] = sha
+
+    resp = requests.put(url, headers=headers, data=json.dumps(data))
+    if resp.status_code in (200, 201):
+        commit_url = resp.json()["commit"]["html_url"]
+        print(f"✅ Commit realizado: {commit_url}")
+        return commit_url
+    else:
+        print(f"❌ Falha ao commitar arquivo: {resp.status_code} {resp.text}")
+        return None
+
+def main():
+    repo = "Jao-jpedro/Cripto"
+    branch = "main"
+    path_local = "/tmp/trade_log.csv"
+    path_repo = "trade_log.csv"
+    commit_message = "Atualização automática do trade_log.csv"
+
+    app_id = os.getenv("GITHUB_APP_ID")
+    installation_id = os.getenv("GITHUB_INSTALLATION_ID")
+    private_key = os.getenv("GITHUB_APP_PRIVATE_KEY")
+
+    if not all([app_id, installation_id, private_key]):
+        print("❌ Variáveis de ambiente do GitHub App não configuradas.")
+        return
+
+    token = get_installation_token(app_id, installation_id, private_key)
+    if not token:
+        return
+
+    if not os.path.exists(path_local):
+        print(f"❌ Arquivo local não encontrado: {path_local}")
+        return
+
+    commit_file(repo, branch, path_local, path_repo, token, commit_message)
+
+if __name__ == "__main__":
+    main()
