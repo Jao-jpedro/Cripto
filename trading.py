@@ -542,14 +542,14 @@ import pandas as pd
 class GradientConfig:
     EMA_SHORT_SPAN: int     = 7
     EMA_LONG_SPAN: int      = 40
-    N_BARRAS_GRADIENTE: int = 5
+    N_BARRAS_GRADIENTE: int = 3
 
     SHORT_ENTER_MIN: float  = -0.25
-    SHORT_ENTER_MAX: float  = -0.05
+    SHORT_ENTER_MAX: float  = -0.1
     SHORT_EXIT_GT: float    = +0.001    # encerrar SHORT se slope curto > +0.001
 
     LONG_ENTER_MIN: float   = +0.05
-    LONG_ENTER_MAX: float   = +0.25
+    LONG_ENTER_MAX: float   = +0.1
     LONG_EXIT_LT: float     = -0.001    # encerrar LONG se slope curto < -0.001
 
     LEVERAGE: int           = 20
@@ -1527,3 +1527,14 @@ if __name__ == "__main__":
     t = threading.Thread(target=loop_principal, daemon=True)
     t.start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
+from flask import Flask, send_file
+
+app = Flask(__name__)
+
+@app.route("/download-trade-log")
+def download_trade_log():
+    path = "/tmp/trade_log.csv"
+    if os.path.exists(path):
+        return send_file(path, as_attachment=True)
+    return "Arquivo não encontrado.", 404
