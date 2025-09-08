@@ -293,9 +293,13 @@ import ccxt  # type: ignore
 
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
+dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
 dex = ccxt.hyperliquid({
     "walletAddress": "0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
     "privateKey": "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
+    "enableRateLimit": True,
+    "timeout": dex_timeout,
+    "options": {"timeout": dex_timeout},
 })
 
 # COMMAND ----------
@@ -944,19 +948,34 @@ class EMAGradientStrategy:
                 return float(info["midPx"])
         except Exception:
             pass
-        t = self.dex.fetch_ticker(self.symbol)
-        if t and t.get("last"):
-            return float(t["last"])
+        try:
+            if os.getenv("LIVE_TRADING", "1") not in ("1", "true", "True"):
+                raise RuntimeError("LIVE_TRADING desativado")
+            t = self.dex.fetch_ticker(self.symbol)
+            if t and t.get("last"):
+                return float(t["last"])
+        except Exception as e:
+            if self.debug:
+                print(f"⚠️ fetch_ticker falhou: {type(e).__name__}: {e}")
         raise RuntimeError("Não consegui obter preço atual (midPx/last).")
 
     def _posicao_aberta(self) -> Optional[Dict[str, Any]]:
-        pos = self.dex.fetch_positions([self.symbol])
-        if pos and float(pos[0].get("contracts", 0)) > 0:
-            return pos[0]
+        # Permite desligar chamadas à exchange em ambientes restritos
+        if os.getenv("LIVE_TRADING", "1") not in ("1", "true", "True"):
+            return None
+        try:
+            pos = self.dex.fetch_positions([self.symbol])
+            if pos and float(pos[0].get("contracts", 0)) > 0:
+                return pos[0]
+        except Exception as e:
+            if self.debug:
+                print(f"⚠️ fetch_positions falhou: {type(e).__name__}: {e}")
         return None
 
     def _tem_ordem_de_entrada_pendente(self) -> bool:
         try:
+            if os.getenv("LIVE_TRADING", "1") not in ("1", "true", "True"):
+                return False
             for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
@@ -1099,6 +1118,8 @@ class EMAGradientStrategy:
     # ---------- localizar/cancelar stop existente ----------
     def _find_existing_stop(self):
         try:
+            if os.getenv("LIVE_TRADING", "1") not in ("1", "true", "True"):
+                return None, None, None
             for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
