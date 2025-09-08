@@ -322,7 +322,7 @@ SYMBOL_BINANCE = "SOLUSDT"
 # Constrói df global na carga, se estiver vazio
 if isinstance(df, pd.DataFrame) and df.empty:
     try:
-        df = build_df(SYMBOL_BINANCE, INTERVAL, START_DATE, END_DATE)
+        df = build_df(SYMBOL_BINANCE, INTERVAL, START_DATE, END_DATE, debug=True)
     except Exception as _e:
         print(f"[WARN] build_df falhou: {_e}", flush=True)
         df = pd.DataFrame()
@@ -1547,11 +1547,16 @@ while True:
     try:
         END_DATE = datetime.now(UTC)
         START_DATE = END_DATE - timedelta(hours=48)
-        df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE)
+        df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE, debug=True)
+        if df.empty:
+            print("[INFO] Forçando fallback CCXT para candles mais recentes.")
+            # Tente forçar o fallback manualmente aqui, se necessário
         if isinstance(df, pd.DataFrame) and not df.empty and "data" in df.columns:
             ultimo_candle = df["data"].iloc[-1]
             if 'ultimo_candle_anterior' in locals() and ultimo_candle == ultimo_candle_anterior:
                 print("[WARN] Candle repetido, dados podem estar desatualizados.", flush=True)
+                time.sleep(60)
+                continue  # pula ciclo se candle não mudou
             ultimo_candle_anterior = ultimo_candle
         if isinstance(df, pd.DataFrame) and not df.empty:
             trade_logger = TradeLogger(df_columns=df.columns)
