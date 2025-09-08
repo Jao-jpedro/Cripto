@@ -542,7 +542,7 @@ import pandas as pd
 class GradientConfig:
     EMA_SHORT_SPAN: int     = 7
     EMA_LONG_SPAN: int      = 40
-    N_BARRAS_GRADIENTE: int = 3
+    N_BARRAS_GRADIENTE: int = 5
 
     SHORT_ENTER_MIN: float  = -0.25
     SHORT_ENTER_MAX: float  = -0.1
@@ -1310,13 +1310,131 @@ pass
 # Execução da estratégia com df pronto
 SYMBOL_HL = "SOL/USDC:USDC"  # ou outro símbolo válido
 
-if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
-    trade_logger = TradeLogger(df_columns=df.columns, csv_path="/tmp/trade_log.csv")
-    print(f"Salvando [trade_log.csv](http://_vscodecontentref_/7) em: {os.path.abspath(trade_logger.csv_path)}")
-    strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
-    strategy.step(df, usd_to_spend=10)
-else:
-    print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
+def executar_estrategia(df, dex, trade_logger):
+    strat = EMAGradientATRStrategy(logger=trade_logger)
+    df_ind = strat.calc_indicators(df)
+    for i in range(len(df_ind)):
+        row = df_ind.iloc[i]
+        # Cooldown
+        if strat.cooldown > 0:
+            strat.cooldown -= 1
+            strat.log(f"Cooldown ativo ({strat.cooldown} barras restantes). Nenhuma entrada permitida.")
+            continue
+
+        # No-Trade Zone
+        if abs(row['ema7'] - row['ema21']) < 0.05 * row['atr'] or not (strat.atr_pct_min <= row['atr_pct'] <= strat.atr_pct_max):
+            strat.log("No-Trade Zone: EMAs muito próximos ou ATR% fora da faixa saudável.")
+            continue
+
+        # Volume
+        if row['volume_compra'] <= row['vol_sma']:
+            strat.log("Volume abaixo da média. Sinal ignorado.")
+            continue
+
+        # Estados e transições
+        if strat.state == State.FLAT:
+            # LONG
+            if (row['ema7'] > row['ema21'] and
+                all(df_ind['grad_ema7'].iloc[max(0, i-strat.consistency_bars+1):i+1] > 0) and
+                row['valor_fechamento'] > row['ema7'] + strat.band_k * row['atr']):
+                strat.state = State.LONG
+                strat.log(f"Entrando em LONG na barra {i}. Motivo: Sinal consistente e rompimento.")
+                strat.cooldown = 0
+                # EXECUTA ORDEM NA HYPERLIQUID
+                try:
+                    price = row['valor_fechamento']
+                    amount = 10 / price  # Exemplo: $10 por trade
+                    ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
+                    strat.log(f"Ordem LONG executada: {ordem}")
+                    trade_logger.append_event(df.iloc[[i]], evento="entrada", tipo="long", exec_price=price, exec_amount=amount)
+                except Exception as e:
+                    strat.log(f"Erro ao abrir LONG: {e}")
+                continue
+            # SHORT
+            if (row['ema7'] < row['ema21'] and
+                all(df_ind['grad_ema7'].iloc[max(0, i-strat.consistency_bars+1):i+1] < 0) and
+                row['valor_fechamento'] < row['ema7'] - strat.band_k * row['atr']):
+                strat.state = State.SHORT
+                strat.log(f"Entrando em SHORT na barra {i}. Motivo: Sinal consistente e rompimento.")
+                strat.cooldown = 0
+                # EXECUTA ORDEM NA HYPERLIQUID
+                try:
+                    price = row['valor_fechamento']
+                    amount = 10 / price
+                    ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
+                    strat.log(f"Ordem SHORT executada: {ordem}")
+                    trade_logger.append_event(df.iloc[[i]], evento="entrada", tipo="short", exec_price=price, exec_amount=amount)
+                except Exception as e:
+                    strat.log(f"Erro ao abrir SHORT: {e}")
+                continue
+
+        elif strat.state == State.LONG:
+            # Saída por gradiente inverso ou cruzamento
+            if (all(df_ind['grad_ema7'].iloc[max(0, i-2):i+1] <= 0) or row['ema7'] < row['ema21']):
+                strat.state = State.FLAT
+                strat.cooldown = strat.cooldown_bars
+                strat.log(f"Saindo de LONG na barra {i}. Motivo: Gradiente inverso ou cruzamento EMA.")
+                # FECHA POSIÇÃO NA HYPERLIQUID
+                try:
+                    price = row['valor_fechamento']
+                    amount = 10 / price
+                    ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
+                    strat.log(f"Ordem de saída LONG executada: {ordem}")
+                    trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="long", exec_price=price, exec_amount=amount)
+                except Exception as e:
+                    strat.log(f"Erro ao fechar LONG: {e}")
+                continue
+            # Stop Loss
+            if row['valor_fechamento'] < row['ema7'] - 1.5 * row['atr']:
+                strat.state = State.FLAT
+                strat.cooldown = strat.cooldown_bars
+                strat.log(f"Stop Loss LONG na barra {i}. Motivo: Preço abaixo do limite ATR.")
+                try:
+                    price = row['valor_fechamento']
+                    amount = 10 / price
+                    ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
+                    strat.log(f"Ordem de stop LONG executada: {ordem}")
+                    trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="long", exec_price=price, exec_amount=amount)
+                except Exception as e:
+                    strat.log(f"Erro ao fechar LONG: {e}")
+                continue
+
+        elif strat.state == State.SHORT:
+            # Saída por gradiente inverso ou cruzamento
+            if (all(df_ind['grad_ema7'].iloc[max(0, i-2):i+1] >= 0) or row['ema7'] > row['ema21']):
+                strat.state = State.FLAT
+                strat.cooldown = strat.cooldown_bars
+                strat.log(f"Saindo de SHORT na barra {i}. Motivo: Gradiente inverso ou cruzamento EMA.")
+                try:
+                    price = row['valor_fechamento']
+                    amount = 10 / price
+                    ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
+                    strat.log(f"Ordem de saída SHORT executada: {ordem}")
+                    trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="short", exec_price=price, exec_amount=amount)
+                except Exception as e:
+                    strat.log(f"Erro ao fechar SHORT: {e}")
+                continue
+            # Stop Loss
+            if row['valor_fechamento'] > row['ema7'] + 1.5 * row['atr']:
+                strat.state = State.FLAT
+                strat.cooldown = strat.cooldown_bars
+                strat.log(f"Stop Loss SHORT na barra {i}. Motivo: Preço acima do limite ATR.")
+                try:
+                    price = row['valor_fechamento']
+                    amount = 10 / price
+                    ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
+                    strat.log(f"Ordem de stop SHORT executada: {ordem}")
+                    trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="short", exec_price=price, exec_amount=amount)
+                except Exception as e:
+                    strat.log(f"Erro ao fechar SHORT: {e}")
+                continue
+
+if __name__ == "__main__":
+    if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
+        trade_logger = TradeLogger(df_columns=df.columns, csv_path="/tmp/trade_log.csv")
+        executar_estrategia(df, dex, trade_logger)
+    else:
+        print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
 
 
 # 4) (Opcional) Exibir histórico salvo com guard de vazio
@@ -1502,6 +1620,7 @@ def loop_principal():
     while True:
         try:
             END_DATE = datetime.now(UTC)
+
             START_DATE = END_DATE - timedelta(hours=48)
             df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE, debug=True)
             if df.empty:
@@ -1660,3 +1779,177 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+import pandas as pd
+import numpy as np
+
+class State:
+    FLAT = "FLAT"
+    LONG = "LONG"
+    SHORT = "SHORT"
+
+class EMAGradientATRStrategy:
+    def __init__(self, ema_short=7, ema_long=21, grad_window=5, atr_window=14, vol_window=20,
+                 atr_pct_min=0.0015, atr_pct_max=0.025, band_k=0.25, cooldown_bars=4, consistency_bars=3, logger=None):
+        self.ema_short = ema_short
+        self.ema_long = ema_long
+        self.grad_window = grad_window
+        self.atr_window = atr_window
+        self.vol_window = vol_window
+        self.atr_pct_min = atr_pct_min
+        self.atr_pct_max = atr_pct_max
+        self.band_k = band_k
+        self.cooldown_bars = cooldown_bars
+        self.consistency_bars = consistency_bars
+        self.state = State.FLAT
+        self.cooldown = 0
+        self.logs = []
+        self.logger = logger
+
+    def calc_indicators(self, df):
+        df = df.copy()
+        df['ema7'] = df['valor_fechamento'].ewm(span=self.ema_short, adjust=False).mean()
+        df['ema21'] = df['valor_fechamento'].ewm(span=self.ema_long, adjust=False).mean()
+        df['atr'] = df['valor_fechamento'].rolling(self.atr_window).apply(
+            lambda x: np.mean(np.abs(np.diff(x))), raw=True)
+        df['atr_pct'] = df['atr'] / df['valor_fechamento']
+        df['vol_sma'] = df['volume_compra'].rolling(self.vol_window).mean()
+        df['grad_ema7'] = df['ema7'].rolling(self.grad_window).apply(
+            lambda x: np.polyfit(np.arange(len(x)), x, 1)[0] / x[-1] if x[-1] != 0 else 0, raw=True)
+        return df
+
+    def log(self, msg):
+        self.logs.append(msg)
+        print(msg)
+        if self.logger:
+            self.logger.append_event(pd.DataFrame(), evento="audit", tipo="info", exec_price=None, exec_amount=None, order_id=None)
+
+    def step(self, df):
+        df = self.calc_indicators(df)
+        for i in range(len(df)):
+            row = df.iloc[i]
+            # Cooldown
+            if self.cooldown > 0:
+                self.cooldown -= 1
+                self.log(f"Cooldown ativo ({self.cooldown} barras restantes). Nenhuma entrada permitida.")
+                continue
+
+            # No-Trade Zone
+            if abs(row['ema7'] - row['ema21']) < 0.05 * row['atr'] or not (self.atr_pct_min <= row['atr_pct'] <= self.atr_pct_max):
+                self.log("No-Trade Zone: EMAs muito próximos ou ATR% fora da faixa saudável.")
+                continue
+
+            # Volume
+            if row['volume_compra'] <= row['vol_sma']:
+                self.log("Volume abaixo da média. Sinal ignorado.")
+                continue
+
+            # Estados e transições
+            if self.state == State.FLAT:
+                # LONG
+                if (row['ema7'] > row['ema21'] and
+                    all(df['grad_ema7'].iloc[max(0, i-self.consistency_bars+1):i+1] > 0) and
+                    row['valor_fechamento'] > row['ema7'] + self.band_k * row['atr']):
+                    self.state = State.LONG
+                    self.log(f"Entrando em LONG na barra {i}. Motivo: Sinal consistente e rompimento.")
+                    self.cooldown = 0
+                    # EXECUTA ORDEM NA HYPERLIQUID
+                    try:
+                        price = row['valor_fechamento']
+                        amount = 10 / price  # Exemplo: $10 por trade
+                        ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
+                        self.log(f"Ordem LONG executada: {ordem}")
+                        trade_logger.append_event(df.iloc[[i]], evento="entrada", tipo="long", exec_price=price, exec_amount=amount)
+                    except Exception as e:
+                        self.log(f"Erro ao abrir LONG: {e}")
+                    continue
+                # SHORT
+                if (row['ema7'] < row['ema21'] and
+                    all(df['grad_ema7'].iloc[max(0, i-self.consistency_bars+1):i+1] < 0) and
+                    row['valor_fechamento'] < row['ema7'] - self.band_k * row['atr']):
+                    self.state = State.SHORT
+                    self.log(f"Entrando em SHORT na barra {i}. Motivo: Sinal consistente e rompimento.")
+                    self.cooldown = 0
+                    # EXECUTA ORDEM NA HYPERLIQUID
+                    try:
+                        price = row['valor_fechamento']
+                        amount = 10 / price
+                        ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
+                        self.log(f"Ordem SHORT executada: {ordem}")
+                        trade_logger.append_event(df.iloc[[i]], evento="entrada", tipo="short", exec_price=price, exec_amount=amount)
+                    except Exception as e:
+                        self.log(f"Erro ao abrir SHORT: {e}")
+                    continue
+
+            elif self.state == State.LONG:
+                # Saída por gradiente inverso ou cruzamento
+                if (all(df['grad_ema7'].iloc[max(0, i-2):i+1] <= 0) or row['ema7'] < row['ema21']):
+                    self.state = State.FLAT
+                    self.cooldown = self.cooldown_bars
+                    self.log(f"Saindo de LONG na barra {i}. Motivo: Gradiente inverso ou cruzamento EMA.")
+                    # FECHA POSIÇÃO NA HYPERLIQUID
+                    try:
+                        price = row['valor_fechamento']
+                        amount = 10 / price
+                        ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
+                        self.log(f"Ordem de saída LONG executada: {ordem}")
+                        trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="long", exec_price=price, exec_amount=amount)
+                    except Exception as e:
+                        self.log(f"Erro ao fechar LONG: {e}")
+                    continue
+                # Stop Loss
+                if row['valor_fechamento'] < row['ema7'] - 1.5 * row['atr']:
+                    self.state = State.FLAT
+                    self.cooldown = self.cooldown_bars
+                    self.log(f"Stop Loss LONG na barra {i}. Motivo: Preço abaixo do limite ATR.")
+                    try:
+                        price = row['valor_fechamento']
+                        amount = 10 / price
+                        ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
+                        self.log(f"Ordem de stop LONG executada: {ordem}")
+                        trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="long", exec_price=price, exec_amount=amount)
+                    except Exception as e:
+                        self.log(f"Erro ao fechar LONG: {e}")
+                    continue
+
+            elif self.state == State.SHORT:
+                # Saída por gradiente inverso ou cruzamento
+                if (all(df['grad_ema7'].iloc[max(0, i-2):i+1] >= 0) or row['ema7'] > row['ema21']):
+                    self.state = State.FLAT
+                    self.cooldown = self.cooldown_bars
+                    self.log(f"Saindo de SHORT na barra {i}. Motivo: Gradiente inverso ou cruzamento EMA.")
+                    try:
+                        price = row['valor_fechamento']
+                        amount = 10 / price
+                        ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
+                        self.log(f"Ordem de saída SHORT executada: {ordem}")
+                        trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="short", exec_price=price, exec_amount=amount)
+                    except Exception as e:
+                        self.log(f"Erro ao fechar SHORT: {e}")
+                    continue
+                # Stop Loss
+                if row['valor_fechamento'] > row['ema7'] + 1.5 * row['atr']:
+                    self.state = State.FLAT
+                    self.cooldown = self.cooldown_bars
+                    self.log(f"Stop Loss SHORT na barra {i}. Motivo: Preço acima do limite ATR.")
+                    try:
+                        price = row['valor_fechamento']
+                        amount = 10 / price
+                        ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
+                        self.log(f"Ordem de stop SHORT executada: {ordem}")
+                        trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="short", exec_price=price, exec_amount=amount)
+                    except Exception as e:
+                        self.log(f"Erro ao fechar SHORT: {e}")
+                    continue
+
+# =========================
+# 🔧 INSTÂNCIA E EXECUÇÃO
+# =========================
+
+if __name__ == "__main__":
+    # Carregue seu DataFrame df normalmente
+    # df = build_df(...)
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        # Se quiser logar auditoria no TradeLogger, passe logger=trade_logger
+        strat = EMAGradientATRStrategy(logger=None)
+        strat.backtest(df)
