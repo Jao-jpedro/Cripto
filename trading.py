@@ -42,14 +42,6 @@ END_DATE = datetime.now(UTC)
 INTERVAL = "15m"
 interval = INTERVAL  # compat com trechos legados
 
-# Símbolos (Binance para coleta; HL para execução)
-SYMBOL_BINANCE = "SOLUSDT"
-SYMBOL_HL = "SOL/USDC:USDC"
-
-# Aliases legados (usados em chamadas antigas)
-start_date = START_DATE
-end_date = END_DATE
-
 # df global (placeholder); será preenchido mais adiante
 df: pd.DataFrame = pd.DataFrame()
 
@@ -1276,11 +1268,14 @@ class EMAGradientStrategy:
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
 
+pass
+
 # Execução da estratégia com df pronto
+SYMBOL_HL = "ETH/USDC"  # Defina o símbolo desejado, por exemplo "ETH/USDC" ou outro disponível
+
 if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
     trade_logger = TradeLogger(df_columns=df.columns)
-    _symbol_hl = globals().get("SYMBOL_HL", "SOL/USDC:USDC")
-    strategy = EMAGradientStrategy(dex, _symbol_hl, GradientConfig(), logger=trade_logger)
+    strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
     strategy.step(df, usd_to_spend=10)
 else:
     print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
@@ -1302,8 +1297,7 @@ else:
 
 RUN_DEMO_BLOCKS = False
 if RUN_DEMO_BLOCKS and dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
-    _symbol_hl = globals().get("SYMBOL_HL", "SOL/USDC:USDC")
-    bot = EMAGradientStrategy(dex, _symbol_hl, logger=None, debug=True)
+    bot = EMAGradientStrategy(dex, SYMBOL_HL, logger=None, debug=True)
 
 
 # COMMAND ----------
