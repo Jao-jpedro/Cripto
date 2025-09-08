@@ -131,6 +131,8 @@ def get_binance_data(symbol, interval, start_date, end_date):
     base_idx = 0
 
     print(f"[INFO] Kl-req {symbol} tf={interval} start={datetime.fromtimestamp(start_timestamp/1000, timezone.utc)} end={datetime.fromtimestamp(end_timestamp/1000, timezone.utc)}", flush=True)
+    req_count = 0
+    empty_seq = 0
     while current_start < end_timestamp:
         tried = 0
         success = False
@@ -151,15 +153,28 @@ def get_binance_data(symbol, interval, start_date, end_date):
                 if resp.status_code == 200:
                     data = resp.json()
                     if not data:
-                        success = True
+                        empty_seq += 1
+                        print(f"[DEBUG] empty batch base={base} cs={current_start} empty_seq={empty_seq}", flush=True)
+                        if empty_seq >= 3:
+                            print("[INFO] Muitas respostas vazias seguidas (3); parando.", flush=True)
+                            return [{
+                                "data": item[0],
+                                "valor_fechamento": round(float(item[4]), 7),
+                                "criptomoeda": symbol,
+                                "volume_compra": float(item[5]),
+                                "volume_venda": float(item[7])
+                            } for item in all_data]
                         break
+                    empty_seq = 0
                     all_data.extend(data)
                     current_start = int(data[-1][0]) + 1
+                    req_count += 1
+                    print(f"[DEBUG] batch={len(data)} total={len(all_data)}", flush=True)
                     success = True
                     base_idx = (base_idx + tried) % len(bases)
                 elif resp.status_code == 202:
                     _time.sleep(0.8)
-                    continue  # não avança base
+                    continue
                 else:
                     tried += 1
             except Exception as e:
@@ -338,8 +353,6 @@ if dex:
         dex.fetch_balance()
     except Exception as e:
         print(f"[WARN] Falha ao buscar saldo do DEX: {type(e).__name__}: {e}", flush=True)
-
-# COMMAND ----------
 
 # COMMAND ----------
 # =========================
@@ -1339,7 +1352,7 @@ class EMAGradientStrategy:
 pass
 
 # Execução da estratégia com df pronto
-SYMBOL_HL = "ETH/USDC"  # Defina o símbolo desejado, por exemplo "ETH/USDC" ou outro disponível
+SYMBOL_HL = "SOL/USDC:USDC"  # ou outro símbolo válido
 
 if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
     trade_logger = TradeLogger(df_columns=df.columns)
@@ -1487,36 +1500,38 @@ periodos = [3, 5, 7, 10, 12, 15, 20]
 # Calcula UM conjunto de gradientes, todos sobre a mesma série base
 if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
     if SERIE_BASE not in df2.columns:
-        raise ValueError(f"Série base '{SERIE_BASE}' não encontrada nas colunas do DF.")
+        print(f"[WARN] Série base '{SERIE_BASE}' não encontrada nas colunas do DF. Pulando cálculo de gradientes.")
+    else:
+        for n in periodos:
+            df2[f"grad_n{n}"] = _rolling_slope(df2[SERIE_BASE].astype(float), n)
 
-    for n in periodos:
-        df2[f"grad_n{n}"] = _rolling_slope(df2[SERIE_BASE].astype(float), n)
+        # Painel amigável
+        print("====================")
+        print("🗂️ Colunas incluídas:")
+        cols_fixas = ["data"] if "data" in df2.columns else []
+        cols_fixas += ["valor_fechamento", "ema_short", "ema_long"]
 
-    # Painel amigável
-    print("====================")
-    print("🗂️ Colunas incluídas:")
-    cols_fixas = ["data"] if "data" in df2.columns else []
-    cols_fixas += ["valor_fechamento", "ema_short", "ema_long"]
+        cols_view = [c for c in cols_fixas if c in df2.columns] + [f"grad_n{n}" for n in periodos]
+        with pd.option_context("display.width", 220, "display.max_columns", None, "display.float_format", "{:.6f}".format):
+            pass  # Removido o print da tabela
 
-    cols_view = [c for c in cols_fixas if c in df2.columns] + [f"grad_n{n}" for n in periodos]
-    with pd.option_context("display.width", 220, "display.max_columns", None, "display.float_format", "{:.6f}".format):
-        pass  # Removido o print da tabela
+        # Resumo da última barra
+        last_idx = df2.index[-1]
+        print(f"📍 RESUMO (última barra) | base={SERIE_BASE}")
+        print("====================")
+        vals = []
+        if "valor_fechamento" in df2.columns: vals.append(f"close={df2.loc[last_idx,'valor_fechamento']:.6f}")
+        if "ema_short" in df2.columns:        vals.append(f"ema_short={df2.loc[last_idx,'ema_short']:.6f}")
+        if "ema_long" in df2.columns:         vals.append(f"ema_long={df2.loc[last_idx,'ema_long']:.6f}")
+        print("  " + "  ".join(vals))
 
-    # Resumo da última barra
-    last_idx = df2.index[-1]
-    print(f"📍 RESUMO (última barra) | base={SERIE_BASE}")
-    print("====================")
-    vals = []
-    if "valor_fechamento" in df2.columns: vals.append(f"close={df2.loc[last_idx,'valor_fechamento']:.6f}")
-    if "ema_short" in df2.columns:        vals.append(f"ema_short={df2.loc[last_idx,'ema_short']:.6f}")
-    if "ema_long" in df2.columns:         vals.append(f"ema_long={df2.loc[last_idx,'ema_long']:.6f}")
-    print("  " + "  ".join(vals))
+        for n in periodos:
+            g = df2.loc[last_idx, f"grad_n{n}"]
+            print(f"  N={n:>2} → grad={g:.6f}")
 
-    for n in periodos:
-        g = df2.loc[last_idx, f"grad_n{n}"]
-        print(f"  N={n:>2} → grad={g:.6f}")
-
-    # (opcional) exportar CSV:
-    df2.to_csv("gradiente_unico_por_periodo.csv", index=False)
+        # (opcional) exportar CSV:
+        df2.to_csv("gradiente_unico_por_periodo.csv", index=False)
+else:
+    print("[WARN] DataFrame df ou df2 está vazio ou não definido. Pulando cálculo de gradientes.")
 
 print("========== FIM DO BLOCO: HISTÓRICO DE TRADES ==========\n", flush=True)
