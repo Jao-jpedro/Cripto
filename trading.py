@@ -1621,6 +1621,8 @@ def loop_principal():
         try:
             END_DATE = datetime.now(UTC)
 
+
+
             START_DATE = END_DATE - timedelta(hours=48)
             df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE, debug=True)
             if df.empty:
