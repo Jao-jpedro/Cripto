@@ -783,7 +783,7 @@ class EMAGradientStrategy:
         # (C) SEMPRE grava no buffer local
         try:
             row_local = {
-                "ts": datetime.utcnow().isoformat(timespec="seconds"),
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "evento": evento,
                 "tipo": tipo,
                 "exec_price": exec_price,
@@ -826,7 +826,7 @@ class EMAGradientStrategy:
             print(f"⚠️ Logger externo falhou (sem snapshot): {type(e2).__name__}: {e2} → tentando stub...")
 
         try:
-            df_stub = pd.DataFrame({"ts": [datetime.utcnow()]})
+            df_stub = pd.DataFrame({"ts": [datetime.now(timezone.utc)]})
             self.logger.append_event(df_snapshot=df_stub, evento=evento, **to_send)
             print(f"✅ Logger externo OK: '{evento}' (stub)")
             return
@@ -948,13 +948,13 @@ class EMAGradientStrategy:
         return False
 
     def _cooldown_ativo(self) -> bool:
-        return self._cooldown_until and datetime.utcnow() < self._cooldown_until
+        return self._cooldown_until and datetime.now(timezone.utc) < self._cooldown_until
 
     def _marcar_cooldown(self):
-        self._cooldown_until = datetime.utcnow() + timedelta(minutes=self.cfg.COOLDOWN_MINUTOS)
+        self._cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=self.cfg.COOLDOWN_MINUTOS)
 
     def _anti_spam_ok(self, kind: str) -> bool:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if kind == "open":
             if self._last_open_at and (now - self._last_open_at).total_seconds() < self.cfg.ANTI_SPAM_SECS:
                 return False
@@ -1548,7 +1548,8 @@ while True:
             strategy.step(df, usd_to_spend=10)
         else:
             print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
-        time.sleep(60)  # espera 15 minutos antes de rodar novamente
+        time.sleep(60)  # espera 1 minuto antes de rodar novamente
     except Exception as e:
+        
         print(f"[ERRO] Loop principal falhou: {e}", flush=True)
         time.sleep(60)
