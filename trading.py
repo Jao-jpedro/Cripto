@@ -70,19 +70,8 @@ except NameError:  # pragma: no cover
 import time as _time
 
 def _binance_bases():
-    env_override = os.getenv("BINANCE_BASE_URL")
-    if env_override:
-        base = env_override.rstrip("/")
-        return [f"{base}/api/v3/"]
-    return [
-        "https://api.binance.com/api/v3/",
-        "https://api1.binance.com/api/v3/",
-        "https://api2.binance.com/api/v3/",
-        "https://api3.binance.com/api/v3/",
-        "https://api-gateway.binance.com/api/v3/",
-        "https://api-gcp.binance.com/api/v3/",
-        "https://data-api.binance.vision/api/v3/",
-    ]
+    # Força o endpoint público (dados históricos) para evitar 451/403
+    return ["https://data-api.binance.vision/api/v3/"]
 
 def _binance_session():
     s = requests.Session()
@@ -120,13 +109,11 @@ def get_all_symbols():
                 if symbols:
                     return symbols
             else:
-                print(f"[WARN] exchangeInfo falhou em {base} -> {response.status_code}", flush=True)
                 last_err = response.status_code
         except Exception as e:
-            print(f"[WARN] exchangeInfo erro em {base}: {type(e).__name__}: {e}", flush=True)
             last_err = e
         _time.sleep(0.2)
-    print(f"Erro ao buscar pares de criptomoedas: {last_err}")
+    print(f"[INFO] exchangeInfo falhou ({last_err})", flush=True)
     return []
 
 # Função para buscar os dados da criptomoeda
@@ -143,6 +130,7 @@ def get_binance_data(symbol, interval, start_date, end_date):
     bases = _binance_bases()
     base_idx = 0
 
+    print(f"[INFO] Kl-req {symbol} tf={interval} start={datetime.fromtimestamp(start_timestamp/1000, timezone.utc)} end={datetime.fromtimestamp(end_timestamp/1000, timezone.utc)}", flush=True)
     while current_start < end_timestamp:
         tried = 0
         success = False
@@ -170,20 +158,16 @@ def get_binance_data(symbol, interval, start_date, end_date):
                     success = True
                     base_idx = (base_idx + tried) % len(bases)
                 elif resp.status_code == 202:
-                    # Some Binance gateways return 202 Accepted; wait briefly and retry same base
-                    print(f"[WARN] klines {symbol} retornou 202 em {base} → aguardando e tentando novamente...", flush=True)
-                    _time.sleep(1.0)
+                    _time.sleep(0.8)
                     continue  # não avança base
                 else:
-                    print(f"[WARN] klines {symbol} falhou em {base} -> {resp.status_code}", flush=True)
                     tried += 1
             except Exception as e:
-                print(f"[WARN] klines {symbol} erro em {base}: {type(e).__name__}: {e}", flush=True)
                 tried += 1
             _time.sleep(0.25)
 
         if not success:
-            print(f"Erro ao buscar dados da API para {symbol}: {last_status}", flush=True)
+            print(f"[INFO] klines sem sucesso ({last_status}) para {symbol}", flush=True)
             break
 
     formatted_data = [{
@@ -193,6 +177,7 @@ def get_binance_data(symbol, interval, start_date, end_date):
         "volume_compra": float(item[5]),
         "volume_venda": float(item[7])
     } for item in all_data]
+    print(f"[INFO] Fetched {len(formatted_data)} candles for {symbol} (tf={interval})", flush=True)
     return formatted_data
 
 # Função para calcular o RSI para cada criptomoeda individualmente
@@ -242,7 +227,90 @@ def calcular_macd(df, short_window=7, long_window=40, signal_window=9):
 
     return df
 
-pass  # bloco legado removido
+# =========================
+# Montagem do DF principal (48h, INTERVAL) com fallbacks
+# =========================
+def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
+             start: datetime = None, end: datetime = None,
+             debug: bool = True) -> pd.DataFrame:
+    if start is None:
+        start = START_DATE
+    if end is None:
+        end = END_DATE
+    start_ms, end_ms = int(start.timestamp()*1000), int(end.timestamp()*1000)
+    if debug:
+        print(f"[INFO] Build DF {symbol} tf={tf} start={start} end={end}", flush=True)
+
+    # 1) Vision
+    data = get_binance_data(symbol, tf, start, end)
+
+    # 2) CCXT fallback
+    if not data:
+        try:
+            import ccxt  # type: ignore
+            for exid in ("binance", "binanceusdm"):
+                try:
+                    ex = getattr(ccxt, exid)({"enableRateLimit": True})
+                    cc = []
+                    since = start_ms
+                    while since < end_ms and len(cc) < 5000:
+                        batch = ex.fetch_ohlcv(symbol[:-4] + "/USDT", timeframe=tf, since=since, limit=1000)
+                        if not batch:
+                            break
+                        cc.extend(batch); since = batch[-1][0] + 1
+                    if cc:
+                        data = [{
+                            "data": o[0],
+                            "valor_fechamento": float(o[4]),
+                            "criptomoeda": symbol,
+                            "volume_compra": float(o[5] or 0.0),
+                            "volume_venda": float(o[5] or 0.0),
+                        } for o in cc]
+                        if debug:
+                            print(f"[INFO] CCXT fallback ok via {exid}: {len(data)} candles", flush=True)
+                        break
+                except Exception as e:
+                    if debug:
+                        print(f"[WARN] CCXT {exid} falhou: {e}", flush=True)
+        except Exception as e:
+            if debug:
+                print(f"[WARN] CCXT indisponível: {e}", flush=True)
+
+    # 3) Snapshot local
+    if not data and os.path.exists("df_log.csv") and os.path.getsize("df_log.csv") > 0:
+        try:
+            df_local = pd.read_csv("df_log.csv")
+            if "data" in df_local.columns:
+                df_local["data"] = pd.to_datetime(df_local["data"])
+            if debug:
+                print("[INFO] Fallback: carregado df_log.csv", flush=True)
+            return df_local
+        except Exception as e:
+            if debug:
+                print(f"[WARN] Falha ao ler df_log.csv: {e}", flush=True)
+
+    if not data:
+        if debug:
+            print(f"[ERR] Sem dados para {symbol} tf={tf}", flush=True)
+        return pd.DataFrame()
+
+    df_out = pd.DataFrame(data)
+    df_out["data"] = pd.to_datetime(df_out["data"], unit="ms")
+    try:
+        df_out = calcular_rsi_por_criptomoeda(df_out, window=14)
+        df_out = calcular_macd(df_out)
+    except Exception as e:
+        if debug:
+            print(f"[WARN] Indicadores falharam: {e}", flush=True)
+    return df_out
+
+# Constrói df global na carga, se estiver vazio
+if isinstance(df, pd.DataFrame) and df.empty:
+    try:
+        df = build_df(SYMBOL_BINANCE, INTERVAL, START_DATE, END_DATE)
+    except Exception as _e:
+        print(f"[WARN] build_df falhou: {_e}", flush=True)
+        df = pd.DataFrame()
 
 
 # COMMAND ----------
