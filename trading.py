@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
 import os
+import sys  # Adicione esta linha no topo do arquivo
 
 BASE_URL = "https://api.binance.com/api/v3/"
 
@@ -197,44 +198,37 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
         end = END_DATE
     start_ms, end_ms = int(start.timestamp()*1000), int(end.timestamp()*1000)
     if debug:
-        print(f"[INFO] Build DF {symbol} tf={tf} start={start} end={end}", flush=True)
+        print(f"[INFO] Build DF Bybit {symbol} tf={tf} start={start} end={end}", flush=True)
 
-    # 1) Vision
-    data = get_binance_data(symbol, tf, start, end)
-
-    # 2) CCXT fallback
-    if not data:
-        try:
-            import ccxt  # type: ignore
-            for exid in ("binance", "binanceusdm"):
-                try:
-                    ex = getattr(ccxt, exid)({"enableRateLimit": True})
-                    cc = []
-                    since = start_ms
-                    while since < end_ms and len(cc) < 5000:
-                        batch = ex.fetch_ohlcv(symbol[:-4] + "/USDT", timeframe=tf, since=since, limit=1000)
-                        if not batch:
-                            break
-                        cc.extend(batch); since = batch[-1][0] + 1
-                    if cc:
-                        data = [{
-                            "data": o[0],
-                            "valor_fechamento": float(o[4]),
-                            "criptomoeda": symbol,
-                            "volume_compra": float(o[5] or 0.0),
-                            "volume_venda": float(o[5] or 0.0),
-                        } for o in cc]
-                        if debug:
-                            print(f"[INFO] CCXT fallback ok via {exid}: {len(data)} candles", flush=True)
-                        break
-                except Exception as e:
-                    if debug:
-                        print(f"[WARN] CCXT {exid} falhou: {e}", flush=True)
-        except Exception as e:
+    # Bybit usa símbolo no formato "SOL/USDT"
+    symbol_bybit = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
+    data = []
+    try:
+        import ccxt  # type: ignore
+        ex = ccxt.bybit({"enableRateLimit": True})
+        cc = []
+        since = start_ms
+        while since < end_ms and len(cc) < 5000:
+            batch = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, since=since, limit=1000)
+            if not batch:
+                break
+            cc.extend(batch)
+            since = batch[-1][0] + 1
+        if cc:
+            data = [{
+                "data": o[0],
+                "valor_fechamento": float(o[4]),
+                "criptomoeda": symbol,
+                "volume_compra": float(o[5] or 0.0),
+                "volume_venda": float(o[5] or 0.0),
+            } for o in cc]
             if debug:
-                print(f"[WARN] CCXT indisponível: {e}", flush=True)
+                print(f"[INFO] Bybit: {len(data)} candles carregados", flush=True)
+    except Exception as e:
+        if debug:
+            print(f"[WARN] Bybit falhou: {e}", flush=True)
 
-    # 3) Snapshot local
+    # Fallback: snapshot local
     if not data and os.path.exists("df_log.csv") and os.path.getsize("df_log.csv") > 0:
         try:
             df_local = pd.read_csv("df_log.csv")
@@ -763,8 +757,7 @@ class EMAGradientStrategy:
             return
         except Exception as e1:
             print(f"⚠️ Logger externo falhou (com snapshot): {type(e1).__name__}: {e1} → tentando sem snapshot...")
-            # Adicione flush para garantir que o log apareça imediatamente
-            _sys.stdout.flush()
+            sys.stdout.flush()  # Troque _sys por sys
 
         try:
             self.logger.append_event(evento=evento, **to_send)
