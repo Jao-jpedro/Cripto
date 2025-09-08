@@ -1548,7 +1548,7 @@ while True:
             strategy.step(df, usd_to_spend=10)
         else:
             print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
-        time.sleep(900)  # espera 15 minutos antes de rodar novamente
+        time.sleep(60)  # espera 15 minutos antes de rodar novamente
     except Exception as e:
         print(f"[ERRO] Loop principal falhou: {e}", flush=True)
         time.sleep(60)
