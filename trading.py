@@ -1311,7 +1311,8 @@ pass
 SYMBOL_HL = "SOL/USDC:USDC"  # ou outro símbolo válido
 
 if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
-    trade_logger = TradeLogger(df_columns=df.columns)
+    trade_logger = TradeLogger(df_columns=df.columns, csv_path="/tmp/trade_log.csv")
+    print(f"Salvando [trade_log.csv](http://_vscodecontentref_/7) em: {os.path.abspath(trade_logger.csv_path)}")
     strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
     strategy.step(df, usd_to_spend=10)
 else:
