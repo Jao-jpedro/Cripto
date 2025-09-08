@@ -1494,43 +1494,36 @@ else:
 print("========== FIM DO BLOCO: HISTÓRICO DE TRADES ==========\n", flush=True)
 
 import time
+import threading
 
-while True:
-    try:
-        END_DATE = datetime.now(UTC)
-        START_DATE = END_DATE - timedelta(hours=48)
-        df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE, debug=True)
-        if df.empty:
-            print("[INFO] Forçando fallback CCXT para candles mais recentes.")
-            # Tente forçar o fallback manualmente aqui, se necessário
-        if isinstance(df, pd.DataFrame) and not df.empty and "data" in df.columns:
-            ultimo_candle = df["data"].iloc[-1]
-            if 'ultimo_candle_anterior' in locals() and ultimo_candle == ultimo_candle_anterior:
-                print("[WARN] Candle repetido, dados podem estar desatualizados.", flush=True)
-                time.sleep(60)
-                continue  # pula ciclo se candle não mudou
-            ultimo_candle_anterior = ultimo_candle
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            trade_logger = TradeLogger(df_columns=df.columns)
-            strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
-            strategy.step(df, usd_to_spend=10)
-        else:
-            print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
-        time.sleep(60)  # espera 1 minuto antes de rodar novamente
-    except Exception as e:
-        print(f"[ERRO] Loop principal falhou: {e}", flush=True)
-        time.sleep(60)
-
-from flask import Flask, send_file
-
-app = Flask(__name__)
-
-@app.route("/download-trade-log")
-def download_trade_log():
-    path = "/tmp/trade_log.csv"
-    if os.path.exists(path):
-        return send_file(path, as_attachment=True)
-    return "Arquivo não encontrado.", 404
+def loop_principal():
+    import time
+    while True:
+        try:
+            END_DATE = datetime.now(UTC)
+            START_DATE = END_DATE - timedelta(hours=48)
+            df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE, debug=True)
+            if df.empty:
+                print("[INFO] Forçando fallback CCXT para candles mais recentes.")
+            if isinstance(df, pd.DataFrame) and not df.empty and "data" in df.columns:
+                ultimo_candle = df["data"].iloc[-1]
+                if 'ultimo_candle_anterior' in locals() and ultimo_candle == ultimo_candle_anterior:
+                    print("[WARN] Candle repetido, dados podem estar desatualizados.", flush=True)
+                    time.sleep(60)
+                    continue
+                ultimo_candle_anterior = ultimo_candle
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                trade_logger = TradeLogger(df_columns=df.columns, csv_path="/tmp/trade_log.csv")
+                strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
+                strategy.step(df, usd_to_spend=10)
+            else:
+                print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
+            time.sleep(60)
+        except Exception as e:
+            print(f"[ERRO] Loop principal falhou: {e}", flush=True)
+            time.sleep(60)
 
 if __name__ == "__main__":
+    t = threading.Thread(target=loop_principal, daemon=True)
+    t.start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
