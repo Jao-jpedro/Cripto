@@ -329,9 +329,12 @@ import ccxt  # type: ignore
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
+# Lê credenciais da env (recomendado) com fallback seguro para dev local
+_wallet_env = os.getenv("WALLET_ADDRESS")
+_priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
 dex = ccxt.hyperliquid({
-    "walletAddress": "0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
-    "privateKey": "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
+    "walletAddress": _wallet_env or "0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
+    "privateKey": _priv_env or "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
     "enableRateLimit": True,
     "timeout": dex_timeout,
     "options": {"timeout": dex_timeout},
@@ -509,7 +512,7 @@ class TradeLogger:
         full = pd.read_csv(self.csv_path)
         try:
             self._save_xlsx_dbfs(full)
-            print("✅ Histórico atualizado")
+            # Suprime print barulhento "Histórico atualizado" a cada evento
         except Exception as e:
             print(f"⚠️ XLSX não pôde ser atualizado ({type(e).__name__}: {e}). CSV salvo em {os.path.abspath(self.csv_path)}")
 
@@ -880,7 +883,8 @@ class EMAGradientStrategy:
         # (E) tenta logger externo
         try:
             self.logger.append_event(df_snapshot=snap, evento=evento, **to_send)
-            print(f"✅ Logger externo OK: '{evento}' (com snapshot)")
+            if (evento or "").lower() != "decisao":
+                print(f"✅ Logger externo OK: '{evento}' (com snapshot)")
             return
         except Exception as e1:
             print(f"⚠️ Logger externo falhou (com snapshot): {type(e1).__name__}: {e1} → tentando sem snapshot...")
@@ -888,7 +892,8 @@ class EMAGradientStrategy:
 
         try:
             self.logger.append_event(evento=evento, **to_send)
-            print(f"✅ Logger externo OK: '{evento}' (sem snapshot)")
+            if (evento or "").lower() != "decisao":
+                print(f"✅ Logger externo OK: '{evento}' (sem snapshot)")
             return
         except Exception as e2:
             print(f"⚠️ Logger externo falhou (sem snapshot): {type(e2).__name__}: {e2} → tentando stub...")
@@ -1428,6 +1433,35 @@ class EMAGradientStrategy:
 
         # entradas (sem posição), respeitando no-trade zone e intenção pós-cooldown
         if not pos:
+            # Diagnóstico das variáveis de gatilho (apenas quando sem posição)
+            try:
+                g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
+                eps = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
+                diff = float(last.ema_short - last.ema_long)
+                print(
+                    "[TRG] close={:.6f} ema7={:.6f} ema21={:.6f} atr={:.6f} atr%={:.3f} vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f}".format(
+                        float(last.valor_fechamento), float(last.ema_short), float(last.ema_long), float(last.atr), float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last
+                    )
+                )
+                print(
+                    f"[TRG] no-trade check | |ema7-ema21|={abs(diff):.6f} vs eps={eps:.6f}; atr% in [{self.cfg.ATR_PCT_MIN},{self.cfg.ATR_PCT_MAX}]?={'OK' if (self.cfg.ATR_PCT_MIN<=last.atr_pct<=self.cfg.ATR_PCT_MAX) else 'NO'}"
+                )
+                # LONG conds
+                L1 = last.ema_short > last.ema_long
+                L2 = bool(grad_pos_ok)
+                L3 = self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX
+                L4 = last.valor_fechamento > (last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr)
+                L5 = last.volume > last.vol_ma
+                print(f"[TRG LONG] EMA7>EMA21={L1} | grad>0(consistência {self.cfg.GRAD_CONSISTENCY})={L2} | ATR% saudável={L3} | close>EMA7+{self.cfg.BREAKOUT_K_ATR}*ATR={L4} | vol>média={L5}")
+                # SHORT conds
+                S1 = last.ema_short < last.ema_long
+                S2 = bool(grad_neg_ok)
+                S3 = L3
+                S4 = last.valor_fechamento < (last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr)
+                S5 = L5
+                print(f"[TRG SHORT] EMA7<EMA21={S1} | grad<0(consistência {self.cfg.GRAD_CONSISTENCY})={S2} | ATR% saudável={S3} | close<EMA7-{self.cfg.BREAKOUT_K_ATR}*ATR={S4} | vol>média={S5}")
+            except Exception:
+                pass
             # evita qualquer tentativa de ordem se LIVE_TRADING=0
             live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
             if not live:
@@ -1436,9 +1470,18 @@ class EMAGradientStrategy:
                 self._last_pos_side = None
                 return
             # no-trade zone
-            if abs(float(last.ema_short - last.ema_long)) < (self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)) or \
-               (last.atr_pct < self.cfg.ATR_PCT_MIN) or (last.atr_pct > self.cfg.ATR_PCT_MAX):
-                print("🚫 No-Trade Zone: EMAs próximos ou ATR% fora da faixa.")
+            eps_nt = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
+            diff_nt = abs(float(last.ema_short - last.ema_long))
+            atr_ok = (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX)
+            if (diff_nt < eps_nt) or (not atr_ok):
+                reasons_nt = []
+                if diff_nt < eps_nt:
+                    reasons_nt.append(f"|ema7-ema21|({diff_nt:.6f})<eps({eps_nt:.6f})")
+                if last.atr_pct < self.cfg.ATR_PCT_MIN:
+                    reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN}")
+                if last.atr_pct > self.cfg.ATR_PCT_MAX:
+                    reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
+                print("🚫 No-Trade Zone: " + "; ".join(reasons_nt))
                 self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
                 self._last_pos_side = None
                 return
@@ -1493,18 +1536,53 @@ class EMAGradientStrategy:
                 (last.volume > last.vol_ma)
             )
             if can_long:
-                print("✅ Sinal LONG (entrada)")
+                print("✅ Sinal LONG (entrada): critérios atendidos")
                 self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
             if can_short:
-                print("✅ Sinal SHORT (entrada)")
+                print("✅ Sinal SHORT (entrada): critérios atendidos")
                 self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
-            print("⏸ Sem posição e sem sinal.")
+            # motivos exatos para negar entrada
+            try:
+                # LONG
+                reasons_long = []
+                thr_long = float(last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr)
+                if not (last.ema_short > last.ema_long):
+                    reasons_long.append("EMA7<=EMA21")
+                if not grad_pos_ok:
+                    g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
+                    reasons_long.append(f"gradiente não >0 por {self.cfg.GRAD_CONSISTENCY} velas (grad%={g_last:.4f})")
+                if not (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX):
+                    reasons_long.append(f"ATR% fora [{self.cfg.ATR_PCT_MIN},{self.cfg.ATR_PCT_MAX}] (ATR%={last.atr_pct:.3f})")
+                if not (last.valor_fechamento > thr_long):
+                    reasons_long.append(f"close<=EMA7+{self.cfg.BREAKOUT_K_ATR}*ATR (close={float(last.valor_fechamento):.6f}, thr={thr_long:.6f})")
+                if not (last.volume > last.vol_ma):
+                    reasons_long.append(f"volume<=média (vol={float(last.volume):.2f}, ma={float(last.vol_ma):.2f})")
+                print("[REJECT LONG] " + ("; ".join(reasons_long) if reasons_long else "sem motivos"))
+
+                # SHORT
+                reasons_short = []
+                thr_short = float(last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr)
+                if not (last.ema_short < last.ema_long):
+                    reasons_short.append("EMA7>=EMA21")
+                if not grad_neg_ok:
+                    g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
+                    reasons_short.append(f"gradiente não <0 por {self.cfg.GRAD_CONSISTENCY} velas (grad%={g_last:.4f})")
+                if not (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX):
+                    reasons_short.append(f"ATR% fora [{self.cfg.ATR_PCT_MIN},{self.cfg.ATR_PCT_MAX}] (ATR%={last.atr_pct:.3f})")
+                if not (last.valor_fechamento < thr_short):
+                    reasons_short.append(f"close>=EMA7-{self.cfg.BREAKOUT_K_ATR}*ATR (close={float(last.valor_fechamento):.6f}, thr={thr_short:.6f})")
+                if not (last.volume > last.vol_ma):
+                    reasons_short.append(f"volume<=média (vol={float(last.volume):.2f}, ma={float(last.vol_ma):.2f})")
+                print("[REJECT SHORT] " + ("; ".join(reasons_short) if reasons_short else "sem motivos"))
+            except Exception:
+                pass
+            print("⏸ Sem posição: critérios de entrada não atendidos.")
             self._safe_log("decisao", df_for_log=df, tipo="info")
             self._last_pos_side = None
             return
@@ -1516,6 +1594,8 @@ class EMAGradientStrategy:
         inv_long = grad_recent.notna().all() and (grad_recent <= 0).sum() >= self.cfg.INV_GRAD_BARS
         inv_short = grad_recent.notna().all() and (grad_recent >= 0).sum() >= self.cfg.INV_GRAD_BARS
         if lado == "sell":
+            if self.debug:
+                print(f"[EXIT SHORT] ema7>ema21={last.ema_short>last.ema_long} | grad>=0 por {self.cfg.INV_GRAD_BARS} barras={inv_short}")
             if (last.ema_short > last.ema_long) or inv_short:
                 if self.debug:
                     print("🔎 Saída SHORT: cruzamento EMA ou gradiente ≥ 0 por barras sustentadas.")
@@ -1525,6 +1605,8 @@ class EMAGradientStrategy:
                 self._marcar_cooldown_barras(df)
                 return
         elif lado == "buy":
+            if self.debug:
+                print(f"[EXIT LONG] ema7<ema21={last.ema_short<last.ema_long} | grad<=0 por {self.cfg.INV_GRAD_BARS} barras={inv_long}")
             if (last.ema_short < last.ema_long) or inv_long:
                 if self.debug:
                     print("🔎 Saída LONG: cruzamento EMA ou gradiente ≤ 0 por barras sustentadas.")
