@@ -361,7 +361,7 @@ if dex:
 import os
 import pandas as pd
 from datetime import datetime, timezone
-datetime.now(timezone.utc)
+now = datetime.now(timezone.utc)
 try:
     from zoneinfo import ZoneInfo  # Py3.9+
     TZ_BRT = ZoneInfo("America/Sao_Paulo")
@@ -579,7 +579,7 @@ def _hl_get_account_value(wallet: str) -> float:
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
-datetime.now(timezone.utc)
+now = datetime.now(timezone.utc)
 import numpy as np
 import pandas as pd
 
