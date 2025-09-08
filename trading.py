@@ -2044,10 +2044,29 @@ if __name__ == "__main__":
                 print(f"[HB] {now_utc} | iter={iter_count} | df_len={len(df_in)} | last_ts={last_ts} | live={int(live)}", flush=True)
             except Exception:
                 pass
+            # Atualiza parâmetros e DF conforme ambientes
+            try:
+                usd_env = os.getenv("USD_PER_TRADE")
+                if usd_env:
+                    usd_to_spend = float(usd_env)
+            except Exception:
+                pass
+            try:
+                if os.getenv("REFRESH_DF_EACH_ITER", "1") in ("1", "true", "True"):
+                    # Recarrega últimos 190 candles (inclui candle atual)
+                    df_in = build_df(SYMBOL_BINANCE, INTERVAL, debug=True)
+            except Exception as e:
+                print(f"[WARN] Falha ao atualizar DF: {type(e).__name__}: {e}")
             try:
                 strat_local.step(df_in, usd_to_spend=usd_to_spend)
             except Exception as e:
                 print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
+            try:
+                ss_env = os.getenv("SLEEP_SECONDS")
+                if ss_env:
+                    sleep_seconds = int(ss_env)
+            except Exception:
+                pass
             _t.sleep(max(1, int(sleep_seconds)))
 
     # Instancia o logger de trades
