@@ -519,7 +519,10 @@ class TradeLogger:
 # 📣 NOTIFICAÇÕES DISCORD
 # =========================
 import requests as _req
-_DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
+_DISCORD_WEBHOOK = os.getenv(
+    "DISCORD_WEBHOOK",
+    "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM"
+)
 _HTTP_TIMEOUT = 10
 _SESSION = _req.Session()
 try:
@@ -817,6 +820,8 @@ class EMAGradientStrategy:
             return
         except Exception as e1:
             print(f"⚠️ Logger externo falhou (com snapshot): {type(e1).__name__}: {e1} → tentando sem snapshot...")
+            # Adicione flush para garantir que o log apareça imediatamente
+            sys.stdout.flush()
 
         try:
             self.logger.append_event(evento=evento, **to_send)
@@ -1542,8 +1547,13 @@ while True:
     try:
         END_DATE = datetime.now(UTC)
         START_DATE = END_DATE - timedelta(hours=48)
-        df = build_df(SYMBOL_BINANCE, INTERVAL, START_DATE, END_DATE)
-        if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
+        df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE)
+        if isinstance(df, pd.DataFrame) and not df.empty and "data" in df.columns:
+            ultimo_candle = df["data"].iloc[-1]
+            if 'ultimo_candle_anterior' in locals() and ultimo_candle == ultimo_candle_anterior:
+                print("[WARN] Candle repetido, dados podem estar desatualizados.", flush=True)
+            ultimo_candle_anterior = ultimo_candle
+        if isinstance(df, pd.DataFrame) and not df.empty:
             trade_logger = TradeLogger(df_columns=df.columns)
             strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
             strategy.step(df, usd_to_spend=10)
