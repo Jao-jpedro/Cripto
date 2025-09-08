@@ -821,7 +821,7 @@ class EMAGradientStrategy:
         except Exception as e1:
             print(f"⚠️ Logger externo falhou (com snapshot): {type(e1).__name__}: {e1} → tentando sem snapshot...")
             # Adicione flush para garantir que o log apareça imediatamente
-            sys.stdout.flush()
+            _sys.stdout.flush()
 
         try:
             self.logger.append_event(evento=evento, **to_send)
