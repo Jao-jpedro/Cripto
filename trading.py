@@ -12,6 +12,8 @@ _warnings.filterwarnings(
 import requests
 import sys as _sys, traceback as _tb
 
+
+
 # Exceções não tratadas: imprime stack e força flush no Render/CLI
 def _excepthook(exc_type, exc, tb):  # pragma: no cover
     try:
@@ -26,8 +28,30 @@ _sys.excepthook = _excepthook
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
-datetime.now(timezone.utc)
 import os
+
+# Variáveis globais padronizadas
+try:
+    UTC = datetime.UTC  # Python 3.11+
+except Exception:
+    UTC = timezone.utc
+
+# Janela padrão e intervalo
+START_DATE = datetime.now(UTC) - timedelta(hours=48)
+END_DATE = datetime.now(UTC)
+INTERVAL = "15m"
+interval = INTERVAL  # compat com trechos legados
+
+# Símbolos (Binance para coleta; HL para execução)
+SYMBOL_BINANCE = "SOLUSDT"
+SYMBOL_HL = "SOL/USDC:USDC"
+
+# Aliases legados (usados em chamadas antigas)
+start_date = START_DATE
+end_date = END_DATE
+
+# df global (placeholder); será preenchido mais adiante
+df: pd.DataFrame = pd.DataFrame()
 
 # --- Compat: stubs para ambiente local (sem Databricks) ---
 try:  # display (Databricks) → no-op amigável
@@ -226,83 +250,12 @@ def calcular_macd(df, short_window=7, long_window=40, signal_window=9):
 
     return df
 
-# Configurações do símbolo, intervalo e datas
-start_date = (datetime.now() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-end_date = datetime.now()  # hoje com horário atual
-interval = "15m"
+pass  # bloco legado removido
 
-# Buscar todos os pares de criptomoedas disponíveis (ou usar apenas SOLUSDT)
-all_symbols = ["SOL/USDC:USDC"]
-
-if not all_symbols:
-    print("Nenhum símbolo contendo 'USDT' foi encontrado.")
-else:
-    all_data = []
-    for symbol in all_symbols:
-        print(f"Buscando dados para {symbol}...", flush=True)
-        symbol_data = get_binance_data(symbol, interval, start_date, end_date)
-        if symbol_data:
-            all_data.extend(symbol_data)
-
-    if all_data:
-        df = pd.DataFrame(all_data)
-        df["data"] = pd.to_datetime(df["data"], unit="ms")  # Converter timestamp para datetime
-        df = calcular_rsi_por_criptomoeda(df, window=14)
-        df["variacao_diaria"] = df.groupby("criptomoeda")["valor_fechamento"].pct_change() * 100
-        df["total_linhas"] = df.groupby("criptomoeda")["criptomoeda"].transform("count")
-        df["ano"] = df["data"].dt.year
-        df["mes"] = df["data"].dt.month
-        df = calcular_macd(df)
-
-        # Gradientes do EMA curto para múltiplas janelas padronizadas (3,5,7,10)
-        import numpy as _np
-        import pandas as _pd
-        def _slope_arr(arr):
-            if arr.size < 2 or _np.isnan(arr).all():
-                return _np.nan
-            # remove NaN internos para estabilidade
-            a = arr[~_np.isnan(arr)].astype(float)
-            if a.size < 2:
-                return _np.nan
-            x = _np.arange(a.size, dtype=float)
-            m, _b = _np.polyfit(x, a, 1)
-            return float(m)
-        def _rolling_slope(series: _pd.Series, n: int) -> _pd.Series:
-            return series.rolling(window=n, min_periods=2).apply(_slope_arr, raw=True)
-        for n in (3, 5, 7, 10):
-            col = f"grad_n{n}"
-            try:
-                df[col] = (
-                    df.groupby("criptomoeda", group_keys=False)["ema_short"]
-                      .apply(lambda s: _rolling_slope(_pd.to_numeric(s, errors="coerce"), n))
-                )
-            except Exception:
-                # fallback sem groupby
-                df[col] = _rolling_slope(_pd.to_numeric(df["ema_short"], errors="coerce"), n)
-
-        pd.set_option('display.float_format', lambda x: f'{x:.7f}')
-        pd.set_option('display.max_columns', None)
-    else:
-        print("Nenhum dado disponível para processar.", flush=True)
 
 # COMMAND ----------
 
-# Guarda contra falta de dados (ex.: erro 451/sem retorno da API)
-if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    max_date = df["data"].max()
-    df_filtered = df[df["data"] == max_date]
-
-    RSI_ATUAL = df_filtered["rsi"].values[0] if "rsi" in df_filtered.columns else None
-    ma_short = df_filtered["ema_short"].values[0] if "ema_short" in df_filtered.columns else None
-    ma_long = df_filtered["ema_long"].values[0] if "ema_long" in df_filtered.columns else None
-
-    # COMMAND ----------
-
-    if ma_long is not None: print(ma_long, flush=True)
-    if ma_short is not None: print(ma_short, flush=True)
-    if RSI_ATUAL is not None: print(RSI_ATUAL, flush=True)
-else:
-    print("[INFO] Sem DF válido para métricas intradiárias (df vazio/não definido).", flush=True)
+""" Bloco de métricas intradiárias (legado) removido. """
 
 # COMMAND ----------
 
@@ -1323,97 +1276,14 @@ class EMAGradientStrategy:
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
 
-if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    # 1) Logger com as colunas do DF final
+# Execução da estratégia com df pronto
+if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
     trade_logger = TradeLogger(df_columns=df.columns)
-
-    # crie a estratégia:
-    strategy = EMAGradientStrategy(dex, "SOLUSDT", GradientConfig(), logger=trade_logger)
-    
-    # Corrige o símbolo para o formato aceito pela Binance
-    all_symbols = ["SOLUSDT"]
-    
-    # ...existing code...
-    
-    if not all_symbols:
-        print("Nenhum símbolo contendo 'USDT' foi encontrado.")
-    else:
-        all_data = []
-        for symbol in all_symbols:
-            print(f"Buscando dados para {symbol}...", flush=True)
-            symbol_data = get_binance_data(symbol, interval, start_date, end_date)
-            if symbol_data:
-                all_data.extend(symbol_data)
-    
-        if all_data:
-            df = pd.DataFrame(all_data)
-            df["data"] = pd.to_datetime(df["data"], unit="ms")  # Converter timestamp para datetime
-            df = calcular_rsi_por_criptomoeda(df, window=14)
-            df["variacao_diaria"] = df.groupby("criptomoeda")["valor_fechamento"].pct_change() * 100
-            df["total_linhas"] = df.groupby("criptomoeda")["criptomoeda"].transform("count")
-            df["ano"] = df["data"].dt.year
-            df["mes"] = df["data"].dt.month
-            df = calcular_macd(df)
-    
-            # Gradientes do EMA curto para múltiplas janelas padronizadas (3,5,7,10)
-            import numpy as _np
-            import pandas as _pd
-            def _slope_arr(arr):
-                if arr.size < 2 or _np.isnan(arr).all():
-                    return _np.nan
-                a = arr[~_np.isnan(arr)].astype(float)
-                if a.size < 2:
-                    return _np.nan
-                x = _np.arange(a.size, dtype=float)
-                m, _b = _np.polyfit(x, a, 1)
-                return float(m)
-            def _rolling_slope(series: _pd.Series, n: int) -> _pd.Series:
-                return series.rolling(window=n, min_periods=2).apply(_slope_arr, raw=True)
-            for n in (3, 5, 7, 10):
-                col = f"grad_n{n}"
-                try:
-                    df[col] = (
-                        df.groupby("criptomoeda", group_keys=False)["ema_short"]
-                          .apply(lambda s: _rolling_slope(_pd.to_numeric(s, errors="coerce"), n))
-                    )
-                except Exception:
-                    df[col] = _rolling_slope(_pd.to_numeric(df["ema_short"], errors="coerce"), n)
-    
-            pd.set_option('display.float_format', lambda x: f'{x:.7f}')
-            pd.set_option('display.max_columns', None)
-        else:
-            print("Nenhum dado disponível para processar.", flush=True)
-    
-    # ...existing code...
-    
-    # Ajusta instâncias da estratégia para o símbolo correto
-    if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-        trade_logger = TradeLogger(df_columns=df.columns)
-        strategy = EMAGradientStrategy(dex, "SOLUSDT", GradientConfig(), logger=trade_logger)
-        strategy.step(df, usd_to_spend=10)
-    else:
-        print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
-    
-    # ...existing code...
-    
-    if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-        bot = EMAGradientStrategy(
-            dex, 
-            "SOLUSDT",   # símbolo corrigido
-            logger=None,
-            debug=True
-        )
-    
-    # ...existing code...
-    
-    # Ajuste todos os usos de "SOL/USDC:USDC" para "SOLUSDT" no restante do arquivo.
-    
-    # ...existing/USDC:USDC", GradientConfig(), logger=trade_logger)  # logger opcional
-
-    # chame a cada atualização de candle:
+    _symbol_hl = globals().get("SYMBOL_HL", "SOL/USDC:USDC")
+    strategy = EMAGradientStrategy(dex, _symbol_hl, GradientConfig(), logger=trade_logger)
     strategy.step(df, usd_to_spend=10)
 else:
-    print("[INFO] Sem dados ou DEX disponível; pulando estratégia.", flush=True)
+    print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
 
 
 # 4) (Opcional) Exibir histórico salvo com guard de vazio
@@ -1430,19 +1300,15 @@ else:
 
 # COMMAND ----------
 
-if dex is not None and 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    # cria o objeto da estratégia
-    bot = EMAGradientStrategy(
-        dex, 
-        "SOL/USDC:USDC",   # símbolo
-        logger=None,       # ou seu TradeLogger se quiser testar
-        debug=True
-    )
+RUN_DEMO_BLOCKS = False
+if RUN_DEMO_BLOCKS and dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
+    _symbol_hl = globals().get("SYMBOL_HL", "SOL/USDC:USDC")
+    bot = EMAGradientStrategy(dex, _symbol_hl, logger=None, debug=True)
 
 
 # COMMAND ----------
 
-if dex is not None and 'bot' in locals():
+if RUN_DEMO_BLOCKS and dex is not None and 'bot' in locals():
     # 1) Confirme que está usando a MESMA instância
     print("bot id:", id(bot))
 
@@ -1465,10 +1331,10 @@ def preview_local_events(bot, n: int = 10):
         base = {k: ev.get(k) for k in ["ts","evento","tipo","exec_price","exec_amount","order_id"]}
         print(f"{i:02d}. {base}")
 
-if dex is not None:
+if RUN_DEMO_BLOCKS and dex is not None:
     preview_local_events(bot, 5)
 
-if dex is not None:
+if RUN_DEMO_BLOCKS and dex is not None:
     # 6) Exporte (se houver algo)
     bot.export_local_log_csv("meu_historico_local.csv")
 
