@@ -1535,3 +1535,20 @@ else:
     print("[WARN] DataFrame df ou df2 está vazio ou não definido. Pulando cálculo de gradientes.")
 
 print("========== FIM DO BLOCO: HISTÓRICO DE TRADES ==========\n", flush=True)
+
+import time
+
+while True:
+    try:
+        # Coloque aqui o bloco principal de execução (exemplo: reconstruir df e rodar estratégia)
+        df = build_df(SYMBOL_BINANCE, INTERVAL, START_DATE, END_DATE)
+        if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
+            trade_logger = TradeLogger(df_columns=df.columns)
+            strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
+            strategy.step(df, usd_to_spend=10)
+        else:
+            print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
+        time.sleep(900)  # espera 15 minutos antes de rodar novamente
+    except Exception as e:
+        print(f"[ERRO] Loop principal falhou: {e}", flush=True)
+        time.sleep(60)
