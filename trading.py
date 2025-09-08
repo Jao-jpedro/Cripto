@@ -532,7 +532,7 @@ def _hl_get_account_value(wallet: str) -> float:
 # 🧠 ESTRATÉGIA (HL + stop inicial 6% da margem + trailing BE±0,05% + logger com fallback + DEBUG)
 # =========================
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timezone
 now = datetime.now(timezone.utc)
 import numpy as np
@@ -540,27 +540,42 @@ import pandas as pd
 
 @dataclass
 class GradientConfig:
+    # Indicadores
     EMA_SHORT_SPAN: int     = 7
-    EMA_LONG_SPAN: int      = 40
-    N_BARRAS_GRADIENTE: int = 5
+    EMA_LONG_SPAN: int      = 21
+    N_BARRAS_GRADIENTE: int = 3           # janela para gradiente
+    GRAD_CONSISTENCY: int   = 3           # nº velas com gradiente consistente
+    ATR_PERIOD: int         = 14
+    VOL_MA_PERIOD: int      = 20
 
-    SHORT_ENTER_MIN: float  = -0.25
-    SHORT_ENTER_MAX: float  = -0.1
-    SHORT_EXIT_GT: float    = +0.001    # encerrar SHORT se slope curto > +0.001
+    # Filtros de entrada
+    ATR_PCT_MIN: float      = 0.15        # ATR% saudável (min)
+    ATR_PCT_MAX: float      = 2.5         # ATR% saudável (max)
+    BREAKOUT_K_ATR: float   = 0.25        # banda de rompimento: k*ATR
+    NO_TRADE_EPS_K_ATR: float = 0.05      # zona neutra: |EMA7-EMA21| < eps*ATR
 
-    LONG_ENTER_MIN: float   = +0.05
-    LONG_ENTER_MAX: float   = +0.1
-    LONG_EXIT_LT: float     = -0.001    # encerrar LONG se slope curto < -0.001
+    # Saídas por gradiente
+    INV_GRAD_BARS: int      = 2           # barras de gradiente oposto p/ sair
 
+    # Execução
     LEVERAGE: int           = 20
-    STOP_RISK_PCT: float    = 0.06      # 6% DA MARGEM (~0,3% do preço com 20x)
     MIN_ORDER_USD: float    = 10.0
+    STOP_RISK_PCT: float    = 0.06      # legado: risco % da margem para fallback
 
-    COOLDOWN_MINUTOS: int   = 2
+    # Cooldown & anti-flip-flop
+    COOLDOWN_BARS: int      = 3           # cooldown em velas (prioritário)
+    POST_COOLDOWN_CONFIRM: int = 1        # exigir +1 vela válida após cooldown
+    COOLDOWN_MINUTOS: int   = 0           # legado; não usado se COOLDOWN_BARS>0
     ANTI_SPAM_SECS: int     = 3
 
-    BE_TRIGGER_PCT: float   = 0.005     # +0,5% a favor para acionar BE
-    BE_OFFSET_PCT: float    = 0.0005    # BE +0,05% (long) / -0,05% (short)
+    # Stops/TP
+    STOP_ATR_MULT: float    = 1.5         # Stop = 1,5×ATR
+    TAKEPROFIT_ATR_MULT: float = 0.0      # 0 desativa
+    TRAILING_ATR_MULT: float   = 0.0      # 0 desativa
+
+    # Breakeven trailing legado (mantido opcionalmente)
+    BE_TRIGGER_PCT: float   = 0.005       # +0,5% a favor para acionar BE
+    BE_OFFSET_PCT: float    = 0.0005      # BE +0,05% (long) / -0,05% (short)
 
 
 class EMAGradientStrategy:
@@ -586,6 +601,55 @@ class EMAGradientStrategy:
         self._local_events_count = 0         # contador de eventos locais
         self.force_local_log = False         # True => ignora logger externo
         self.duplicate_local_always = True   # True => sempre duplica no local
+
+        # Estado para cooldown por barras e intenção pós-cooldown
+        self._cooldown_until_idx: Optional[int] = None
+        self._pending_after_cd: Optional[Dict[str, Any]] = None  # {side, reason, created_idx}
+        self._last_seen_bar_idx: Optional[int] = None
+
+    # ---------- config → params (reuso dos cálculos do backtest) ----------
+    def _cfg_to_btparams(self):
+        try:
+            return BacktestParams(
+                ema_short=self.cfg.EMA_SHORT_SPAN,
+                ema_long=self.cfg.EMA_LONG_SPAN,
+                atr_period=self.cfg.ATR_PERIOD,
+                vol_ma_period=self.cfg.VOL_MA_PERIOD,
+                grad_window=self.cfg.N_BARRAS_GRADIENTE,
+                grad_consistency=self.cfg.GRAD_CONSISTENCY,
+                atr_pct_min=self.cfg.ATR_PCT_MIN,
+                atr_pct_max=self.cfg.ATR_PCT_MAX,
+                breakout_k_atr=self.cfg.BREAKOUT_K_ATR,
+                no_trade_eps_k_atr=self.cfg.NO_TRADE_EPS_K_ATR,
+                cooldown_bars=self.cfg.COOLDOWN_BARS,
+                post_cooldown_confirm_bars=self.cfg.POST_COOLDOWN_CONFIRM,
+                stop_atr_mult=self.cfg.STOP_ATR_MULT,
+                takeprofit_atr_mult=(self.cfg.TAKEPROFIT_ATR_MULT or None),
+                trailing_atr_mult=(self.cfg.TRAILING_ATR_MULT or None),
+            )
+        except Exception:
+            # fallback seguro
+            return BacktestParams()
+
+    def _compute_indicators_live(self, df: pd.DataFrame) -> pd.DataFrame:
+        p = self._cfg_to_btparams()
+        return compute_indicators(df, p)
+
+    # ---------- cooldown por barras ----------
+    def _bar_index(self, df: pd.DataFrame) -> int:
+        return len(df) - 1
+
+    def _cooldown_barras_ativo(self, df: pd.DataFrame) -> bool:
+        if self._cooldown_until_idx is None:
+            return False
+        return self._bar_index(df) < self._cooldown_until_idx
+
+    def _marcar_cooldown_barras(self, df: pd.DataFrame):
+        bars = max(0, int(self.cfg.COOLDOWN_BARS or 0))
+        if bars <= 0:
+            self._cooldown_until_idx = None
+            return
+        self._cooldown_until_idx = self._bar_index(df) + bars
 
     # ---------- util ----------
     def _norm_side(self, raw: Optional[str]) -> Optional[str]:
@@ -950,7 +1014,7 @@ class EMAGradientStrategy:
             raise
 
     # ---------- ordens ----------
-    def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame):
+    def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
         if self._posicao_aberta():
             print("↪️ Já existe posição aberta. Abortando nova entrada."); return None, None
         if self._tem_ordem_de_entrada_pendente():
@@ -994,23 +1058,35 @@ class EMAGradientStrategy:
         except Exception:
             pass
 
-        # stop inicial = 6% da margem
-        capital_loss  = usd_to_spend * self.cfg.STOP_RISK_PCT
-        loss_per_unit = capital_loss / amount
-        if self._norm_side(side) == "buy":
-            sl_price = price - loss_per_unit
-            sl_side  = "sell"
+        # Stop inicial baseado em ATR (preferencial); fallback ao risco por margem legado
+        use_atr = (atr_last is not None) and (self.cfg.STOP_ATR_MULT is not None) and (self.cfg.STOP_ATR_MULT > 0)
+        if use_atr:
+            if self._norm_side(side) == "buy":
+                sl_price = price - (self.cfg.STOP_ATR_MULT * float(atr_last))
+                sl_side  = "sell"
+            else:
+                sl_price = price + (self.cfg.STOP_ATR_MULT * float(atr_last))
+                sl_side  = "buy"
+            if self.debug:
+                print(f"🔎 Stop ATR: ATR={atr_last:.6f}, mult={self.cfg.STOP_ATR_MULT} ⇒ stop @ {sl_price:.6f} ({sl_side.upper()})")
         else:
-            sl_price = price + loss_per_unit
-            sl_side  = "buy"
-
-        if self.debug:
-            print(f"🔎 Stop inicial calculado: margem={usd_to_spend:.2f}, risco={self.cfg.STOP_RISK_PCT*100:.2f}% "
-                  f"⇒ capital_loss={capital_loss:.2f}, loss_per_unit={loss_per_unit:.6f}, stop @ {sl_price:.6f} ({sl_side.upper()})")
+            capital_loss  = usd_to_spend * self.cfg.STOP_RISK_PCT
+            loss_per_unit = capital_loss / amount
+            if self._norm_side(side) == "buy":
+                sl_price = price - loss_per_unit
+                sl_side  = "sell"
+            else:
+                sl_price = price + loss_per_unit
+                sl_side  = "buy"
+            if self.debug:
+                print(f"🔎 Stop risco/margem: margem={usd_to_spend:.2f}, risco={self.cfg.STOP_RISK_PCT*100:.2f}% ⇒ stop @ {sl_price:.6f} ({sl_side.upper()})")
 
         ordem_stop = self._place_stop(sl_side, amount, sl_price)
-        print(f"📉 Stop inicial @ {sl_price:.6f} "
-              f"(≈{(loss_per_unit/price)*100:.3f}% do preço | {self.cfg.STOP_RISK_PCT*100:.2f}% da margem):", ordem_stop)
+        try:
+            extra = f"ATRx{self.cfg.STOP_ATR_MULT}" if use_atr else f"risk {self.cfg.STOP_RISK_PCT*100:.2f}%"
+            print(f"📉 Stop inicial @ {sl_price:.6f} ({extra})", ordem_stop)
+        except Exception:
+            print(f"📉 Stop inicial @ {sl_price:.6f}", ordem_stop)
 
         self._safe_log(
             "stop_inicial", df_for_log,
@@ -1192,15 +1268,16 @@ class EMAGradientStrategy:
         else:
             df = df.copy()
 
-        df = self._ensure_emas_and_slopes(df)
-        slope_short = float(df["slope_short"].iloc[-1]) if not pd.isna(df["slope_short"].iloc[-1]) else 0.0
-        slope_long  = float(df["slope_long"].iloc[-1])  if not pd.isna(df["slope_long"].iloc[-1])  else 0.0
+        # indicadores e gradiente em %/barra
+        df = self._compute_indicators_live(df)
+        last = df.iloc[-1]
+        last_idx = len(df) - 1
+        self._last_seen_bar_idx = last_idx
 
-        print(f"📐 Gradiente EMA curto: {slope_short:.6f} | 📏 Gradiente EMA longo: {slope_long:.6f}")
-        if self.debug:
-            print(f"🔎 Regras: SHORT_ENTER ∈ [{self.cfg.SHORT_ENTER_MIN},{self.cfg.SHORT_ENTER_MAX}] | "
-                  f"LONG_ENTER ∈ [{self.cfg.LONG_ENTER_MIN},{self.cfg.LONG_ENTER_MAX}] | "
-                  f"SHORT_EXIT_GT {self.cfg.SHORT_EXIT_GT} | LONG_EXIT_LT {self.cfg.LONG_EXIT_LT}")
+        # helpers de consistência do gradiente
+        g = df["ema_short_grad_pct"].tail(self.cfg.GRAD_CONSISTENCY)
+        grad_pos_ok = g.notna().all() and (g > 0).all()
+        grad_neg_ok = g.notna().all() and (g < 0).all()
 
         # primeira execução: loga posição preexistente
         if not self._first_step_done:
@@ -1234,6 +1311,9 @@ class EMAGradientStrategy:
                 tipo=("long" if prev_side == "buy" else "short"),
                 exec_price=last_px
             )
+            # aplica cooldown por barras para evitar reversão imediata
+            self._marcar_cooldown_barras(df)
+            self._last_pos_side = None
 
             # Notificação de fechamento externo (provável stop)
             try:
@@ -1248,26 +1328,104 @@ class EMAGradientStrategy:
             except Exception:
                 pass
 
-        if self._cooldown_ativo():
-            print(f"⛔ Cooldown {self.cfg.COOLDOWN_MINUTOS} min ativo.")
+        # Cooldown por barras (prioritário); fallback por minutos (legado)
+        if self._cooldown_barras_ativo(df):
+            print(f"⛔ Em cooldown de barras ({self.cfg.COOLDOWN_BARS}). Sem novas entradas.")
+            self._safe_log("cooldown", df_for_log=df, tipo="info")
             self._last_pos_side = (self._norm_side(pos.get("side")) if pos else None)
+            # memoriza intenção durante cooldown
+            if not pos:
+                can_long = (
+                    (last.ema_short > last.ema_long) and grad_pos_ok and
+                    (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
+                    (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
+                    (last.volume > last.vol_ma)
+                )
+                can_short = (
+                    (last.ema_short < last.ema_long) and grad_neg_ok and
+                    (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
+                    (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
+                    (last.volume > last.vol_ma)
+                )
+                if can_long:
+                    self._pending_after_cd = {"side": "LONG", "reason": "cooldown_intent_long", "created_idx": last_idx}
+                elif can_short:
+                    self._pending_after_cd = {"side": "SHORT", "reason": "cooldown_intent_short", "created_idx": last_idx}
             return
 
-        # trailing BE± se houver posição
+        # trailing (ATR opcional) e/ou BE± se houver posição
         if pos:
+            # manter BE± legado
             self._maybe_trailing_breakeven_plus(pos, df_for_log=df)
 
-        # entradas (sem posição)
+        # entradas (sem posição), respeitando no-trade zone e intenção pós-cooldown
         if not pos:
-            if self.cfg.SHORT_ENTER_MIN <= slope_short <= self.cfg.SHORT_ENTER_MAX:
-                print("✅ Sinal SHORT (entrada)")
-                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df)
+            # no-trade zone
+            if abs(float(last.ema_short - last.ema_long)) < (self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)) or \
+               (last.atr_pct < self.cfg.ATR_PCT_MIN) or (last.atr_pct > self.cfg.ATR_PCT_MAX):
+                print("🚫 No-Trade Zone: EMAs próximos ou ATR% fora da faixa.")
+                self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
+                self._last_pos_side = None
+                return
+
+            # intenção pós-cooldown: exigir confirmação adicional
+            if self._pending_after_cd is not None:
+                intent = self._pending_after_cd
+                if intent.get("side") == "LONG":
+                    can_long = (
+                        (last.ema_short > last.ema_long) and grad_pos_ok and
+                        (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
+                        (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
+                        (last.volume > last.vol_ma)
+                    )
+                    if can_long:
+                        print("✅ Confirmação pós-cooldown LONG")
+                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        pos_after = self._posicao_aberta()
+                        self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
+                        self._pending_after_cd = None
+                        return
+                else:
+                    can_short = (
+                        (last.ema_short < last.ema_long) and grad_neg_ok and
+                        (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
+                        (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
+                        (last.volume > last.vol_ma)
+                    )
+                    if can_short:
+                        print("✅ Confirmação pós-cooldown SHORT")
+                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        pos_after = self._posicao_aberta()
+                        self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
+                        self._pending_after_cd = None
+                        return
+                print("⏳ Sinal perdeu/sem confirmação pós-cooldown.")
+                self._pending_after_cd = None
+                self._last_pos_side = None
+                return
+
+            # Entradas normais
+            can_long = (
+                (last.ema_short > last.ema_long) and grad_pos_ok and
+                (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
+                (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
+                (last.volume > last.vol_ma)
+            )
+            can_short = (
+                (last.ema_short < last.ema_long) and grad_neg_ok and
+                (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
+                (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
+                (last.volume > last.vol_ma)
+            )
+            if can_long:
+                print("✅ Sinal LONG (entrada)")
+                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
-            if self.cfg.LONG_ENTER_MIN <= slope_short <= self.cfg.LONG_ENTER_MAX:
-                print("✅ Sinal LONG (entrada)")
-                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df)
+            if can_short:
+                print("✅ Sinal SHORT (entrada)")
+                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
@@ -1278,19 +1436,27 @@ class EMAGradientStrategy:
 
         # saídas (com posição)
         lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
+        # Saídas por cruzamento de EMA ou inversão sustentada do gradiente
+        grad_recent = df["ema_short_grad_pct"].tail(max(2, self.cfg.INV_GRAD_BARS))
+        inv_long = grad_recent.notna().all() and (grad_recent <= 0).sum() >= self.cfg.INV_GRAD_BARS
+        inv_short = grad_recent.notna().all() and (grad_recent >= 0).sum() >= self.cfg.INV_GRAD_BARS
         if lado == "sell":
-            if slope_short > self.cfg.SHORT_EXIT_GT:
+            if (last.ema_short > last.ema_long) or inv_short:
                 if self.debug:
-                    print(f"🔎 Regras de saída SHORT: slope_short({slope_short:.6f}) > SHORT_EXIT_GT({self.cfg.SHORT_EXIT_GT}) ⇒ fechar")
+                    print("🔎 Saída SHORT: cruzamento EMA ou gradiente ≥ 0 por barras sustentadas.")
                 self._fechar_posicao(df_for_log=df)
                 self._last_pos_side = None
+                # aplica cooldown em barras
+                self._marcar_cooldown_barras(df)
                 return
         elif lado == "buy":
-            if slope_short < self.cfg.LONG_EXIT_LT:
+            if (last.ema_short < last.ema_long) or inv_long:
                 if self.debug:
-                    print(f"🔎 Regras de saída LONG: slope_short({slope_short:.6f}) < LONG_EXIT_LT({self.cfg.LONG_EXIT_LT}) ⇒ fechar")
+                    print("🔎 Saída LONG: cruzamento EMA ou gradiente ≤ 0 por barras sustentadas.")
                 self._fechar_posicao(df_for_log=df)
                 self._last_pos_side = None
+                # aplica cooldown em barras
+                self._marcar_cooldown_barras(df)
                 return
 
         print("🔄 Mantendo posição.")
@@ -1300,662 +1466,496 @@ class EMAGradientStrategy:
 
 # COMMAND ----------
 
+# =========================
+# 📊 BACKTEST: EMA Gradiente com Máquina de Estados
+# =========================
+@dataclass
+class BacktestParams:
+    # Indicadores
+    ema_short: int = 7
+    ema_long: int = 21
+    atr_period: int = 14
+    vol_ma_period: int = 20
+    grad_window: int = 3           # janelas para regressão linear do EMA curto
+    grad_consistency: int = 3      # nº de velas consecutivas com gradiente consistente
+
+    # Filtros
+    atr_pct_min: float = 0.15      # em % (ATR% = 100*ATR/close)
+    atr_pct_max: float = 2.5
+    breakout_k_atr: float = 0.25   # banda de rompimento: k*ATR
+    no_trade_eps_k_atr: float = 0.05  # ε = 0,05*ATR (zona neutra entre EMAs)
+
+    # Execução e gerência
+    cooldown_bars: int = 3
+    post_cooldown_confirm_bars: int = 1  # exigir +1 barra válida após cooldown
+    allow_pyramiding: bool = False
+
+    # Saídas
+    stop_atr_mult: float = 1.5
+    takeprofit_atr_mult: Optional[float] = None  # ex.: 2.0; None desativa
+    trailing_atr_mult: Optional[float] = None    # ex.: 1.0; None desativa
+
+
+def _ensure_base_cols(df: pd.DataFrame) -> pd.DataFrame:
+    if "data" in df.columns:
+        df = df.sort_values("data").reset_index(drop=True)
+    if "valor_fechamento" not in df.columns:
+        raise ValueError("DataFrame precisa ter a coluna 'valor_fechamento'.")
+    # Volume: usa 'volume_compra' se existir; senão tenta 'volume'; senão soma compra+venda se disponíveis
+    if "volume" not in df.columns:
+        if "volume_compra" in df.columns and "volume_venda" in df.columns:
+            df = df.copy()
+            try:
+                df["volume"] = pd.to_numeric(df["volume_compra"], errors="coerce").fillna(0) + \
+                                pd.to_numeric(df["volume_venda"], errors="coerce").fillna(0)
+            except Exception:
+                df["volume"] = pd.to_numeric(df.get("volume_compra", 0), errors="coerce").fillna(0)
+        elif "volume_compra" in df.columns:
+            df = df.copy()
+            df["volume"] = pd.to_numeric(df["volume_compra"], errors="coerce").fillna(0)
+        else:
+            df = df.copy()
+            df["volume"] = pd.to_numeric(df.get("volume", 0), errors="coerce").fillna(0)
+    return df
+
+
+def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
+    df = _ensure_base_cols(df)
+    out = df.copy()
+    close = pd.to_numeric(out["valor_fechamento"], errors="coerce")
+
+    # EMAs
+    out["ema_short"] = close.ewm(span=p.ema_short, adjust=False).mean()
+    out["ema_long"] = close.ewm(span=p.ema_long, adjust=False).mean()
+
+    # ATR clássico
+    # Se não houver OHLC, aproximamos TR via deslocamentos do fechamento
+    if set(["high", "low", "open"]).issubset(out.columns):
+        high = pd.to_numeric(out["high"], errors="coerce")
+        low = pd.to_numeric(out["low"], errors="coerce")
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs()
+        ], axis=1).max(axis=1)
+    else:
+        prev_close = close.shift(1)
+        tr = (close - prev_close).abs()
+    out["atr"] = tr.rolling(p.atr_period, min_periods=1).mean()
+    out["atr_pct"] = (out["atr"] / close) * 100.0
+
+    # Volume média
+    out["vol_ma"] = out["volume"].rolling(p.vol_ma_period, min_periods=1).mean()
+
+    # Gradiente EMA curto (slope % por barra via regressão sobre janela)
+    def slope_pct(series: pd.Series, win: int) -> float:
+        if series.notna().sum() < 2:
+            return np.nan
+        y = series.dropna().values
+        n = min(len(y), win)
+        x = np.arange(n, dtype=float)
+        ywin = y[-n:]
+        a, b = np.polyfit(x, ywin, 1)
+        denom = ywin[-1] if ywin[-1] not in (0, np.nan) else (np.nan if ywin[-1] == 0 else np.nan)
+        return (a / denom) * 100.0 if denom and not np.isnan(denom) else np.nan
+
+    out["ema_short_grad_pct"] = out["ema_short"].rolling(p.grad_window, min_periods=2).apply(
+        lambda s: slope_pct(s, p.grad_window), raw=False
+    )
+    return out
+
+
+def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
+    reasons = []
+    conds = []
+    # EMA short > EMA long
+    c1 = row.ema_short > row.ema_long
+    conds.append(c1);  reasons.append("EMA7>EMA21")
+    # Gradiente positivo (consistência será checada fora por janelas)
+    c2 = row.ema_short_grad_pct > 0
+    conds.append(c2);  reasons.append("grad>0")
+    # ATR% saudável
+    c3 = (row.atr_pct >= p.atr_pct_min) and (row.atr_pct <= p.atr_pct_max)
+    conds.append(c3);  reasons.append("ATR% saudável")
+    # Rompimento
+    c4 = row.valor_fechamento > (row.ema_short + p.breakout_k_atr * row.atr)
+    conds.append(c4);  reasons.append("close>EMA7+k*ATR")
+    # Volume
+    c5 = row.volume > row.vol_ma
+    conds.append(c5);  reasons.append("volume>média")
+    ok = all(conds)
+    return ok, "; ".join([r for r, c in zip(reasons, conds) if c]) if ok else "; ".join([r for r, c in zip(reasons, conds) if not c])
+
+
+def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
+    reasons = []
+    conds = []
+    c1 = row.ema_short < row.ema_long
+    conds.append(c1);  reasons.append("EMA7<EMA21")
+    c2 = row.ema_short_grad_pct < 0
+    conds.append(c2);  reasons.append("grad<0")
+    c3 = (row.atr_pct >= p.atr_pct_min) and (row.atr_pct <= p.atr_pct_max)
+    conds.append(c3);  reasons.append("ATR% saudável")
+    c4 = row.valor_fechamento < (row.ema_short - p.breakout_k_atr * row.atr)
+    conds.append(c4);  reasons.append("close<EMA7-k*ATR")
+    c5 = row.volume > row.vol_ma
+    conds.append(c5);  reasons.append("volume>média")
+    ok = all(conds)
+    return ok, "; ".join([r for r, c in zip(reasons, conds) if c]) if ok else "; ".join([r for r, c in zip(reasons, conds) if not c])
+
+
+def _no_trade_zone(row, p: BacktestParams) -> bool:
+    return abs(row.ema_short - row.ema_long) < (p.no_trade_eps_k_atr * row.atr) or \
+           (row.atr_pct < p.atr_pct_min) or (row.atr_pct > p.atr_pct_max)
+
+
+def run_state_machine(df: pd.DataFrame, p: BacktestParams) -> Dict[str, Any]:
+    """
+    Executa a máquina de estados sobre o DF e retorna:
+    - decisions: DataFrame com colunas [state, action, reason, cooldown]
+    - trades: lista de trades com dicts {entry_idx, entry_dt, side, entry_px, atr_at_entry, exit_idx, exit_dt, exit_px, reason_exit}
+    Garante exclusão mútua e bloqueia reversões diretas (aplica cooldown).
+    """
+    dfi = compute_indicators(df, p).reset_index(drop=True)
+
+    states = []
+    actions = []
+    reasons = []
+    cooldown = []
+
+    state = "FLAT"
+    cd = 0
+    last_side = None  # "LONG" / "SHORT"
+    consec_grad_pos = 0
+    consec_grad_neg = 0
+    pending_entry_after_cd = None  # None or (side, confirmed_bars)
+
+    trades = []
+    open_trade = None
+
+    for i, row in dfi.iterrows():
+        action = "HOLD"; reason = ""
+
+        # atualizar consistência do gradiente
+        g = row.ema_short_grad_pct
+        if pd.isna(g):
+            consec_grad_pos = 0; consec_grad_neg = 0
+        else:
+            if g > 0:
+                consec_grad_pos += 1; consec_grad_neg = 0
+            elif g < 0:
+                consec_grad_neg += 1; consec_grad_pos = 0
+            else:
+                consec_grad_pos = 0; consec_grad_neg = 0
+
+        # cooldown ticking
+        if cd > 0:
+            cd -= 1
+
+        # No-Trade zone
+        if _no_trade_zone(row, p):
+            states.append(state); actions.append("NO_TRADE_ZONE"); reasons.append("no-trade zone"); cooldown.append(cd)
+            continue
+
+        # volume baixo apenas audita
+        # (o filtro de volume já entra no _entry_*_condition)
+
+        # Saídas por inversão sustentada/cross de EMA
+        if state in ("LONG", "SHORT"):
+            exit_signal = False
+            exit_reason = []
+            # cruzamento EMA
+            if state == "LONG" and (row.ema_short < row.ema_long):
+                exit_signal = True; exit_reason.append("EMA7<EMA21")
+            if state == "SHORT" and (row.ema_short > row.ema_long):
+                exit_signal = True; exit_reason.append("EMA7>EMA21")
+            # inversão sustentada do gradiente
+            if state == "LONG" and consec_grad_pos == 0 and consec_grad_neg >= 2:
+                exit_signal = True; exit_reason.append("grad<=0 por 2+")
+            if state == "SHORT" and consec_grad_neg == 0 and consec_grad_pos >= 2:
+                exit_signal = True; exit_reason.append("grad>=0 por 2+")
+
+            if exit_signal and open_trade is not None:
+                open_trade["exit_idx"] = i
+                open_trade["exit_dt"] = dfi["data"].iloc[i] if "data" in dfi.columns else i
+                open_trade["exit_px"] = float(row.valor_fechamento)
+                open_trade["reason_exit"] = ", ".join(exit_reason)
+                trades.append(open_trade)
+                open_trade = None
+                state = "FLAT"; last_side = None; cd = p.cooldown_bars
+                pending_entry_after_cd = None
+                action = "EXIT"; reason = ", ".join(exit_reason)
+                states.append(state); actions.append(action); reasons.append(reason); cooldown.append(cd)
+                continue
+
+        # Stop/TP/Trailing gerenciados no backtest runner (após trades serem montados)
+
+        # Entradas
+        if state == "FLAT":
+            if cd > 0:
+                # cooldown em curso: audita e opcionalmente exige sinal consistente pós-cooldown
+                states.append(state); actions.append("COOLDOWN"); reasons.append("em cooldown"); cooldown.append(cd)
+                # memoriza intenção de entrada durante cooldown
+                if pending_entry_after_cd is None:
+                    okL, rL = _entry_long_condition(row, p)
+                    okS, rS = _entry_short_condition(row, p)
+                    if okL and consec_grad_pos >= p.grad_consistency:
+                        pending_entry_after_cd = ("LONG", 0, rL)
+                    elif okS and consec_grad_neg >= p.grad_consistency:
+                        pending_entry_after_cd = ("SHORT", 0, rS)
+                continue
+
+            # se havia intenção, exigir confirmação extra
+            if pending_entry_after_cd is not None:
+                side_intent, conf_bars, rIntent = pending_entry_after_cd
+                if side_intent == "LONG":
+                    ok, rr = _entry_long_condition(row, p)
+                    ok = ok and (consec_grad_pos >= p.grad_consistency)
+                else:
+                    ok, rr = _entry_short_condition(row, p)
+                    ok = ok and (consec_grad_neg >= p.grad_consistency)
+                if ok:
+                    conf_bars += 1
+                    if conf_bars >= p.post_cooldown_confirm_bars:
+                        # abre
+                        state = side_intent
+                        last_side = side_intent
+                        open_trade = {
+                            "entry_idx": i,
+                            "entry_dt": dfi["data"].iloc[i] if "data" in dfi.columns else i,
+                            "side": side_intent,
+                            "entry_px": float(row.valor_fechamento),
+                            "atr_at_entry": float(row.atr),
+                            "reason_entry": f"cooldown_confirm: {rIntent}"
+                        }
+                        action = f"ENTER_{side_intent}"; reason = open_trade["reason_entry"]
+                        pending_entry_after_cd = None
+                    else:
+                        pending_entry_after_cd = (side_intent, conf_bars, rIntent)
+                        action = "WAIT_CONFIRM"; reason = f"confirmação {conf_bars}/{p.post_cooldown_confirm_bars}"
+                else:
+                    pending_entry_after_cd = None
+                    action = "HOLD"; reason = "sinal perdeu validade pós-cooldown"
+                states.append(state); actions.append(action); reasons.append(reason); cooldown.append(cd)
+                continue
+
+            # fluxos normais (sem cooldown)
+            okL, rL = _entry_long_condition(row, p)
+            okS, rS = _entry_short_condition(row, p)
+            if okL and consec_grad_pos >= p.grad_consistency:
+                state = "LONG"; last_side = "LONG"
+                open_trade = {
+                    "entry_idx": i,
+                    "entry_dt": dfi["data"].iloc[i] if "data" in dfi.columns else i,
+                    "side": "LONG",
+                    "entry_px": float(row.valor_fechamento),
+                    "atr_at_entry": float(row.atr),
+                    "reason_entry": rL
+                }
+                action = "ENTER_LONG"; reason = rL
+            elif okS and consec_grad_neg >= p.grad_consistency:
+                state = "SHORT"; last_side = "SHORT"
+                open_trade = {
+                    "entry_idx": i,
+                    "entry_dt": dfi["data"].iloc[i] if "data" in dfi.columns else i,
+                    "side": "SHORT",
+                    "entry_px": float(row.valor_fechamento),
+                    "atr_at_entry": float(row.atr),
+                    "reason_entry": rS
+                }
+                action = "ENTER_SHORT"; reason = rS
+            else:
+                # Motivos de invalidação detalhados
+                inval = []
+                if not okL:
+                    inval.append(f"LONG inval: {rL}")
+                if okL and consec_grad_pos < p.grad_consistency:
+                    inval.append("LONG inval: consistência gradiente insuficiente")
+                if not okS:
+                    inval.append(f"SHORT inval: {rS}")
+                if okS and consec_grad_neg < p.grad_consistency:
+                    inval.append("SHORT inval: consistência gradiente insuficiente")
+                action = "HOLD"; reason = "; ".join(inval) if inval else "regras não atendidas"
+
+        # Ignorar sinais contrários quando em posição
+        states.append(state); actions.append(action); reasons.append(reason); cooldown.append(cd)
+
+    decisions = pd.DataFrame({
+        "state": states, "action": actions, "reason": reasons, "cooldown": cooldown
+    })
+
+    return {"decisions": decisions, "trades": trades, "dfi": dfi}
+
+
+def _apply_exits_and_equity(trades: list, dfi: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
+    # Constrói DF de trades com SL/TP/Trailing e métricas por trade
+    rows = []
+    for t in trades:
+        side = t["side"]
+        e_idx = t["entry_idx"]
+        e_px = t["entry_px"]
+        atr0 = t["atr_at_entry"]
+        stop = e_px - p.stop_atr_mult * atr0 if side == "LONG" else e_px + p.stop_atr_mult * atr0
+        take = None
+        if p.takeprofit_atr_mult is not None:
+            take = e_px + p.takeprofit_atr_mult * atr0 if side == "LONG" else e_px - p.takeprofit_atr_mult * atr0
+
+        # percorre barras até exit_idx se já setado (sinal inverso) ou até fim
+        exit_idx = t.get("exit_idx", None)
+        reason_exit = t.get("reason_exit", "")
+        trail = None
+        for j in range(e_idx + 1, (exit_idx if exit_idx is not None else len(dfi))):
+            px = float(dfi["valor_fechamento"].iloc[j])
+            atrj = float(dfi["atr"].iloc[j])
+            # trailing
+            if p.trailing_atr_mult is not None:
+                if side == "LONG":
+                    trail = max(trail or -np.inf, px - p.trailing_atr_mult * atrj)
+                    stop = max(stop, trail)
+                else:
+                    trail = min(trail or np.inf, px + p.trailing_atr_mult * atrj)
+                    stop = min(stop, trail)
+            # Checa SL/TP a preço de fechamento (aprox)
+            if side == "LONG" and px <= stop:
+                exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "stop"
+                break
+            if side == "SHORT" and px >= stop:
+                exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "stop"
+                break
+            if take is not None:
+                if side == "LONG" and px >= take:
+                    exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "take"
+                    break
+                if side == "SHORT" and px <= take:
+                    exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "take"
+                    break
+
+        if exit_idx is None:
+            exit_idx = len(dfi) - 1
+            reason_exit = reason_exit or "eod"
+
+        x_px = float(dfi["valor_fechamento"].iloc[exit_idx])
+        ret = (x_px - e_px) / e_px if side == "LONG" else (e_px - x_px) / e_px
+        rows.append({
+            "entry_idx": e_idx,
+            "exit_idx": exit_idx,
+            "entry_dt": t.get("entry_dt"),
+            "exit_dt": dfi["data"].iloc[exit_idx] if "data" in dfi.columns else exit_idx,
+            "side": side,
+            "entry_px": e_px,
+            "exit_px": x_px,
+            "atr_at_entry": atr0,
+            "reason_entry": t.get("reason_entry", ""),
+            "reason_exit": reason_exit,
+            "ret": ret,
+            "atr_pct_entry": float(dfi["atr_pct"].iloc[e_idx])
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _metrics(trades_df: pd.DataFrame) -> Dict[str, float]:
+    if trades_df.empty:
+        return {"trades": 0, "win_rate": 0.0, "profit_factor": 0.0, "max_dd": 0.0, "sharpe": 0.0}
+    r = trades_df["ret"].values
+    wins = r[r > 0].sum()
+    losses = -r[r < 0].sum()
+    pf = (wins / losses) if losses > 0 else np.inf
+    win_rate = (r > 0).mean() * 100.0
+    # equity curve
+    eq = (1 + trades_df["ret"]).cumprod()
+    peak = eq.cummax()
+    dd = ((eq - peak) / peak).min()
+    sharpe = (np.mean(r) / (np.std(r) + 1e-12)) * np.sqrt(len(r)) if len(r) > 1 else 0.0
+    return {
+        "trades": int(len(r)),
+        "win_rate": float(win_rate),
+        "profit_factor": float(pf),
+        "max_dd": float(dd),
+        "sharpe": float(sharpe),
+    }
+
+
+def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = None,
+                          audit_csv_path: Optional[str] = None) -> Dict[str, Any]:
+    p = params or BacktestParams()
+    rs = run_state_machine(df, p)
+    decisions, trades, dfi = rs["decisions"], rs["trades"], rs["dfi"]
+
+    # Valida exclusão mútua e sem reversão direta
+    # Reconstrói estado por actions garantindo que nunca haja LONG e SHORT simultâneos
+    cur = "FLAT"; prev = None
+    for i, a in enumerate(decisions["action"].tolist()):
+        prev = cur
+        if a == "ENTER_LONG":
+            assert cur == "FLAT", f"Entrada LONG fora de FLAT na barra {i}"
+            cur = "LONG"
+        elif a == "ENTER_SHORT":
+            assert cur == "FLAT", f"Entrada SHORT fora de FLAT na barra {i}"
+            cur = "SHORT"
+        elif a in ("EXIT",):
+            cur = "FLAT"
+        # proibição reversão direta é garantida por cooldown exigir FLAT e cd>0
+
+    trades_df = _apply_exits_and_equity(trades, dfi, p)
+
+    # Métricas globais
+    metrics_all = _metrics(trades_df)
+
+    # Métricas por regime de volatilidade: dentro vs fora da faixa saudável
+    inside = trades_df[trades_df["atr_pct_entry"].between(p.atr_pct_min, p.atr_pct_max)]
+    outside = trades_df[~trades_df.index.isin(inside.index)]
+    metrics_inside = _metrics(inside)
+    metrics_outside = _metrics(outside)
+
+    # Auditoria opcional
+    if audit_csv_path:
+        aud = decisions.copy()
+        if "data" in dfi.columns:
+            aud["data"] = dfi["data"].values
+        aud.to_csv(audit_csv_path, index=False)
+
+    return {
+        "decisions": decisions,
+        "trades": trades_df,
+        "metrics": {
+            "all": metrics_all,
+            "atr_inside": metrics_inside,
+            "atr_outside": metrics_outside,
+        },
+        "params": p,
+    }
+
+
 # DBTITLE 1,principal
 # =========================
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
 
-pass
+SYMBOL_HL = "SOL/USDC:USDC"  # Ajuste para o formato aceito pelo Hyperliquid
 
-# Execução da estratégia com df pronto
-SYMBOL_HL = "SOL/USDC:USDC"  # ou outro símbolo válido
+# Instancia o logger de trades
+trade_logger = TradeLogger(df.columns if isinstance(df, pd.DataFrame) else [])
 
-def executar_estrategia(df, dex, trade_logger):
-    strat = EMAGradientATRStrategy(logger=trade_logger)
-    df_ind = strat.calc_indicators(df)
-    for i in range(len(df_ind)):
-        row = df_ind.iloc[i]
-        # Cooldown
-        if strat.cooldown > 0:
-            strat.cooldown -= 1
-            strat.log(f"Cooldown ativo ({strat.cooldown} barras restantes). Nenhuma entrada permitida.")
-            continue
+# Instancia a estratégia
+strat = EMAGradientStrategy(dex=dex, symbol=SYMBOL_HL, logger=trade_logger, debug=True)
 
-        # No-Trade Zone
-        if abs(row['ema7'] - row['ema21']) < 0.05 * row['atr'] or not (strat.atr_pct_min <= row['atr_pct'] <= strat.atr_pct_max):
-            strat.log("No-Trade Zone: EMAs muito próximos ou ATR% fora da faixa saudável.")
-            continue
-
-        # Volume
-        if row['volume_compra'] <= row['vol_sma']:
-            strat.log("Volume abaixo da média. Sinal ignorado.")
-            continue
-
-        # Estados e transições
-        if strat.state == State.FLAT:
-            # LONG
-            if (row['ema7'] > row['ema21'] and
-                all(df_ind['grad_ema7'].iloc[max(0, i-strat.consistency_bars+1):i+1] > 0) and
-                row['valor_fechamento'] > row['ema7'] + strat.band_k * row['atr']):
-                strat.state = State.LONG
-                strat.log(f"Entrando em LONG na barra {i}. Motivo: Sinal consistente e rompimento.")
-                strat.cooldown = 0
-                # EXECUTA ORDEM NA HYPERLIQUID
-                try:
-                    price = row['valor_fechamento']
-                    amount = 10 / price  # Exemplo: $10 por trade
-                    ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
-                    strat.log(f"Ordem LONG executada: {ordem}")
-                    trade_logger.append_event(df.iloc[[i]], evento="entrada", tipo="long", exec_price=price, exec_amount=amount)
-                except Exception as e:
-                    strat.log(f"Erro ao abrir LONG: {e}")
-                continue
-            # SHORT
-            if (row['ema7'] < row['ema21'] and
-                all(df_ind['grad_ema7'].iloc[max(0, i-strat.consistency_bars+1):i+1] < 0) and
-                row['valor_fechamento'] < row['ema7'] - strat.band_k * row['atr']):
-                strat.state = State.SHORT
-                strat.log(f"Entrando em SHORT na barra {i}. Motivo: Sinal consistente e rompimento.")
-                strat.cooldown = 0
-                # EXECUTA ORDEM NA HYPERLIQUID
-                try:
-                    price = row['valor_fechamento']
-                    amount = 10 / price
-                    ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
-                    strat.log(f"Ordem SHORT executada: {ordem}")
-                    trade_logger.append_event(df.iloc[[i]], evento="entrada", tipo="short", exec_price=price, exec_amount=amount)
-                except Exception as e:
-                    strat.log(f"Erro ao abrir SHORT: {e}")
-                continue
-
-        elif strat.state == State.LONG:
-            # Saída por gradiente inverso ou cruzamento
-            if (all(df_ind['grad_ema7'].iloc[max(0, i-2):i+1] <= 0) or row['ema7'] < row['ema21']):
-                strat.state = State.FLAT
-                strat.cooldown = strat.cooldown_bars
-                strat.log(f"Saindo de LONG na barra {i}. Motivo: Gradiente inverso ou cruzamento EMA.")
-                # FECHA POSIÇÃO NA HYPERLIQUID
-                try:
-                    price = row['valor_fechamento']
-                    amount = 10 / price
-                    ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
-                    strat.log(f"Ordem de saída LONG executada: {ordem}")
-                    trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="long", exec_price=price, exec_amount=amount)
-                except Exception as e:
-                    strat.log(f"Erro ao fechar LONG: {e}")
-                continue
-            # Stop Loss
-            if row['valor_fechamento'] < row['ema7'] - 1.5 * row['atr']:
-                strat.state = State.FLAT
-                strat.cooldown = strat.cooldown_bars
-                strat.log(f"Stop Loss LONG na barra {i}. Motivo: Preço abaixo do limite ATR.")
-                try:
-                    price = row['valor_fechamento']
-                    amount = 10 / price
-                    ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
-                    strat.log(f"Ordem de stop LONG executada: {ordem}")
-                    trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="long", exec_price=price, exec_amount=amount)
-                except Exception as e:
-                    strat.log(f"Erro ao fechar LONG: {e}")
-                continue
-
-        elif strat.state == State.SHORT:
-            # Saída por gradiente inverso ou cruzamento
-            if (all(df_ind['grad_ema7'].iloc[max(0, i-2):i+1] >= 0) or row['ema7'] > row['ema21']):
-                strat.state = State.FLAT
-                strat.cooldown = strat.cooldown_bars
-                strat.log(f"Saindo de SHORT na barra {i}. Motivo: Gradiente inverso ou cruzamento EMA.")
-                try:
-                    price = row['valor_fechamento']
-                    amount = 10 / price
-                    ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
-                    strat.log(f"Ordem de saída SHORT executada: {ordem}")
-                    trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="short", exec_price=price, exec_amount=amount)
-                except Exception as e:
-                    strat.log(f"Erro ao fechar SHORT: {e}")
-                continue
-            # Stop Loss
-            if row['valor_fechamento'] > row['ema7'] + 1.5 * row['atr']:
-                strat.state = State.FLAT
-                strat.cooldown = strat.cooldown_bars
-                strat.log(f"Stop Loss SHORT na barra {i}. Motivo: Preço acima do limite ATR.")
-                try:
-                    price = row['valor_fechamento']
-                    amount = 10 / price
-                    ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
-                    strat.log(f"Ordem de stop SHORT executada: {ordem}")
-                    trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="short", exec_price=price, exec_amount=amount)
-                except Exception as e:
-                    strat.log(f"Erro ao fechar SHORT: {e}")
-                continue
-
-if __name__ == "__main__":
-    if dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
-        trade_logger = TradeLogger(df_columns=df.columns, csv_path="/tmp/trade_log.csv")
-        executar_estrategia(df, dex, trade_logger)
-    else:
-        print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
-
-
-# 4) (Opcional) Exibir histórico salvo com guard de vazio
-csv_path = "trade_log.csv"
-if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
-    _hist = pd.read_csv(csv_path)
-    if len(_hist) > 0:
-        pass  # display removido
-    else:
-        print("Histórico criado, mas ainda sem linhas (nenhuma entrada/saída/ajuste).")
+# Executa um passo da estratégia (exemplo: operar $10)
+if isinstance(df, pd.DataFrame) and not df.empty:
+    try:
+        strat.step(df, usd_to_spend=10)
+    except Exception as e:
+        print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
 else:
-    print("Histórico ainda não existe. Execute um trade para gerar registros.")
-
-
-# COMMAND ----------
-
-RUN_DEMO_BLOCKS = False
-if RUN_DEMO_BLOCKS and dex is not None and isinstance(df, pd.DataFrame) and not df.empty:
-    bot = EMAGradientStrategy(dex, SYMBOL_HL, logger=None, debug=True)
-
-
-# COMMAND ----------
-
-if RUN_DEMO_BLOCKS and dex is not None and 'bot' in locals():
-    # 1) Confirme que está usando a MESMA instância
-    print("bot id:", id(bot))
-
-    # 2) Veja quantos eventos existem agora
-    print("len(_local_events):", len(getattr(bot, "_local_events", [])))
-
-    # 3) Forçe um evento local para testar o fluxo
-    bot.force_local_log = True  # ignora logger externo
-    bot._safe_log("teste_manual", df_for_log=None, tipo="info", exec_price=None, exec_amount=None)
-
-if dex is not None and 'bot' in locals():
-    # 4) Cheque novamente
-    print("len(_local_events) após teste:", len(bot._local_events))
-
-# 5) Pré-visualize os últimos 5
-def preview_local_events(bot, n: int = 10):
-    if not hasattr(bot, "_local_events") or not bot._local_events:
-        print("ℹ️ Nenhum evento no buffer local."); return
-    for i, ev in enumerate(bot._local_events[-n:], 1):
-        base = {k: ev.get(k) for k in ["ts","evento","tipo","exec_price","exec_amount","order_id"]}
-        print(f"{i:02d}. {base}")
-
-if RUN_DEMO_BLOCKS and dex is not None:
-    preview_local_events(bot, 5)
-
-if RUN_DEMO_BLOCKS and dex is not None:
-    # 6) Exporte (se houver algo)
-    bot.export_local_log_csv("meu_historico_local.csv")
-
-
-# COMMAND ----------
-
-import pandas as pd
-
-try:
-    df_log = pd.read_csv("meu_historico_local.csv")
-except FileNotFoundError:
-    print("ℹ️ 'meu_historico_local.csv' não encontrado; pulando pré-visualização.")
-
-
-# COMMAND ----------
-
-if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    df["max_50"] = df.groupby("criptomoeda")["valor_fechamento"].transform(lambda x: x.rolling(window=50, min_periods=1).max())
-
-# COMMAND ----------
-
-import numpy as np
-
-def gradiente_serie(y: np.ndarray) -> float:
-    """Calcula o gradiente (inclinação) linear de uma série."""
-    arr = np.asarray(y, dtype=float)
-    if arr.size < 2 or np.isnan(arr).any():
-        return np.nan
-    x = np.arange(arr.size, dtype=float)
-    a, _b = np.polyfit(x, arr, 1)
-    return float(a)
-
-# tamanho da janela para o cálculo
-N_BARRAS_GRADIENTE = 5
-
-if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    df["gradiente_ema_curto"] = (
-        df["ema_short"]
-        .rolling(window=N_BARRAS_GRADIENTE, min_periods=2)
-        .apply(gradiente_serie, raw=True)
-    )
-
-    df["gradiente_ema_longo"] = (
-        df["ema_long"]
-        .rolling(window=N_BARRAS_GRADIENTE, min_periods=2)
-        .apply(gradiente_serie, raw=True)
-    )
-
-# COMMAND ----------
-
-# Converte o DataFrame PySpark para Pandas
-if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    df_pandas = df
-    # Salva como um único arquivo CSV local
-    df_pandas.to_csv("previsoes_df.csv", index=False)
-
-# COMMAND ----------
-
-# =========================
-# 🔬 TESTE: ÚNICO GRADIENTE POR PERÍODO (sem gatilhos)
-# =========================
-
-# Série base para calcular o gradiente (troque para "ema_long" ou "valor_fechamento" se quiser)
-SERIE_BASE = "ema_short"
-
-# Garante EMAs caso ainda não existam
-if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    if "ema_short" not in df.columns:
-        df = df.sort_values("data") if "data" in df.columns else df
-        df["ema_short"] = df["valor_fechamento"].ewm(span=7, adjust=False).mean()
-    if "ema_long" not in df.columns:
-        df["ema_long"]  = df["valor_fechamento"].ewm(span=40, adjust=False).mean()
-
-    # Copia base
-    df2 = df.copy()
-
-# Função para gradiente (slope) via regressão linear na janela N
-def _rolling_slope(series: pd.Series, n: int) -> pd.Series:
-    def _slope(x):
-        idx = np.arange(len(x), dtype=float)
-        a, _b = np.polyfit(idx, x, 1)
-        return a
-    return series.rolling(window=n, min_periods=n).apply(_slope, raw=True)
-
-# Períodos a testar (ajuste à vontade)
-periodos = [3, 5, 7, 10, 12, 15, 20]
-
-# Calcula UM conjunto de gradientes, todos sobre a mesma série base
-if 'df' in locals() and isinstance(df, pd.DataFrame) and not df.empty:
-    if SERIE_BASE not in df2.columns:
-        print(f"[WARN] Série base '{SERIE_BASE}' não encontrada nas colunas do DF. Pulando cálculo de gradientes.")
-    else:
-        for n in periodos:
-            df2[f"grad_n{n}"] = _rolling_slope(df2[SERIE_BASE].astype(float), n)
-
-        # Painel amigável
-        print("====================")
-        print("🗂️ Colunas incluídas:")
-        cols_fixas = ["data"] if "data" in df2.columns else []
-        cols_fixas += ["valor_fechamento", "ema_short", "ema_long"]
-
-        cols_view = [c for c in cols_fixas if c in df2.columns] + [f"grad_n{n}" for n in periodos]
-        with pd.option_context("display.width", 220, "display.max_columns", None, "display.float_format", "{:.6f}".format):
-            pass  # Removido o print da tabela
-
-        # Resumo da última barra
-        last_idx = df2.index[-1]
-        print(f"📍 RESUMO (última barra) | base={SERIE_BASE}")
-        print("====================")
-        vals = []
-        if "valor_fechamento" in df2.columns: vals.append(f"close={df2.loc[last_idx,'valor_fechamento']:.6f}")
-        if "ema_short" in df2.columns:        vals.append(f"ema_short={df2.loc[last_idx,'ema_short']:.6f}")
-        if "ema_long" in df2.columns:         vals.append(f"ema_long={df2.loc[last_idx,'ema_long']:.6f}")
-        print("  " + "  ".join(vals))
-
-        for n in periodos:
-            g = df2.loc[last_idx, f"grad_n{n}"]
-            print(f"  N={n:>2} → grad={g:.6f}")
-
-        # (opcional) exportar CSV:
-        df2.to_csv("gradiente_unico_por_periodo.csv", index=False)
-else:
-    print("[WARN] DataFrame df ou df2 está vazio ou não definido. Pulando cálculo de gradientes.")
-
-print("========== FIM DO BLOCO: HISTÓRICO DE TRADES ==========\n", flush=True)
+    print("DataFrame de candles está vazio ou inválido.")
 
 import time
-import threading
 
-def loop_principal():
-    import time
-    ultimo_candle_anterior = None
-    while True:
-        try:
-            END_DATE = datetime.now(UTC)
-
-
-
-
-
-
-
-            START_DATE = END_DATE - timedelta(hours=48)
-            df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE, debug=True)
-            if df.empty:
-                print("[INFO] Forçando fallback CCXT para candles mais recentes.")
-                time.sleep(60)
-                continue
-
-            # Evita processar candle repetido
-            if "data" in df.columns:
-                ultimo_candle = df["data"].iloc[-1]
-                if ultimo_candle_anterior == ultimo_candle:
-                    print("[WARN] Candle repetido, dados podem estar desatualizados.", flush=True)
-                    time.sleep(60)
-                    continue
-                ultimo_candle_anterior = ultimo_candle
-
-            # Instancia logger e estratégia
-            trade_logger = TradeLogger(df_columns=df.columns, csv_path="/tmp/trade_log.csv")
-            strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger, debug=True)
-
-            # Sincroniza estado local com exchange
-            pos = strategy._posicao_aberta()
-            if pos and float(pos.get("contracts", 0)) > 0:
-                lado_atual = strategy._norm_side(pos.get("side") or pos.get("positionSide"))
-                print(f"🧭 Posição detectada na exchange: {lado_atual} qty={pos.get('contracts')} entry={pos.get('entryPrice') or pos.get('entryPx')}")
-                strategy._last_pos_side = lado_atual
-            else:
-                strategy._last_pos_side = None
-
-            # Executa a estratégia
-            strategy.step(df, usd_to_spend=10)
-
-            # Loga status após execução
-            pos_after = strategy._posicao_aberta()
-            if pos_after and float(pos_after.get("contracts", 0)) > 0:
-                print(f"📊 Posição após execução: {strategy._norm_side(pos_after.get('side'))} qty={pos_after.get('contracts')}")
-            else:
-                print("📊 Sem posição após execução.")
-
-            time.sleep(60)
-        except Exception as e:
-            print(f"[ERRO] Loop principal falhou: {e}", flush=True)
-            time.sleep(60)
-
-from flask import Flask, send_file
-
-app = Flask(__name__)
-
-@app.route("/download-trade-log")
-def download_trade_log():
-    path = "/tmp/trade_log.csv"
-    if os.path.exists(path):
-        return send_file(path, as_attachment=True)
-    return "Arquivo não encontrado.", 404
-
-if __name__ == "__main__":
-    t = threading.Thread(target=loop_principal, daemon=True)
-    t.start()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
-
-import os
-import time
-import json
-import base64
-import requests
-import jwt  # PyJWT
-
-def generate_jwt(app_id, private_key):
-    now = int(time.time())
-    payload = {
-        "iat": now - 60,
-        "exp": now + (10 * 60),
-        "iss": app_id
-    }
-    jwt_token = jwt.encode(payload, private_key, algorithm="RS256")
-    return jwt_token
-
-def get_installation_token(app_id, installation_id, private_key):
-    jwt_token = generate_jwt(app_id, private_key)
-    url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
-    headers = {
-        "Authorization": f"Bearer {jwt_token}",
-        "Accept": "application/vnd.github+json"
-    }
-    resp = requests.post(url, headers=headers)
-    if resp.status_code == 201:
-        token = resp.json()["token"]
-        return token
-    else:
-        print(f"❌ Falha ao obter Installation Token: {resp.status_code} {resp.text}")
-        return None
-
-def get_file_sha(repo, path, token):
-    url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json"
-    }
-    resp = requests.get(url, headers=headers)
-    if resp.status_code == 200:
-        return resp.json()["sha"]
-    return None
-
-def commit_file(repo, branch, path_local, path_repo, token, commit_message):
-    # Lê e codifica o arquivo local
-    with open(path_local, "rb") as f:
-        content = base64.b64encode(f.read()).decode("utf-8")
-
-    sha = get_file_sha(repo, path_repo, token)
-    url = f"https://api.github.com/repos/{repo}/contents/{path_repo}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json"
-    }
-    data = {
-        "message": commit_message,
-        "content": content,
-        "branch": branch
-    }
-    if sha:
-        data["sha"] = sha
-
-    resp = requests.put(url, headers=headers, data=json.dumps(data))
-    if resp.status_code in (200, 201):
-        commit_url = resp.json()["commit"]["html_url"]
-        print(f"✅ Commit realizado: {commit_url}")
-        return commit_url
-    else:
-        print(f"❌ Falha ao commitar arquivo: {resp.status_code} {resp.text}")
-        return None
-
-def main():
-    repo = "Jao-jpedro/Cripto"
-    branch = "main"
-    path_local = "/tmp/trade_log.csv"
-    path_repo = "trade_log.csv"
-    commit_message = "Atualização automática do trade_log.csv"
-
-    app_id = os.getenv("GITHUB_APP_ID")
-    installation_id = os.getenv("GITHUB_INSTALLATION_ID")
-    private_key = os.getenv("GITHUB_APP_PRIVATE_KEY")
-
-    if not all([app_id, installation_id, private_key]):
-        print("❌ Variáveis de ambiente do GitHub App não configuradas.")
-        return
-
-    token = get_installation_token(app_id, installation_id, private_key)
-    if not token:
-        return
-
-    if not os.path.exists(path_local):
-        print(f"❌ Arquivo local não encontrado: {path_local}")
-        return
-
-    commit_file(repo, branch, path_local, path_repo, token, commit_message)
-
-if __name__ == "__main__":
-    main()
-
-import pandas as pd
-import numpy as np
-
-class State:
-    FLAT = "FLAT"
-    LONG = "LONG"
-    SHORT = "SHORT"
-
-class EMAGradientATRStrategy:
-    def __init__(self, ema_short=7, ema_long=21, grad_window=5, atr_window=14, vol_window=20,
-                 atr_pct_min=0.0015, atr_pct_max=0.025, band_k=0.25, cooldown_bars=4, consistency_bars=3, logger=None):
-        self.ema_short = ema_short
-        self.ema_long = ema_long
-        self.grad_window = grad_window
-        self.atr_window = atr_window
-        self.vol_window = vol_window
-        self.atr_pct_min = atr_pct_min
-        self.atr_pct_max = atr_pct_max
-        self.band_k = band_k
-        self.cooldown_bars = cooldown_bars
-        self.consistency_bars = consistency_bars
-        self.state = State.FLAT
-        self.cooldown = 0
-        self.logs = []
-        self.logger = logger
-
-    def calc_indicators(self, df):
-        df = df.copy()
-        df['ema7'] = df['valor_fechamento'].ewm(span=self.ema_short, adjust=False).mean()
-        df['ema21'] = df['valor_fechamento'].ewm(span=self.ema_long, adjust=False).mean()
-        df['atr'] = df['valor_fechamento'].rolling(self.atr_window).apply(
-            lambda x: np.mean(np.abs(np.diff(x))), raw=True)
-        df['atr_pct'] = df['atr'] / df['valor_fechamento']
-        df['vol_sma'] = df['volume_compra'].rolling(self.vol_window).mean()
-        df['grad_ema7'] = df['ema7'].rolling(self.grad_window).apply(
-            lambda x: np.polyfit(np.arange(len(x)), x, 1)[0] / x[-1] if x[-1] != 0 else 0, raw=True)
-        return df
-
-    def log(self, msg):
-        self.logs.append(msg)
-        print(msg)
-        if self.logger:
-            self.logger.append_event(pd.DataFrame(), evento="audit", tipo="info", exec_price=None, exec_amount=None, order_id=None)
-
-    def step(self, df):
-        df = self.calc_indicators(df)
-        for i in range(len(df)):
-            row = df.iloc[i]
-            # Cooldown
-            if self.cooldown > 0:
-                self.cooldown -= 1
-                self.log(f"Cooldown ativo ({self.cooldown} barras restantes). Nenhuma entrada permitida.")
-                continue
-
-            # No-Trade Zone
-            if abs(row['ema7'] - row['ema21']) < 0.05 * row['atr'] or not (self.atr_pct_min <= row['atr_pct'] <= self.atr_pct_max):
-                self.log("No-Trade Zone: EMAs muito próximos ou ATR% fora da faixa saudável.")
-                continue
-
-            # Volume
-            if row['volume_compra'] <= row['vol_sma']:
-                self.log("Volume abaixo da média. Sinal ignorado.")
-                continue
-
-            # Estados e transições
-            if self.state == State.FLAT:
-                # LONG
-                if (row['ema7'] > row['ema21'] and
-                    all(df['grad_ema7'].iloc[max(0, i-self.consistency_bars+1):i+1] > 0) and
-                    row['valor_fechamento'] > row['ema7'] + self.band_k * row['atr']):
-                    self.state = State.LONG
-                    self.log(f"Entrando em LONG na barra {i}. Motivo: Sinal consistente e rompimento.")
-                    self.cooldown = 0
-                    # EXECUTA ORDEM NA HYPERLIQUID
-                    try:
-                        price = row['valor_fechamento']
-                        amount = 10 / price  # Exemplo: $10 por trade
-                        ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
-                        self.log(f"Ordem LONG executada: {ordem}")
-                        trade_logger.append_event(df.iloc[[i]], evento="entrada", tipo="long", exec_price=price, exec_amount=amount)
-                    except Exception as e:
-                        self.log(f"Erro ao abrir LONG: {e}")
-                    continue
-                # SHORT
-                if (row['ema7'] < row['ema21'] and
-                    all(df['grad_ema7'].iloc[max(0, i-self.consistency_bars+1):i+1] < 0) and
-                    row['valor_fechamento'] < row['ema7'] - self.band_k * row['atr']):
-                    self.state = State.SHORT
-                    self.log(f"Entrando em SHORT na barra {i}. Motivo: Sinal consistente e rompimento.")
-                    self.cooldown = 0
-                    # EXECUTA ORDEM NA HYPERLIQUID
-                    try:
-                        price = row['valor_fechamento']
-                        amount = 10 / price
-                        ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
-                        self.log(f"Ordem SHORT executada: {ordem}")
-                        trade_logger.append_event(df.iloc[[i]], evento="entrada", tipo="short", exec_price=price, exec_amount=amount)
-                    except Exception as e:
-                        self.log(f"Erro ao abrir SHORT: {e}")
-                    continue
-
-            elif self.state == State.LONG:
-                # Saída por gradiente inverso ou cruzamento
-                if (all(df['grad_ema7'].iloc[max(0, i-2):i+1] <= 0) or row['ema7'] < row['ema21']):
-                    self.state = State.FLAT
-                    self.cooldown = self.cooldown_bars
-                    self.log(f"Saindo de LONG na barra {i}. Motivo: Gradiente inverso ou cruzamento EMA.")
-                    # FECHA POSIÇÃO NA HYPERLIQUID
-                    try:
-                        price = row['valor_fechamento']
-                        amount = 10 / price
-                        ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
-                        self.log(f"Ordem de saída LONG executada: {ordem}")
-                        trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="long", exec_price=price, exec_amount=amount)
-                    except Exception as e:
-                        self.log(f"Erro ao fechar LONG: {e}")
-                    continue
-                # Stop Loss
-                if row['valor_fechamento'] < row['ema7'] - 1.5 * row['atr']:
-                    self.state = State.FLAT
-                    self.cooldown = self.cooldown_bars
-                    self.log(f"Stop Loss LONG na barra {i}. Motivo: Preço abaixo do limite ATR.")
-                    try:
-                        price = row['valor_fechamento']
-                        amount = 10 / price
-                        ordem = dex.create_order(SYMBOL_HL, "market", "sell", amount, price)
-                        self.log(f"Ordem de stop LONG executada: {ordem}")
-                        trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="long", exec_price=price, exec_amount=amount)
-                    except Exception as e:
-                        self.log(f"Erro ao fechar LONG: {e}")
-                    continue
-
-            elif self.state == State.SHORT:
-                # Saída por gradiente inverso ou cruzamento
-                if (all(df['grad_ema7'].iloc[max(0, i-2):i+1] >= 0) or row['ema7'] > row['ema21']):
-                    self.state = State.FLAT
-                    self.cooldown = self.cooldown_bars
-                    self.log(f"Saindo de SHORT na barra {i}. Motivo: Gradiente inverso ou cruzamento EMA.")
-                    try:
-                        price = row['valor_fechamento']
-                        amount = 10 / price
-                        ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
-                        self.log(f"Ordem de saída SHORT executada: {ordem}")
-                        trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="short", exec_price=price, exec_amount=amount)
-                    except Exception as e:
-                        self.log(f"Erro ao fechar SHORT: {e}")
-                    continue
-                # Stop Loss
-                if row['valor_fechamento'] > row['ema7'] + 1.5 * row['atr']:
-                    self.state = State.FLAT
-                    self.cooldown = self.cooldown_bars
-                    self.log(f"Stop Loss SHORT na barra {i}. Motivo: Preço acima do limite ATR.")
-                    try:
-                        price = row['valor_fechamento']
-                        amount = 10 / price
-                        ordem = dex.create_order(SYMBOL_HL, "market", "buy", amount, price)
-                        self.log(f"Ordem de stop SHORT executada: {ordem}")
-                        trade_logger.append_event(df.iloc[[i]], evento="saida", tipo="short", exec_price=price, exec_amount=amount)
-                    except Exception as e:
-                        self.log(f"Erro ao fechar SHORT: {e}")
-                    continue
-
-# =========================
-# 🔧 INSTÂNCIA E EXECUÇÃO
-# =========================
-
-if __name__ == "__main__":
-    # Carregue seu DataFrame df normalmente
-    # df = build_df(...)
-    if isinstance(df, pd.DataFrame) and not df.empty:
-        # Se quiser logar auditoria no TradeLogger, passe logger=trade_logger
-        strat = EMAGradientATRStrategy(logger=None)
-        strat.backtest(df)
+while True:
+    # Atualize df aqui se necessário
+    try:
+        strat.step(df, usd_to_spend=10)
+    except Exception as e:
+        print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
+    time.sleep(60)  # espera 60 segundos antes do próximo passo
