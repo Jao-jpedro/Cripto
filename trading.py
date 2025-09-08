@@ -1498,6 +1498,7 @@ import threading
 
 def loop_principal():
     import time
+    ultimo_candle_anterior = None
     while True:
         try:
             END_DATE = datetime.now(UTC)
@@ -1505,28 +1506,45 @@ def loop_principal():
             df = build_df(SYMBOL_BINANCE, INTERVAL, start=START_DATE, end=END_DATE, debug=True)
             if df.empty:
                 print("[INFO] Forçando fallback CCXT para candles mais recentes.")
-            if isinstance(df, pd.DataFrame) and not df.empty and "data" in df.columns:
+                time.sleep(60)
+                continue
+
+            # Evita processar candle repetido
+            if "data" in df.columns:
                 ultimo_candle = df["data"].iloc[-1]
-                if 'ultimo_candle_anterior' in locals() and ultimo_candle == ultimo_candle_anterior:
+                if ultimo_candle_anterior == ultimo_candle:
                     print("[WARN] Candle repetido, dados podem estar desatualizados.", flush=True)
                     time.sleep(60)
                     continue
                 ultimo_candle_anterior = ultimo_candle
-            if isinstance(df, pd.DataFrame) and not df.empty:
-                trade_logger = TradeLogger(df_columns=df.columns, csv_path="/tmp/trade_log.csv")
-                strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger)
-                strategy.step(df, usd_to_spend=10)
+
+            # Instancia logger e estratégia
+            trade_logger = TradeLogger(df_columns=df.columns, csv_path="/tmp/trade_log.csv")
+            strategy = EMAGradientStrategy(dex, SYMBOL_HL, GradientConfig(), logger=trade_logger, debug=True)
+
+            # Sincroniza estado local com exchange
+            pos = strategy._posicao_aberta()
+            if pos and float(pos.get("contracts", 0)) > 0:
+                lado_atual = strategy._norm_side(pos.get("side") or pos.get("positionSide"))
+                print(f"🧭 Posição detectada na exchange: {lado_atual} qty={pos.get('contracts')} entry={pos.get('entryPrice') or pos.get('entryPx')}")
+                strategy._last_pos_side = lado_atual
             else:
-                print("[INFO] Sem dados ou DEX indisponível; pulando estratégia.", flush=True)
+                strategy._last_pos_side = None
+
+            # Executa a estratégia
+            strategy.step(df, usd_to_spend=10)
+
+            # Loga status após execução
+            pos_after = strategy._posicao_aberta()
+            if pos_after and float(pos_after.get("contracts", 0)) > 0:
+                print(f"📊 Posição após execução: {strategy._norm_side(pos_after.get('side'))} qty={pos_after.get('contracts')}")
+            else:
+                print("📊 Sem posição após execução.")
+
             time.sleep(60)
         except Exception as e:
             print(f"[ERRO] Loop principal falhou: {e}", flush=True)
             time.sleep(60)
-
-if __name__ == "__main__":
-    t = threading.Thread(target=loop_principal, daemon=True)
-    t.start()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
 
 from flask import Flask, send_file
 
@@ -1538,3 +1556,8 @@ def download_trade_log():
     if os.path.exists(path):
         return send_file(path, as_attachment=True)
     return "Arquivo não encontrado.", 404
+
+if __name__ == "__main__":
+    t = threading.Thread(target=loop_principal, daemon=True)
+    t.start()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
