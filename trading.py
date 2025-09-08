@@ -1935,27 +1935,31 @@ def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = N
 
 SYMBOL_HL = "SOL/USDC:USDC"  # Ajuste para o formato aceito pelo Hyperliquid
 
-# Instancia o logger de trades
-trade_logger = TradeLogger(df.columns if isinstance(df, pd.DataFrame) else [])
+if __name__ == "__main__":
+    # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
+    EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
-# Instancia a estratégia
-strat = EMAGradientStrategy(dex=dex, symbol=SYMBOL_HL, logger=trade_logger, debug=True)
+    def executar_estrategia(df_in: pd.DataFrame, dex_in, trade_logger_in: TradeLogger,
+                            usd_to_spend: float = 10.0, loop: bool = True, sleep_seconds: int = 60):
+        """Compatível com chamadas antigas (Render.com)."""
+        if not isinstance(df_in, pd.DataFrame) or df_in.empty:
+            print("DataFrame de candles está vazio ou inválido."); return
+        strat_local = EMAGradientStrategy(dex=dex_in, symbol=SYMBOL_HL, logger=trade_logger_in, debug=True)
+        try:
+            strat_local.step(df_in, usd_to_spend=usd_to_spend)
+        except Exception as e:
+            print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
+        if not loop:
+            return
+        import time as _t
+        while True:
+            try:
+                strat_local.step(df_in, usd_to_spend=usd_to_spend)
+            except Exception as e:
+                print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
+            _t.sleep(max(1, int(sleep_seconds)))
 
-# Executa um passo da estratégia (exemplo: operar $10)
-if isinstance(df, pd.DataFrame) and not df.empty:
-    try:
-        strat.step(df, usd_to_spend=10)
-    except Exception as e:
-        print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
-else:
-    print("DataFrame de candles está vazio ou inválido.")
-
-import time
-
-while True:
-    # Atualize df aqui se necessário
-    try:
-        strat.step(df, usd_to_spend=10)
-    except Exception as e:
-        print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
-    time.sleep(60)  # espera 60 segundos antes do próximo passo
+    # Instancia o logger de trades
+    trade_logger = TradeLogger(df.columns if isinstance(df, pd.DataFrame) else [])
+    # Chama o executor compatível (mantém comportamento anterior)
+    executar_estrategia(df, dex, trade_logger)
