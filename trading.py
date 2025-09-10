@@ -59,6 +59,13 @@ class ExchangeClient:
                     # Ensure we operate on perps by default
                     "options": {"defaultType": "swap"},
                 })
+                # Allow overriding default slippage for market orders
+                try:
+                    sl_env = os.getenv("HL_MARKET_SLIPPAGE")
+                    if sl_env is not None:
+                        self._dex.options["defaultSlippage"] = float(sl_env)
+                except Exception:
+                    pass
                 try:
                     # warm up markets to validate symbols early
                     self._dex.load_markets()
@@ -104,12 +111,13 @@ class ExchangeClient:
         if self.live and self._dex is not None:
             try:
                 params = {"reduceOnly": bool(reduce_only)}
-                # map internal slippage_bps to HL slippage fraction; ensure a sane minimum (0.1%)
-                try:
-                    sl = max(self.slippage_bps / 1e4, 0.001)
-                except Exception:
-                    sl = 0.001
-                params["slippage"] = sl
+                # Optional: override CCXT defaultSlippage via env var
+                sl_env = os.getenv("HL_MARKET_SLIPPAGE")
+                if sl_env is not None:
+                    try:
+                        params["slippage"] = float(sl_env)
+                    except Exception:
+                        pass
                 ord_side = side.lower()
                 # Use market orders por simplicidade. price é ignorado em market.
                 res = self._dex.create_order(market_symbol, "market", ord_side, qty, price, params)
@@ -396,6 +404,13 @@ class StrategyRunner:
 
     def wants_entry(self, i: int, df: pd.DataFrame) -> Optional[OrderIntent]:
         if self.pos.is_open():
+            # Apenas para logging: verifica se haveria sinal e marca como ignorado
+            try:
+                intent = self.strategy.entry_signal(i, df, self.ind)
+                if intent is not None:
+                    print(f"[SKIP] owner={self.owner} sinal {intent.side} ignorado: já existe posição aberta")
+            except Exception:
+                pass
             return None
         # cooldown baseado em histórico de barras
         if i <= self.entry_block_until:
@@ -427,6 +442,15 @@ class StrategyRunner:
             if reason is not None:
                 ex_px = self._slip(px, self.pos.side or "LONG", False)
                 qty = self.pos.qty
+                # First, if live, try to actually send the reduce-only order; only close upon ack
+                if getattr(self.exch, "live", False):
+                    res = self.exch.place_order(self.symbol, "SELL" if self.pos.side == "LONG" else "BUY", qty, price=ex_px, reduce_only=True)
+                    if not res.get("live_ack"):
+                        # keep position open; do not book PnL
+                        print(f"[LIVE] EXIT REJECTED owner={self.owner} side={self.pos.side} reason={reason} px={ex_px:.6f} | keeping position open")
+                        self._mark_equity(ts)
+                        return
+                # Book exit locally (backtest or live ack ok)
                 pnl_price = (ex_px - self.pos.entry_px) * qty if self.pos.side == "LONG" else (self.pos.entry_px - ex_px) * qty
                 fees = self._fee_cost()  # exit fee only (entry fee was at entry)
                 pnl = pnl_price - fees
@@ -439,10 +463,8 @@ class StrategyRunner:
                     "pnl": pnl, "roe": ret, "owner": self.owner, "reason_exit": reason,
                     "mfe": self.pos.mfe, "mae": self.pos.mae, "ret": ret,
                 })
-                # reduceOnly close (live: pass reduce_only=True)
-                res = self.exch.place_order(self.symbol, "SELL" if self.pos.side == "LONG" else "BUY", qty, price=ex_px, reduce_only=True)
                 print(f"[EXIT] owner={self.owner} side={self.pos.side} reason={reason} px={ex_px:.6f} pnl={pnl:.2f} roe={ret:.4f} bal={self.balance:.2f}")
-                if getattr(self.exch, "live", False) and res.get("live_ack"):
+                if getattr(self.exch, "live", False):
                     discord_notify(self.owner, f"[LIVE] EXIT | {self.symbol} | owner={self.owner} | side={self.pos.side} | reason={reason} | px={ex_px:.4f} | pnl={pnl:.2f} | roe={ret:.4f} | bal={self.balance:.2f}")
                 else:
                     discord_notify(self.owner, f"[DRY-RUN] EXIT | {self.symbol} | owner={self.owner} | side={self.pos.side} | reason={reason} | px={ex_px:.4f} | pnl={pnl:.2f} | roe={ret:.4f} | bal={self.balance:.2f}")
@@ -476,11 +498,16 @@ class StrategyRunner:
         # entry fee
         self.balance -= self._fee_cost()
         res = self.exch.place_order(self.symbol, "BUY" if side == "LONG" else "SELL", qty, price=en_px, reduce_only=False)
+        # In live mode, only open position if exchange acknowledged
+        if getattr(self.exch, "live", False):
+            if not res.get("live_ack"):
+                print(f"[LIVE] ENTER REJECTED owner={self.owner} side={side} px={en_px:.6f} | not opening position")
+                return
         self.pos = Position(side=side, qty=qty, entry_px=en_px, entry_ts=ts, bars_held=0)
         self.last_entry_idx = i
         self.last_action_idx = i
         print(f"[ENTER] owner={self.owner} side={side} px={en_px:.6f} qty={qty:.6f} i={i} bal={self.balance:.2f}")
-        if getattr(self.exch, "live", False) and res.get("live_ack"):
+        if getattr(self.exch, "live", False):
             discord_notify(self.owner, f"[LIVE] ENTER | {self.symbol} | owner={self.owner} | side={side} | px={en_px:.4f} | qty={qty:.6f} | i={i}")
         else:
             discord_notify(self.owner, f"[DRY-RUN] ENTER | {self.symbol} | owner={self.owner} | side={side} | px={en_px:.4f} | qty={qty:.6f} | i={i}")
