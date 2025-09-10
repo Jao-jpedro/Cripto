@@ -48,6 +48,19 @@ class ExchangeClient:
         self.fee_bps = float(fee_bps)
         self.slippage_bps = float(slippage_bps)
         # In live mode, instantiate SDK/CCXT here. This is a backtest-friendly stub.
+        self.live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+        self._dex = None
+        if self.live:
+            try:
+                import ccxt  # type: ignore
+                self._dex = ccxt.hyperliquid({
+                    "walletAddress": self.vault_address,
+                    "privateKey": self.private_key,
+                })
+                print(f"[LIVE] Hyperliquid client inicializado para owner={self.owner} vault=...{self.vault_address[-6:]}")
+            except Exception as e:
+                print(f"[LIVE] Falha ao inicializar ccxt.hyperliquid: {type(e).__name__}: {e}. Caindo para DRY-RUN.")
+                self.live = False
 
     def get_price(self, symbol: str, mid_px: float) -> float:
         # In live: fetch best bid/ask or mark price. For backtest, use provided mid.
@@ -72,6 +85,20 @@ class ExchangeClient:
             "owner": self.owner,
         }
         print(f"[ORDER] owner={self.owner} vault={self.vault_address[-6:]} side={side} qty={qty:.6f} px={price if price is not None else 'MKT'} reduceOnly={reduce_only}")
+        if self.live and self._dex is not None:
+            try:
+                params = {"reduceOnly": bool(reduce_only)}
+                ord_side = side.lower()
+                # Use market orders por simplicidade. price é ignorado em market.
+                res = self._dex.create_order(symbol, "market", ord_side, qty, None, params)
+                payload["live_ack"] = True
+                payload["live_resp"] = res
+                return payload
+            except Exception as e:
+                payload["live_ack"] = False
+                payload["error"] = f"{type(e).__name__}: {e}"
+                print(f"[LIVE] Falha ao enviar ordem: {payload['error']}")
+                return payload
         return payload
 
     def cancel_all(self, symbol: str) -> None:
@@ -291,7 +318,7 @@ class VWAPPullback(StrategyBase):
 class StrategyRunner:
     def __init__(self, *, owner: str, strategy: StrategyBase, exch: ExchangeClient, risk: RiskManager,
                  symbol: str, notional_per_trade: float, fee_bps: float, slippage_bps: float, leverage: float = 20.0,
-                 cooldown_bars: int = 0):
+                 cooldown_bars: int = 0, min_hold_bars: int = 1):
         self.owner = owner
         self.strategy = strategy
         self.exch = exch
@@ -312,6 +339,9 @@ class StrategyRunner:
         self.cooldown_bars = int(cooldown_bars)
         self.entry_block_until: int = -1
         self.last_entry_idx: int = -1
+        self.last_exit_idx: int = -1
+        self.last_action_idx: int = -1
+        self.min_hold_bars = int(min_hold_bars)
 
     def _slip(self, px: float, side: str, is_entry: bool) -> float:
         mult = 1 + (self.slippage_bps / 1e4)
@@ -349,6 +379,8 @@ class StrategyRunner:
         if i <= self.entry_block_until:
             print(f"[SKIP] owner={self.owner} cooldown active until i={self.entry_block_until} (now i={i})")
             return None
+        if i == self.last_action_idx:
+            return None
         intent = self.strategy.entry_signal(i, df, self.ind)
         if intent:
             print(f"[SIGNAL] owner={self.owner} {intent.side} @i={i}")
@@ -363,8 +395,12 @@ class StrategyRunner:
         if self.pos.is_open():
             self.pos.bars_held += 1
             self.pos.update_excursions(px)
+            # evita múltiplos EXIT no mesmo índice (reprocesso)
+            if i == self.last_exit_idx:
+                self._mark_equity(ts)
+                return
             reason, new_trail = self.risk.evaluate(self.pos, px, atr_now)
-            if reason is None and self.strategy.exit_signal(i, df, self.ind, self.pos):
+            if reason is None and self.pos.bars_held >= self.min_hold_bars and self.strategy.exit_signal(i, df, self.ind, self.pos):
                 reason = "exit_signal"
             if reason is not None:
                 ex_px = self._slip(px, self.pos.side or "LONG", False)
@@ -382,13 +418,18 @@ class StrategyRunner:
                     "mfe": self.pos.mfe, "mae": self.pos.mae, "ret": ret,
                 })
                 # reduceOnly close (live: pass reduce_only=True)
-                self.exch.place_order(self.symbol, "SELL" if self.pos.side == "LONG" else "BUY", qty, price=ex_px, reduce_only=True)
+                res = self.exch.place_order(self.symbol, "SELL" if self.pos.side == "LONG" else "BUY", qty, price=ex_px, reduce_only=True)
                 print(f"[EXIT] owner={self.owner} side={self.pos.side} reason={reason} px={ex_px:.6f} pnl={pnl:.2f} roe={ret:.4f} bal={self.balance:.2f}")
-                discord_notify(self.owner, f"EXIT | {self.symbol} | owner={self.owner} | side={self.pos.side} | reason={reason} | px={ex_px:.4f} | pnl={pnl:.2f} | roe={ret:.4f} | bal={self.balance:.2f}")
+                if getattr(self.exch, "live", False) and res.get("live_ack"):
+                    discord_notify(self.owner, f"[LIVE] EXIT | {self.symbol} | owner={self.owner} | side={self.pos.side} | reason={reason} | px={ex_px:.4f} | pnl={pnl:.2f} | roe={ret:.4f} | bal={self.balance:.2f}")
+                else:
+                    discord_notify(self.owner, f"[DRY-RUN] EXIT | {self.symbol} | owner={self.owner} | side={self.pos.side} | reason={reason} | px={ex_px:.4f} | pnl={pnl:.2f} | roe={ret:.4f} | bal={self.balance:.2f}")
                 self.pos = Position()
                 # aplica cooldown após saída
                 if self.cooldown_bars > 0:
                     self.entry_block_until = i + self.cooldown_bars
+                self.last_action_idx = i
+                self.last_exit_idx = i
             else:
                 self.pos.trail_px = new_trail
 
@@ -412,11 +453,15 @@ class StrategyRunner:
         qty = self.strategy.size_model(en_px, self.notional)
         # entry fee
         self.balance -= self._fee_cost()
-        self.exch.place_order(self.symbol, "BUY" if side == "LONG" else "SELL", qty, price=en_px, reduce_only=False)
+        res = self.exch.place_order(self.symbol, "BUY" if side == "LONG" else "SELL", qty, price=en_px, reduce_only=False)
         self.pos = Position(side=side, qty=qty, entry_px=en_px, entry_ts=ts, bars_held=0)
         self.last_entry_idx = i
+        self.last_action_idx = i
         print(f"[ENTER] owner={self.owner} side={side} px={en_px:.6f} qty={qty:.6f} i={i} bal={self.balance:.2f}")
-        discord_notify(self.owner, f"ENTER | {self.symbol} | owner={self.owner} | side={side} | px={en_px:.4f} | qty={qty:.6f} | i={i}")
+        if getattr(self.exch, "live", False) and res.get("live_ack"):
+            discord_notify(self.owner, f"[LIVE] ENTER | {self.symbol} | owner={self.owner} | side={side} | px={en_px:.4f} | qty={qty:.6f} | i={i}")
+        else:
+            discord_notify(self.owner, f"[DRY-RUN] ENTER | {self.symbol} | owner={self.owner} | side={side} | px={en_px:.4f} | qty={qty:.6f} | i={i}")
 
     def finalize(self, out_dir: Path):
         trades_df = pd.DataFrame(self.trades)
@@ -651,10 +696,8 @@ def main():
     exch_vw = ExchangeClient(private_key=vw_key, vault_address=vw_vault, owner="VWAP", fee_bps=fee_bps, slippage_bps=slippage_bps)
 
     # Strategy runners (independent state per owner)
-    r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp), symbol=symbol,
-                          notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage)
-    r_vw = StrategyRunner(owner="VWAP", strategy=vw, exch=exch_vw, risk=RiskManager(rp), symbol=symbol,
-                          notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage)
+    r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=1)
+    r_vw = StrategyRunner(owner="VWAP", strategy=vw, exch=exch_vw, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=1)
 
     # Sempre em modo live polling por padrão (independente de CSV local)
     out_dir = "/tmp/live_top2"
@@ -686,7 +729,7 @@ def main():
                 print(f"[LIVE] +{len(newer)} barras até {last_ts}")
         except Exception as e:
             print(f"[LIVE] erro no polling: {type(e).__name__}: {e}")
-        time.sleep(max(5, tf_s // 6))
+        time.sleep(10)
 
 
 if __name__ == "__main__":
