@@ -530,12 +530,15 @@ class Orchestrator:
                 "priority_rank": ",".join(order),
             })
 
-            # Ask entries and process
+            # Ask entries per owner; allow at most one position per owner (BB and VWAP can be open simultaneously)
             intents: Dict[str, Optional[OrderIntent]] = {o: self.runners[o].wants_entry(i, self.df) for o in owners}
-            # Execute in priority
             for o in order:
-                self.runners[o].try_enter(i, self.df, intents[o])
-            # Process bar (exits and equity mark)
+                r = self.runners[o]
+                if r.pos.is_open():
+                    continue
+                if intents.get(o):
+                    r.try_enter(i, self.df, intents[o])
+            # Process bar (exits and equity mark) for all
             for o in owners:
                 self.runners[o].process_bar(i, self.df)
 
@@ -574,7 +577,11 @@ class Orchestrator:
             })
             intents: Dict[str, Optional[OrderIntent]] = {o: self.runners[o].wants_entry(i, self.df) for o in owners}
             for o in order:
-                self.runners[o].try_enter(i, self.df, intents[o])
+                r = self.runners[o]
+                if r.pos.is_open():
+                    continue
+                if intents.get(o):
+                    r.try_enter(i, self.df, intents[o])
             for o in owners:
                 self.runners[o].process_bar(i, self.df)
         # persist incremental logs
