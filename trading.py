@@ -104,9 +104,15 @@ class ExchangeClient:
         if self.live and self._dex is not None:
             try:
                 params = {"reduceOnly": bool(reduce_only)}
+                # map internal slippage_bps to HL slippage fraction; ensure a sane minimum (0.1%)
+                try:
+                    sl = max(self.slippage_bps / 1e4, 0.001)
+                except Exception:
+                    sl = 0.001
+                params["slippage"] = sl
                 ord_side = side.lower()
                 # Use market orders por simplicidade. price é ignorado em market.
-                res = self._dex.create_order(market_symbol, "market", ord_side, qty, None, params)
+                res = self._dex.create_order(market_symbol, "market", ord_side, qty, price, params)
                 payload["live_ack"] = True
                 payload["live_resp"] = res
                 return payload
