@@ -74,6 +74,11 @@ class ExchangeClient:
         print(f"[ORDER] owner={self.owner} vault={self.vault_address[-6:]} side={side} qty={qty:.6f} px={price if price is not None else 'MKT'} reduceOnly={reduce_only}")
         return payload
 
+    def cancel_all(self, symbol: str) -> None:
+        # Live: cancel all open orders on this vaultAddress for symbol
+        print(f"[ORDER] cancel_all owner={self.owner} vault={self.vault_address[-6:]} symbol={symbol}")
+        return None
+
 
 # =============================
 # Discord notifications (optional)
@@ -102,10 +107,6 @@ def discord_notify(owner: str, text: str) -> None:
         requests.post(url, json=payload, timeout=5)
     except Exception as e:
         print(f"[DISCORD] falha ao enviar: {type(e).__name__}: {e}")
-
-    def cancel_all(self, symbol: str) -> None:
-        # Live: cancel all open orders on this vaultAddress for symbol
-        return None
 
 
 # =============================
