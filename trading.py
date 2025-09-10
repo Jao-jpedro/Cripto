@@ -71,6 +71,20 @@ class ExchangeClient:
                     self._dex.load_markets()
                 except Exception:
                     pass
+                # Log live USDC balance for visibility
+                try:
+                    bal = self._dex.fetch_balance()
+                    usdc = bal.get("USDC", {}) if isinstance(bal, dict) else {}
+                    total = float(usdc.get("total") or 0.0)
+                    used = float(usdc.get("used") or 0.0)
+                    free = usdc.get("free")
+                    if free is None:
+                        free = max(total - used, 0.0)
+                    else:
+                        free = float(free)
+                    print(f"[LIVE] {self.owner} USDC balance total={total:.2f} free={free:.2f} used={used:.2f}")
+                except Exception as e:
+                    print(f"[LIVE] {self.owner} falha ao obter saldo: {type(e).__name__}: {e}")
                 print(f"[LIVE] Hyperliquid client inicializado para owner={self.owner} vault=...{self.vault_address[-6:]}")
             except Exception as e:
                 print(f"[LIVE] Falha ao inicializar ccxt.hyperliquid: {type(e).__name__}: {e}. Caindo para DRY-RUN.")
@@ -110,7 +124,7 @@ class ExchangeClient:
         print(f"[ORDER] owner={self.owner} vault={self.vault_address[-6:]} side={side} qty={qty:.6f} px={price if price is not None else 'MKT'} reduceOnly={reduce_only}")
         if self.live and self._dex is not None:
             try:
-                params = {"reduceOnly": bool(reduce_only)}
+                params = {"reduceOnly": bool(reduce_only), "vaultAddress": self.vault_address}
                 # Optional: override CCXT defaultSlippage via env var
                 sl_env = os.getenv("HL_MARKET_SLIPPAGE")
                 if sl_env is not None:
@@ -520,9 +534,11 @@ class StrategyRunner:
         # If live, cap notional by available margin * leverage
         if getattr(self.exch, "live", False):
             max_n = self.exch.max_affordable_notional(self.leverage)
-            if max_n is not None:
-                # keep 95% buffer
-                desired_notional = min(desired_notional, 0.95 * max_n)
+            if max_n is None:
+                print(f"[SKIP] owner={self.owner} sinal {side} ignorado: saldo não disponível (fetch_balance falhou)")
+                return
+            # keep 95% buffer
+            desired_notional = min(desired_notional, 0.95 * max_n)
             if desired_notional < 10:  # HL min order cost is $10
                 print(f"[SKIP] owner={self.owner} sinal {side} ignorado: margem insuficiente (max_n={max_n:.2f} USDC equiv.)")
                 return
