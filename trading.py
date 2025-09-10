@@ -56,7 +56,14 @@ class ExchangeClient:
                 self._dex = ccxt.hyperliquid({
                     "walletAddress": self.vault_address,
                     "privateKey": self.private_key,
+                    # Ensure we operate on perps by default
+                    "options": {"defaultType": "swap"},
                 })
+                try:
+                    # warm up markets to validate symbols early
+                    self._dex.load_markets()
+                except Exception:
+                    pass
                 print(f"[LIVE] Hyperliquid client inicializado para owner={self.owner} vault=...{self.vault_address[-6:]}")
             except Exception as e:
                 print(f"[LIVE] Falha ao inicializar ccxt.hyperliquid: {type(e).__name__}: {e}. Caindo para DRY-RUN.")
@@ -74,9 +81,18 @@ class ExchangeClient:
                     reduce_only: bool = False, client_order_id: Optional[str] = None) -> Dict[str, Any]:
         # Live: send order with vaultAddress routing and reduceOnly flag as required by Hyperliquid.
         # Backtest: this is a no-op stub; execution handled in StrategyRunner using slippage/fees.
+        def _resolve_symbol(sym: str) -> str:
+            # Accept aliases like "SOL-PERP" and map to CCXT unified "SOL/USDC:USDC"
+            s = str(sym).upper().strip()
+            if s.endswith("-PERP") and len(s) > 5:
+                base = s[:-5]
+                return f"{base}/USDC:USDC"
+            return sym
+
+        market_symbol = _resolve_symbol(symbol)
         payload = {
             "vaultAddress": self.vault_address,
-            "symbol": symbol,
+            "symbol": market_symbol,
             "side": side,
             "qty": qty,
             "price": price,
@@ -90,7 +106,7 @@ class ExchangeClient:
                 params = {"reduceOnly": bool(reduce_only)}
                 ord_side = side.lower()
                 # Use market orders por simplicidade. price é ignorado em market.
-                res = self._dex.create_order(symbol, "market", ord_side, qty, None, params)
+                res = self._dex.create_order(market_symbol, "market", ord_side, qty, None, params)
                 payload["live_ack"] = True
                 payload["live_resp"] = res
                 return payload
@@ -657,7 +673,8 @@ class BinanceFeed:
 
 def main():
     # Parâmetros 100% definidos no código (exceto chaves/vaults)
-    symbol = "SOL-PERP"
+    # Use unified CCXT symbol for Hyperliquid perps (alias mapping also supported)
+    symbol = "SOL/USDC:USDC"
     timeframe = "15m"
     feed_symbol = "SOLUSDT"  # símbolo para feed da Binance
     fee_bps = 2.5
