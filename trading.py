@@ -477,12 +477,18 @@ class StrategyRunner:
 
         # Update open position
         if self.pos.is_open():
-            self.pos.bars_held += 1
             self.pos.update_excursions(px)
+            # Evita avaliar saída na mesma barra da entrada
+            if i == self.last_entry_idx:
+                # ainda na barra de entrada: não conta hold e não sai
+                self._mark_equity(ts)
+                return
             # evita múltiplos EXIT no mesmo índice (reprocesso)
             if i == self.last_exit_idx:
                 self._mark_equity(ts)
                 return
+            # agora sim, já estamos numa barra subsequente à entrada
+            self.pos.bars_held += 1
             reason, new_trail = self.risk.evaluate(self.pos, px, atr_now)
             if reason is None and self.pos.bars_held >= self.min_hold_bars and self.strategy.exit_signal(i, df, self.ind, self.pos):
                 reason = "exit_signal"
