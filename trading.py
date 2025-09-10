@@ -136,6 +136,28 @@ class ExchangeClient:
         print(f"[ORDER] cancel_all owner={self.owner} vault={self.vault_address[-6:]} symbol={symbol}")
         return None
 
+    # ---------- Live balance helpers ----------
+    def max_affordable_notional(self, leverage: float) -> Optional[float]:
+        if not (self.live and self._dex is not None):
+            return None
+        try:
+            bal = self._dex.fetch_balance()
+            usdc = bal.get("USDC", {}) if isinstance(bal, dict) else {}
+            total = float(usdc.get("total") or 0.0)
+            free = usdc.get("free")
+            used = usdc.get("used")
+            if free is None:
+                # fallback: free ~ total - used
+                free = float(total - float(used or 0.0))
+            else:
+                free = float(free)
+            free = max(free, 0.0)
+            # apply small buffer to avoid edge rejections
+            return float(free) * float(leverage)
+        except Exception as e:
+            print(f"[LIVE] Falha ao ler saldo: {type(e).__name__}: {e}")
+            return None
+
 
 # =============================
 # Discord notifications (optional)
@@ -494,7 +516,17 @@ class StrategyRunner:
         px = float(df["close"].iloc[i])
         side = intent.side
         en_px = self._slip(px, side, True)
-        qty = self.strategy.size_model(en_px, self.notional)
+        desired_notional = self.notional
+        # If live, cap notional by available margin * leverage
+        if getattr(self.exch, "live", False):
+            max_n = self.exch.max_affordable_notional(self.leverage)
+            if max_n is not None:
+                # keep 95% buffer
+                desired_notional = min(desired_notional, 0.95 * max_n)
+            if desired_notional < 10:  # HL min order cost is $10
+                print(f"[SKIP] owner={self.owner} sinal {side} ignorado: margem insuficiente (max_n={max_n:.2f} USDC equiv.)")
+                return
+        qty = self.strategy.size_model(en_px, desired_notional)
         # entry fee
         self.balance -= self._fee_cost()
         res = self.exch.place_order(self.symbol, "BUY" if side == "LONG" else "SELL", qty, price=en_px, reduce_only=False)
