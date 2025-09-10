@@ -300,6 +300,10 @@ class StrategyParams:
     # Entry/exit tolerances to create hysteresis around VWAP
     tol_entry: float = 0.002
     tol_exit: float = 0.004
+    # Ichimoku
+    tenkan: int = 9
+    kijun: int = 26
+    senkou: int = 52
 
 
 @dataclass
@@ -390,6 +394,60 @@ class VWAPPullback(StrategyBase):
             return c < v * (1 - tol)
         else:
             return c > v * (1 + tol)
+
+
+class IchimokuKumo(StrategyBase):
+    owner = "ICHIMOKU"
+
+    def compute_indicators(self, df: pd.DataFrame) -> Dict[str, pd.Series]:
+        high = pd.to_numeric(df["high"], errors="coerce")
+        low = pd.to_numeric(df["low"], errors="coerce")
+        close = pd.to_numeric(df["close"], errors="coerce")
+        p_t = max(int(self.params.tenkan), 1)
+        p_k = max(int(self.params.kijun), 1)
+        p_s = max(int(self.params.senkou), 1)
+        tenkan = (high.rolling(p_t, min_periods=1).max() + low.rolling(p_t, min_periods=1).min()) / 2.0
+        kijun = (high.rolling(p_k, min_periods=1).max() + low.rolling(p_k, min_periods=1).min()) / 2.0
+        ssa = (tenkan + kijun) / 2.0
+        ssb = (high.rolling(p_s, min_periods=1).max() + low.rolling(p_s, min_periods=1).min()) / 2.0
+        return {"tenkan": tenkan, "kijun": kijun, "ssa": ssa, "ssb": ssb}
+
+    def entry_signal(self, i: int, df: pd.DataFrame, ind: Dict[str, pd.Series]) -> Optional[OrderIntent]:
+        c = float(df["close"].iloc[i])
+        tenkan = float(ind["tenkan"].iloc[i])
+        kijun = float(ind["kijun"].iloc[i])
+        ssa = float(ind["ssa"].iloc[i])
+        ssb = float(ind["ssb"].iloc[i])
+        cloud_top = max(ssa, ssb)
+        cloud_bot = min(ssa, ssb)
+        # Cross conditions (use previous values to detect cross at i)
+        if i > 0:
+            t_prev = float(ind["tenkan"].iloc[i-1])
+            k_prev = float(ind["kijun"].iloc[i-1])
+        else:
+            t_prev = tenkan
+            k_prev = kijun
+        bull_cross = (t_prev <= k_prev) and (tenkan > kijun)
+        bear_cross = (t_prev >= k_prev) and (tenkan < kijun)
+        if c > cloud_top and bull_cross:
+            return OrderIntent("LONG", "kumo_bull_break")
+        if c < cloud_bot and bear_cross:
+            return OrderIntent("SHORT", "kumo_bear_break")
+        return None
+
+    def exit_signal(self, i: int, df: pd.DataFrame, ind: Dict[str, pd.Series], pos: Position) -> bool:
+        c = float(df["close"].iloc[i])
+        kijun = float(ind["kijun"].iloc[i])
+        ssa = float(ind["ssa"].iloc[i])
+        ssb = float(ind["ssb"].iloc[i])
+        cloud_top = max(ssa, ssb)
+        cloud_bot = min(ssa, ssb)
+        if pos.side == "LONG":
+            # exit if price drops below kijun or below cloud top
+            return (c < kijun) or (c < cloud_top)
+        else:
+            # exit if price rises above kijun or above cloud bottom
+            return (c > kijun) or (c > cloud_bot)
 
 
 # =============================
@@ -822,7 +880,8 @@ def main():
     # VWAP parameters with wider hysteresis bands
     vw_params = StrategyParams(win=20, ema_trend=50, tol_entry=0.003, tol_exit=0.006)
     bb = BBContrarian(); bb.params = bb_params
-    vw = VWAPPullback(); vw.params = vw_params
+    # Replace VWAP with Ichimoku Kumo logic but keep the same wallet (owner label remains 'VWAP')
+    ich = IchimokuKumo(); ich.params = vw_params
 
     # Exchange clients per owner (ensure vaultAddress is passed on all orders)
     exch_bb = ExchangeClient(private_key=bb_key, vault_address=bb_vault, owner="BB", fee_bps=fee_bps, slippage_bps=slippage_bps)
@@ -830,8 +889,8 @@ def main():
 
     # Strategy runners (independent state per owner)
     r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=1)
-    # VWAP: more hold time and cooldown to reduce churn
-    r_vw = StrategyRunner(owner="VWAP", strategy=vw, exch=exch_vw, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=5, min_hold_bars=5)
+    # VWAP wallet running Ichimoku strategy
+    r_vw = StrategyRunner(owner="VWAP", strategy=ich, exch=exch_vw, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=5, min_hold_bars=5)
 
     # Sempre em modo live polling por padrão (independente de CSV local)
     out_dir = "/tmp/live_top2"
