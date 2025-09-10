@@ -133,8 +133,19 @@ class ExchangeClient:
                     except Exception:
                         pass
                 ord_side = side.lower()
-                # Use market orders por simplicidade. price é ignorado em market.
-                res = self._dex.create_order(market_symbol, "market", ord_side, qty, price, params)
+                # Prefer HL orderbook price to guarantee marketability
+                px_for_order = price
+                try:
+                    ob = self._dex.fetch_order_book(market_symbol, limit=5)
+                    best_ask = float(ob['asks'][0][0]) if ob.get('asks') else None
+                    best_bid = float(ob['bids'][0][0]) if ob.get('bids') else None
+                    if ord_side == 'buy' and best_ask is not None:
+                        px_for_order = best_ask
+                    elif ord_side == 'sell' and best_bid is not None:
+                        px_for_order = best_bid
+                except Exception:
+                    pass
+                res = self._dex.create_order(market_symbol, "market", ord_side, qty, px_for_order, params)
                 payload["live_ack"] = True
                 payload["live_resp"] = res
                 return payload
