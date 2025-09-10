@@ -297,7 +297,9 @@ class StrategyParams:
     # VWAP
     win: int = 20
     ema_trend: int = 50
-    tol_pct: float = 0.002
+    # Entry/exit tolerances to create hysteresis around VWAP
+    tol_entry: float = 0.002
+    tol_exit: float = 0.004
 
 
 @dataclass
@@ -371,7 +373,8 @@ class VWAPPullback(StrategyBase):
         c = float(df["close"].iloc[i])
         v = float(ind["vwap"].iloc[i])
         ema_tr = float(ind["ema_trend"].iloc[i])
-        if abs(c - v) <= self.params.tol_pct * c:
+        tol = float(getattr(self.params, 'tol_entry', 0.002))
+        if abs(c - v) <= tol * c:
             if c > ema_tr:
                 return OrderIntent("LONG", "vwap_pullback_long")
             if c < ema_tr:
@@ -381,10 +384,12 @@ class VWAPPullback(StrategyBase):
     def exit_signal(self, i: int, df: pd.DataFrame, ind: Dict[str, pd.Series], pos: Position) -> bool:
         c = float(df["close"].iloc[i])
         v = float(ind["vwap"].iloc[i])
+        # add hysteresis using tol_exit to reduce churn
+        tol = float(getattr(self.params, 'tol_exit', 0.004))
         if pos.side == "LONG":
-            return c < v
+            return c < v * (1 - tol)
         else:
-            return c > v
+            return c > v * (1 + tol)
 
 
 # =============================
@@ -667,6 +672,11 @@ class Orchestrator:
                 **{f"{o}_rolling_pf": perf[o][1] for o in owners},
                 "priority_rank": ",".join(order),
             })
+            # Trade only on close: if reprocessing the last candle, skip entries/exits and only mark equity
+            if reprocess_last and i == len(self.df) - 1:
+                for r in self.runners.values():
+                    r._mark_equity(ts)
+                continue
             intents: Dict[str, Optional[OrderIntent]] = {o: self.runners[o].wants_entry(i, self.df) for o in owners}
             for o in order:
                 r = self.runners[o]
@@ -809,7 +819,8 @@ def main():
 
     # Build strategies
     bb_params = StrategyParams(n=20, k=2.0)
-    vw_params = StrategyParams(win=20, ema_trend=50, tol_pct=0.002)
+    # VWAP parameters with wider hysteresis bands
+    vw_params = StrategyParams(win=20, ema_trend=50, tol_entry=0.003, tol_exit=0.006)
     bb = BBContrarian(); bb.params = bb_params
     vw = VWAPPullback(); vw.params = vw_params
 
@@ -819,7 +830,8 @@ def main():
 
     # Strategy runners (independent state per owner)
     r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=1)
-    r_vw = StrategyRunner(owner="VWAP", strategy=vw, exch=exch_vw, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=1)
+    # VWAP: more hold time and cooldown to reduce churn
+    r_vw = StrategyRunner(owner="VWAP", strategy=vw, exch=exch_vw, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=5, min_hold_bars=5)
 
     # Sempre em modo live polling por padrão (independente de CSV local)
     out_dir = "/tmp/live_top2"
