@@ -923,7 +923,8 @@ def main():
     rp_vw = RiskParams(atr_period=atr_period, k_sl=k_sl_vw, k_tp=k_tp_vw, k_trail=k_trail_vw, time_stop_bars=time_stop)
 
     # Build strategies
-    bb_params = StrategyParams(n=20, k=2.0)
+    # Suavizar BB: bandas mais largas e média mais lenta
+    bb_params = StrategyParams(n=30, k=2.5)
     # VWAP parameters with wider hysteresis bands
     vw_params = StrategyParams(win=20, ema_trend=50, tol_entry=0.003, tol_exit=0.006)
     bb = BBContrarian(); bb.params = bb_params
@@ -935,8 +936,8 @@ def main():
     exch_vw = ExchangeClient(private_key=vw_key, vault_address=vw_vault, owner="VWAP", fee_bps=fee_bps, slippage_bps=slippage_bps)
 
     # Strategy runners (independent state per owner)
-    # BB runner: ativa bloqueio de risco e aumenta min_hold_bars para segurar posição
-    r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp_bb), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=3, gate_risk_until_min_hold=True)
+    # BB runner: ativa bloqueio de risco e segura mais a posição, com cooldown maior
+    r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp_bb), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=4, min_hold_bars=5, gate_risk_until_min_hold=True)
     # VWAP wallet running Ichimoku strategy
     r_vw = StrategyRunner(owner="VWAP", strategy=ich, exch=exch_vw, risk=RiskManager(rp_vw), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=5, min_hold_bars=5, gate_risk_until_min_hold=True)
 
