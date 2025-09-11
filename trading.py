@@ -670,6 +670,9 @@ class StrategyRunner:
         self.pos = Position(side=side, qty=qty, entry_px=en_px, entry_ts=ts, bars_held=0)
         self.last_entry_idx = i
         self.last_action_idx = i
+        # apply cooldown immediately after a successful entry
+        if self.cooldown_bars > 0:
+            self.entry_block_until = i + self.cooldown_bars
         print(f"[ENTER] owner={self.owner} side={side} px={en_px:.6f} qty={qty:.6f} i={i} bal={self.balance:.2f}")
         if getattr(self.exch, "live", False):
             discord_notify(self.owner, f"[LIVE] ENTER | {self.symbol} | owner={self.owner} | side={side} | px={en_px:.4f} | qty={qty:.6f} | i={i}")
@@ -705,12 +708,12 @@ class Orchestrator:
 
         for i in range(len(self.df)):
             ts = pd.to_datetime(self.df["ts"].iloc[i])
-            # Compute dynamic priority
-            perf = {}
-            for o, r in self.runners.items():
-                rolling_pnl, rolling_pf = r.rolling_perf(self.priority_window)
-                perf[o] = (rolling_pnl, rolling_pf)
-            # Determine order: higher rolling_pnl first; tie → fixed order BB > VWAP
+            # 1) Process exits and mark equity first for all runners
+            for o in owners:
+                self.runners[o].process_bar(i, self.df)
+
+            # 2) Re-compute priority after exits
+            perf = {o: self.runners[o].rolling_perf(self.priority_window) for o in owners}
             order = sorted(owners, key=lambda o: (perf[o][0], 1 if o == "BB" else 0), reverse=True)
             perf_str = ", ".join([f"{o}: pnl={perf[o][0]:.2f}/pf={perf[o][1]:.2f}" for o in owners])
             print(f"[BAR] ts={ts} order={order} perf={{{perf_str}}}")
@@ -721,7 +724,7 @@ class Orchestrator:
                 "priority_rank": ",".join(order),
             })
 
-            # Ask entries per owner; allow at most one position per owner (BB and VWAP can be open simultaneously)
+            # 3) Check entry signals and enter, respecting open positions and last_action_idx guard
             intents: Dict[str, Optional[OrderIntent]] = {o: self.runners[o].wants_entry(i, self.df) for o in owners}
             for o in order:
                 r = self.runners[o]
@@ -729,9 +732,6 @@ class Orchestrator:
                     continue
                 if intents.get(o):
                     r.try_enter(i, self.df, intents[o])
-            # Process bar (exits and equity mark) for all
-            for o in owners:
-                self.runners[o].process_bar(i, self.df)
 
         # Finalize
         for r in self.runners.values():
@@ -756,6 +756,16 @@ class Orchestrator:
                     r.equity_rows.pop()
         for i in range(start, len(self.df)):
             ts = pd.to_datetime(self.df["ts"].iloc[i])
+            # Trade only on close: if reprocessing the last candle, skip entries/exits and only mark equity
+            if reprocess_last and i == len(self.df) - 1:
+                for r in self.runners.values():
+                    r._mark_equity(ts)
+                continue
+            # 1) Process exits and mark equity first for all runners
+            for o in owners:
+                self.runners[o].process_bar(i, self.df)
+
+            # 2) Compute priority after exits
             perf = {o: self.runners[o].rolling_perf(self.priority_window) for o in owners}
             order = sorted(owners, key=lambda o: (perf[o][0], 1 if o == "BB" else 0), reverse=True)
             perf_str = ", ".join([f"{o}: pnl={perf[o][0]:.2f}/pf={perf[o][1]:.2f}" for o in owners])
@@ -766,11 +776,8 @@ class Orchestrator:
                 **{f"{o}_rolling_pf": perf[o][1] for o in owners},
                 "priority_rank": ",".join(order),
             })
-            # Trade only on close: if reprocessing the last candle, skip entries/exits and only mark equity
-            if reprocess_last and i == len(self.df) - 1:
-                for r in self.runners.values():
-                    r._mark_equity(ts)
-                continue
+
+            # 3) Check entries in priority order
             intents: Dict[str, Optional[OrderIntent]] = {o: self.runners[o].wants_entry(i, self.df) for o in owners}
             for o in order:
                 r = self.runners[o]
@@ -778,8 +785,6 @@ class Orchestrator:
                     continue
                 if intents.get(o):
                     r.try_enter(i, self.df, intents[o])
-            for o in owners:
-                self.runners[o].process_bar(i, self.df)
         # persist incremental logs
         outp = Path(out_dir); outp.mkdir(parents=True, exist_ok=True)
         for r in self.runners.values():
@@ -930,7 +935,8 @@ def main():
     exch_vw = ExchangeClient(private_key=vw_key, vault_address=vw_vault, owner="VWAP", fee_bps=fee_bps, slippage_bps=slippage_bps)
 
     # Strategy runners (independent state per owner)
-    r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp_bb), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=1)
+    # BB runner: ativa bloqueio de risco e aumenta min_hold_bars para segurar posição
+    r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp_bb), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=3, gate_risk_until_min_hold=True)
     # VWAP wallet running Ichimoku strategy
     r_vw = StrategyRunner(owner="VWAP", strategy=ich, exch=exch_vw, risk=RiskManager(rp_vw), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=5, min_hold_bars=5, gate_risk_until_min_hold=True)
 
