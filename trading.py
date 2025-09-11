@@ -476,7 +476,7 @@ class IchimokuKumo(StrategyBase):
 class StrategyRunner:
     def __init__(self, *, owner: str, strategy: StrategyBase, exch: ExchangeClient, risk: RiskManager,
                  symbol: str, notional_per_trade: float, fee_bps: float, slippage_bps: float, leverage: float = 20.0,
-                 cooldown_bars: int = 0, min_hold_bars: int = 1):
+                 cooldown_bars: int = 0, min_hold_bars: int = 1, gate_risk_until_min_hold: bool = False):
         self.owner = owner
         self.strategy = strategy
         self.exch = exch
@@ -500,6 +500,7 @@ class StrategyRunner:
         self.last_exit_idx: int = -1
         self.last_action_idx: int = -1
         self.min_hold_bars = int(min_hold_bars)
+        self.gate_risk_until_min_hold = bool(gate_risk_until_min_hold)
 
     def _slip(self, px: float, side: str, is_entry: bool) -> float:
         mult = 1 + (self.slippage_bps / 1e4)
@@ -571,6 +572,10 @@ class StrategyRunner:
             # agora sim, já estamos numa barra subsequente à entrada
             self.pos.bars_held += 1
             reason, new_trail = self.risk.evaluate(self.pos, px, atr_now)
+            # Afrouxar saídas apenas quando configurado (ex.: VWAP):
+            # não permite SL/TP/trailing/time antes de atingir min_hold_bars
+            if self.gate_risk_until_min_hold and self.pos.bars_held < self.min_hold_bars:
+                reason = None
             if reason is None and self.pos.bars_held >= self.min_hold_bars and self.strategy.exit_signal(i, df, self.ind, self.pos):
                 reason = "exit_signal"
             if reason is not None:
@@ -888,9 +893,14 @@ def main():
 
     # Risco
     atr_period = 14
-    k_sl = 1.2
-    k_tp = 1.6
-    k_trail: Optional[float] = 1.5
+    # Parâmetros base de risco (BB)
+    k_sl_bb = 1.2
+    k_tp_bb = 1.6
+    k_trail_bb: Optional[float] = 1.5
+    # Parâmetros mais folgados apenas para VWAP
+    k_sl_vw = 2.0
+    k_tp_vw = 2.0
+    k_trail_vw: Optional[float] = 3.0
     time_stop: Optional[int] = 80
     roll_n = 30
 
@@ -904,7 +914,8 @@ def main():
     if not bb_key or not bb_vault or not vw_key or not vw_vault:
         print("[WARN] Chaves/vaultAddress ausentes; rodando apenas em modo backtest.")
 
-    rp = RiskParams(atr_period=atr_period, k_sl=k_sl, k_tp=k_tp, k_trail=k_trail, time_stop_bars=time_stop)
+    rp_bb = RiskParams(atr_period=atr_period, k_sl=k_sl_bb, k_tp=k_tp_bb, k_trail=k_trail_bb, time_stop_bars=time_stop)
+    rp_vw = RiskParams(atr_period=atr_period, k_sl=k_sl_vw, k_tp=k_tp_vw, k_trail=k_trail_vw, time_stop_bars=time_stop)
 
     # Build strategies
     bb_params = StrategyParams(n=20, k=2.0)
@@ -919,9 +930,9 @@ def main():
     exch_vw = ExchangeClient(private_key=vw_key, vault_address=vw_vault, owner="VWAP", fee_bps=fee_bps, slippage_bps=slippage_bps)
 
     # Strategy runners (independent state per owner)
-    r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=1)
+    r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp_bb), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=2, min_hold_bars=1)
     # VWAP wallet running Ichimoku strategy
-    r_vw = StrategyRunner(owner="VWAP", strategy=ich, exch=exch_vw, risk=RiskManager(rp), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=5, min_hold_bars=5)
+    r_vw = StrategyRunner(owner="VWAP", strategy=ich, exch=exch_vw, risk=RiskManager(rp_vw), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=5, min_hold_bars=5, gate_risk_until_min_hold=True)
 
     # Sempre em modo live polling por padrão (independente de CSV local)
     out_dir = "/tmp/live_top2"
