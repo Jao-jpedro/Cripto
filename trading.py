@@ -463,18 +463,9 @@ class IchimokuKumo(StrategyBase):
         return None
 
     def exit_signal(self, i: int, df: pd.DataFrame, ind: Dict[str, pd.Series], pos: Position) -> bool:
-        c = float(df["close"].iloc[i])
-        kijun = float(ind["kijun"].iloc[i])
-        ssa = float(ind["ssa"].iloc[i])
-        ssb = float(ind["ssb"].iloc[i])
-        cloud_top = max(ssa, ssb)
-        cloud_bot = min(ssa, ssb)
-        if pos.side == "LONG":
-            # exit if price drops below kijun or below cloud top
-            return (c < kijun) or (c < cloud_top)
-        else:
-            # exit if price rises above kijun or above cloud bottom
-            return (c > kijun) or (c > cloud_bot)
+        # To prevent rapid flip and excessive fees, disable strategy exits.
+        # Exits will be managed solely by RiskManager (SL/TP/trailing/time).
+        return False
 
 
 # =============================
