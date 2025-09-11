@@ -183,6 +183,33 @@ class ExchangeClient:
             print(f"[LIVE] Falha ao ler saldo: {type(e).__name__}: {e}")
             return None
 
+    def live_position_size(self, symbol: str) -> Optional[float]:
+        """Return current absolute position size on exchange for symbol, or None if unavailable."""
+        if not (self.live and self._dex is not None):
+            return None
+        try:
+            pos = self._dex.fetch_position(symbol)
+            # ccxt unified position has 'contracts' or 'size' depending on market; try both
+            size = pos.get('contracts') if isinstance(pos, dict) else None
+            if size is None:
+                size = pos.get('size') if isinstance(pos, dict) else None
+            if size is None:
+                # hyperliquid parse_position uses 'size' as number in some versions; fallback to info.szi
+                info = pos.get('info', {}) if isinstance(pos, dict) else {}
+                entry = info.get('position', {}) if isinstance(info, dict) else {}
+                szi = entry.get('szi')
+                if szi is not None:
+                    try:
+                        size = abs(float(szi))
+                    except Exception:
+                        size = None
+            if size is None:
+                return 0.0
+            return float(size)
+        except Exception as e:
+            print(f"[LIVE] Falha ao consultar posição: {type(e).__name__}: {e}")
+            return None
+
 
 # =============================
 # Discord notifications (optional)
@@ -556,6 +583,14 @@ class StrategyRunner:
             if reason is None and self.pos.bars_held >= self.min_hold_bars and self.strategy.exit_signal(i, df, self.ind, self.pos):
                 reason = "exit_signal"
             if reason is not None:
+                # If live, ensure there's a real position before attempting reduceOnly close
+                if getattr(self.exch, "live", False):
+                    live_sz = self.exch.live_position_size(self.symbol)
+                    if not live_sz or live_sz <= 0:
+                        print(f"[LIVE] DESYNC detected on EXIT owner={self.owner}: no live position; dropping local position without PnL booking")
+                        self.pos = Position()
+                        self._mark_equity(ts)
+                        return
                 ex_px = self._slip(px, self.pos.side or "LONG", False)
                 qty = self.pos.qty
                 # First, if live, try to actually send the reduce-only order; only close upon ack
@@ -623,14 +658,19 @@ class StrategyRunner:
                 print(f"[SKIP] owner={self.owner} sinal {side} ignorado: margem insuficiente (max_n={max_n:.2f} USDC equiv.)")
                 return
         qty = self.strategy.size_model(en_px, desired_notional)
-        # entry fee
-        self.balance -= self._fee_cost()
         res = self.exch.place_order(self.symbol, "BUY" if side == "LONG" else "SELL", qty, price=en_px, reduce_only=False)
-        # In live mode, only open position if exchange acknowledged
+        # In live mode, only open position if exchange acknowledged AND position exists
         if getattr(self.exch, "live", False):
             if not res.get("live_ack"):
                 print(f"[LIVE] ENTER REJECTED owner={self.owner} side={side} px={en_px:.6f} | not opening position")
                 return
+            # Confirm fill by checking position size
+            live_sz = self.exch.live_position_size(self.symbol)
+            if not live_sz or live_sz <= 0:
+                print(f"[LIVE] ENTER NO FILL owner={self.owner} side={side} px={en_px:.6f} | position size=0 on exchange")
+                return
+        # entry fee only after confirming position (or always in backtest)
+        self.balance -= self._fee_cost()
         self.pos = Position(side=side, qty=qty, entry_px=en_px, entry_ts=ts, bars_held=0)
         self.last_entry_idx = i
         self.last_action_idx = i
