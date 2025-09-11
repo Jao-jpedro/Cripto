@@ -496,6 +496,7 @@ class StrategyRunner:
         # controles de histórico
         self.cooldown_bars = int(cooldown_bars)
         self.entry_block_until: int = -1
+        self.exit_block_until: int = -1
         self.last_entry_idx: int = -1
         self.last_exit_idx: int = -1
         self.last_action_idx: int = -1
@@ -567,6 +568,11 @@ class StrategyRunner:
                 return
             # evita múltiplos EXIT no mesmo índice (reprocesso)
             if i == self.last_exit_idx:
+                self._mark_equity(ts)
+                return
+            # Bloqueio explícito de saída por índice (fail-safe):
+            if i <= self.exit_block_until:
+                print(f"[SKIP] owner={self.owner} exit blocked until i={self.exit_block_until} (now i={i})")
                 self._mark_equity(ts)
                 return
             # agora sim, já estamos numa barra subsequente à entrada
@@ -670,9 +676,12 @@ class StrategyRunner:
         self.pos = Position(side=side, qty=qty, entry_px=en_px, entry_ts=ts, bars_held=0)
         self.last_entry_idx = i
         self.last_action_idx = i
+        # aplica cooldown de entrada e bloqueio de saída mínimos
         # apply cooldown immediately after a successful entry
         if self.cooldown_bars > 0:
             self.entry_block_until = i + self.cooldown_bars
+        # saída bloqueada explicitamente por min_hold barras
+        self.exit_block_until = i + max(0, self.min_hold_bars)
         print(f"[ENTER] owner={self.owner} side={side} px={en_px:.6f} qty={qty:.6f} i={i} bal={self.balance:.2f}")
         if getattr(self.exch, "live", False):
             discord_notify(self.owner, f"[LIVE] ENTER | {self.symbol} | owner={self.owner} | side={side} | px={en_px:.4f} | qty={qty:.6f} | i={i}")
@@ -758,6 +767,7 @@ class Orchestrator:
             ts = pd.to_datetime(self.df["ts"].iloc[i])
             # Trade only on close: if reprocessing the last candle, skip entries/exits and only mark equity
             if reprocess_last and i == len(self.df) - 1:
+                print(f"[SKIP] trade-only-on-close: reprocess_last for ts={ts} (no entries/exits)")
                 for r in self.runners.values():
                     r._mark_equity(ts)
                 continue
@@ -940,6 +950,16 @@ def main():
     r_bb = StrategyRunner(owner="BB", strategy=bb, exch=exch_bb, risk=RiskManager(rp_bb), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=4, min_hold_bars=5, gate_risk_until_min_hold=True)
     # VWAP wallet running Ichimoku strategy
     r_vw = StrategyRunner(owner="VWAP", strategy=ich, exch=exch_vw, risk=RiskManager(rp_vw), symbol=symbol, notional_per_trade=notional, fee_bps=fee_bps, slippage_bps=slippage_bps, leverage=leverage, cooldown_bars=5, min_hold_bars=5, gate_risk_until_min_hold=True)
+
+    # Config logs por owner
+    print(
+        f"[CFG] owner=BB strategy={bb.__class__.__name__} min_hold_bars={r_bb.min_hold_bars} "
+        f"cooldown_bars={r_bb.cooldown_bars} gate_risk_until_min_hold={r_bb.gate_risk_until_min_hold}"
+    )
+    print(
+        f"[CFG] owner=VWAP strategy={ich.__class__.__name__} min_hold_bars={r_vw.min_hold_bars} "
+        f"cooldown_bars={r_vw.cooldown_bars} gate_risk_until_min_hold={r_vw.gate_risk_until_min_hold}"
+    )
 
     # Sempre em modo live polling por padrão (independente de CSV local)
     out_dir = "/tmp/live_top2"
