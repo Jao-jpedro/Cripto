@@ -606,6 +606,21 @@ class StrategyRunner:
             if reason is not None:
                 # If live, ensure there's a real position before attempting reduceOnly close
                 if getattr(self.exch, "live", False):
+                    # throttle exits by time and persisted state to avoid duplicate closes across processes
+                    now_s = time.time()
+                    if self._last_exit_ts_s and (now_s - self._last_exit_ts_s) < self.min_exit_seconds:
+                        print(f"[SKIP] owner={self.owner} exit throttled: wait {self.min_exit_seconds - (now_s - self._last_exit_ts_s):.1f}s")
+                        self._mark_equity(ts)
+                        return
+                    if not hasattr(self, '_persist_throttle_ok'):
+                        # guard in case of import order
+                        def _no_op(kind, secs):
+                            return True
+                        self._persist_throttle_ok = _no_op  # type: ignore
+                    if not self._persist_throttle_ok("exit", self.min_exit_seconds):
+                        print(f"[SKIP] owner={self.owner} exit throttled (persist) for {self.min_exit_seconds}s")
+                        self._mark_equity(ts)
+                        return
                     live_sz = self.exch.live_position_size(self.symbol)
                     if not live_sz or live_sz <= 0:
                         print(f"[LIVE] DESYNC detected on EXIT owner={self.owner}: no live position; dropping local position without PnL booking")
@@ -637,6 +652,7 @@ class StrategyRunner:
                 })
                 print(f"[EXIT] owner={self.owner} side={self.pos.side} reason={reason} px={ex_px:.6f} pnl={pnl:.2f} roe={ret:.4f} bal={self.balance:.2f}")
                 if getattr(self.exch, "live", False):
+                    self._last_exit_ts_s = time.time()
                     discord_notify(self.owner, f"[LIVE] EXIT | {self.symbol} | owner={self.owner} | side={self.pos.side} | reason={reason} | px={ex_px:.4f} | pnl={pnl:.2f} | roe={ret:.4f} | bal={self.balance:.2f}")
                 else:
                     discord_notify(self.owner, f"[DRY-RUN] EXIT | {self.symbol} | owner={self.owner} | side={self.pos.side} | reason={reason} | px={ex_px:.4f} | pnl={pnl:.2f} | roe={ret:.4f} | bal={self.balance:.2f}")
@@ -702,6 +718,11 @@ class StrategyRunner:
         self.pos = Position(side=side, qty=qty, entry_px=en_px, entry_ts=ts, bars_held=0)
         if getattr(self.exch, "live", False):
             self._last_entry_ts_s = time.time()
+            if not hasattr(self, '_persist_throttle_ok'):
+                def _no_op(kind, secs):
+                    return True
+                self._persist_throttle_ok = _no_op  # type: ignore
+            self._persist_throttle_ok("entry", self.min_entry_seconds)  # update timestamp
         self.last_entry_idx = i
         self.last_action_idx = i
         # aplica cooldown de entrada e bloqueio de saída mínimos
