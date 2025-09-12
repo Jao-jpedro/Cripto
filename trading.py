@@ -132,6 +132,9 @@ class ExchangeClient:
                         params["slippage"] = float(sl_env)
                     except Exception:
                         pass
+                # Attach clientOrderId for auditability
+                cloid = client_order_id or str(uuid.uuid4()).replace('-', '')[:24]
+                params["clientOrderId"] = cloid
                 ord_side = side.lower()
                 # Prefer HL orderbook price to guarantee marketability
                 px_for_order = price
@@ -148,6 +151,7 @@ class ExchangeClient:
                 res = self._dex.create_order(market_symbol, "market", ord_side, qty, px_for_order, params)
                 payload["live_ack"] = True
                 payload["live_resp"] = res
+                payload["cloid"] = cloid
                 return payload
             except Exception as e:
                 payload["live_ack"] = False
@@ -502,6 +506,9 @@ class StrategyRunner:
         self.last_action_idx: int = -1
         self.min_hold_bars = int(min_hold_bars)
         self.gate_risk_until_min_hold = bool(gate_risk_until_min_hold)
+        # time throttle for live entries (seconds). Prevents sequential entries within seconds
+        self.min_entry_seconds: int = 30
+        self._last_entry_ts_s: float = 0.0
 
     def _slip(self, px: float, side: str, is_entry: bool) -> float:
         mult = 1 + (self.slippage_bps / 1e4)
@@ -650,6 +657,12 @@ class StrategyRunner:
         desired_notional = self.notional
         # If live, cap notional by available margin * leverage
         if getattr(self.exch, "live", False):
+            # throttle consecutive live entries by wall time
+            now_s = time.time()
+            if self._last_entry_ts_s and (now_s - self._last_entry_ts_s) < self.min_entry_seconds:
+                wait = self.min_entry_seconds - (now_s - self._last_entry_ts_s)
+                print(f"[SKIP] owner={self.owner} entry throttled: wait {wait:.1f}s before next live entry")
+                return
             max_n = self.exch.max_affordable_notional(self.leverage)
             if max_n is None:
                 print(f"[SKIP] owner={self.owner} sinal {side} ignorado: saldo não disponível (fetch_balance falhou)")
@@ -660,6 +673,7 @@ class StrategyRunner:
                 print(f"[SKIP] owner={self.owner} sinal {side} ignorado: margem insuficiente (max_n={max_n:.2f} USDC equiv.)")
                 return
         qty = self.strategy.size_model(en_px, desired_notional)
+        print(f"[SIZE] owner={self.owner} desired_notional={desired_notional:.2f} en_px={en_px:.4f} qty={qty:.6f}")
         res = self.exch.place_order(self.symbol, "BUY" if side == "LONG" else "SELL", qty, price=en_px, reduce_only=False)
         # In live mode, only open position if exchange acknowledged AND position exists
         if getattr(self.exch, "live", False):
@@ -674,6 +688,8 @@ class StrategyRunner:
         # entry fee only after confirming position (or always in backtest)
         self.balance -= self._fee_cost()
         self.pos = Position(side=side, qty=qty, entry_px=en_px, entry_ts=ts, bars_held=0)
+        if getattr(self.exch, "live", False):
+            self._last_entry_ts_s = time.time()
         self.last_entry_idx = i
         self.last_action_idx = i
         # aplica cooldown de entrada e bloqueio de saída mínimos
