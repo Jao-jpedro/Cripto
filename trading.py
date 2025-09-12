@@ -613,8 +613,8 @@ class GradientConfig:
     MIN_ORDER_USD: float    = 10.0
     STOP_RISK_PCT: float    = 0.06      # legado: risco % da margem para fallback
 
-    # Cooldown & anti-flip-flop
-    COOLDOWN_BARS: int      = 3           # cooldown em velas (prioritário)
+    # down & anti-flip-flop
+    COOLDOWN_BARS: int      = 0           # cooldown em velas (prioritário)
     POST_COOLDOWN_CONFIRM: int = 1        # exigir +1 vela válida após cooldown
     COOLDOWN_MINUTOS: int   = 0           # legado; não usado se COOLDOWN_BARS>0
     ANTI_SPAM_SECS: int     = 3
