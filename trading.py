@@ -89,6 +89,9 @@ class ExchangeClient:
             except Exception as e:
                 print(f"[LIVE] Falha ao inicializar ccxt.hyperliquid: {type(e).__name__}: {e}. Caindo para DRY-RUN.")
                 self.live = False
+        # Simple balance cache to reduce rate limits
+        self._last_bal_ts: float = 0.0
+        self._last_bal_free: float = 0.0
 
     def get_price(self, symbol: str, mid_px: float) -> float:
         # In live: fetch best bid/ask or mark price. For backtest, use provided mid.
@@ -132,8 +135,11 @@ class ExchangeClient:
                         params["slippage"] = float(sl_env)
                     except Exception:
                         pass
-                # Attach clientOrderId for auditability
-                cloid = client_order_id or str(uuid.uuid4()).replace('-', '')[:24]
+                # Attach clientOrderId (Hyperliquid expects 128-bit hex with 0x prefix)
+                if client_order_id and isinstance(client_order_id, str) and client_order_id.startswith("0x"):
+                    cloid = client_order_id
+                else:
+                    cloid = "0x" + uuid.uuid4().hex  # 32 hex chars
                 params["clientOrderId"] = cloid
                 ord_side = side.lower()
                 # Prefer HL orderbook price to guarantee marketability
@@ -170,6 +176,10 @@ class ExchangeClient:
         if not (self.live and self._dex is not None):
             return None
         try:
+            # Use 5s cache to avoid 429
+            now = time.time()
+            if (now - self._last_bal_ts) < 5.0 and self._last_bal_ts > 0:
+                return float(self._last_bal_free) * float(leverage)
             bal = self._dex.fetch_balance()
             usdc = bal.get("USDC", {}) if isinstance(bal, dict) else {}
             total = float(usdc.get("total") or 0.0)
@@ -181,6 +191,8 @@ class ExchangeClient:
             else:
                 free = float(free)
             free = max(free, 0.0)
+            self._last_bal_ts = now
+            self._last_bal_free = free
             # apply small buffer to avoid edge rejections
             return float(free) * float(leverage)
         except Exception as e:
