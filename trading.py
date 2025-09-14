@@ -357,7 +357,6 @@ try:
         })
 except Exception as e:
     print(f"[DEX2] Falha ao inicializar DEX secundário: {type(e).__name__}: {e}")
-
 # COMMAND ----------
 
 if dex:
@@ -690,6 +689,7 @@ class EMAGradientStrategy:
         # Cooldown por barras (robusto a janela deslizante)
         self._cd_bars_left: Optional[int] = None
         self._cd_last_bar_time: Optional[pd.Timestamp] = None
+        
 
     # ---------- config → params (reuso dos cálculos do backtest) ----------
     def _cfg_to_btparams(self):
@@ -1603,6 +1603,7 @@ class EMAGradientStrategy:
                         (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
                         (last.volume > last.vol_ma)
                     ))
+
                     if can_long:
                         print("✅ Confirmação pós-cooldown LONG")
                         self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
