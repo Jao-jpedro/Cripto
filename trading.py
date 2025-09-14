@@ -227,10 +227,24 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
     data = []
     try:
         import ccxt  # type: ignore
-        ex = ccxt.bybit({"enableRateLimit": True})
+        ex = ccxt.bybit({
+            "enableRateLimit": True,
+            "timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000")),
+            "options": {"timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000"))},
+        })
         # Busca até os últimos n_target candles (Bybit normalmente retorna fechados; alguns mercados incluem o em formação)
         lim = max(1, n_target)
-        cc = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, limit=lim) or []
+        cc = []
+        last_err = None
+        for attempt in range(2):
+            try:
+                cc = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, limit=lim) or []
+                break
+            except Exception as e:
+                last_err = e
+                if debug:
+                    print(f"[WARN] Bybit fetch_ohlcv tentativa {attempt+1} falhou: {type(e).__name__}: {e}", flush=True)
+                _time.sleep(0.3)
         if cc:
             # Garante no máximo n_target candles
             if len(cc) > n_target:
@@ -244,36 +258,56 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
             } for o in cc]
             if debug:
                 print(f"[INFO] Bybit: {len(data)} candles carregados (API)", flush=True)
+        else:
+            if debug:
+                print(f"[WARN] Bybit não retornou candles (último erro: {last_err})", flush=True)
         # Se o último candle não é o atual, adiciona o preço atual como candle em formação
-        need_append_live = True
         if data:
+            need_append_live = True
             last_ts = int(data[-1]["data"])
             if last_ts == cur_open_ms:
                 need_append_live = False
             elif last_ts > cur_open_ms:
-                # Incomum: dados já no futuro do open atual; não adiciona
                 need_append_live = False
-        if need_append_live and len(data) < n_target:
-            try:
-                ticker = ex.fetch_ticker(symbol_bybit)
-                data.append({
-                    "data": cur_open_ms,
-                    "valor_fechamento": float(ticker["last"]),
-                    "criptomoeda": symbol,
-                    "volume_compra": 0.0,
-                    "volume_venda": 0.0,
-                })
-                if debug:
-                    print(f"[INFO] Adicionado preço atual do ticker: {ticker['last']}", flush=True)
-            except Exception as e:
-                if debug:
-                    print(f"[WARN] Não foi possível adicionar preço atual: {e}", flush=True)
+            if need_append_live and len(data) < n_target:
+                try:
+                    ticker = ex.fetch_ticker(symbol_bybit)
+                    if ticker and (ticker.get("last") is not None):
+                        data.append({
+                            "data": cur_open_ms,
+                            "valor_fechamento": float(ticker["last"]),
+                            "criptomoeda": symbol,
+                            "volume_compra": 0.0,
+                            "volume_venda": 0.0,
+                        })
+                        if debug:
+                            print(f"[INFO] Adicionado preço atual do ticker: {ticker['last']}", flush=True)
+                except Exception as e:
+                    if debug:
+                        print(f"[WARN] Não foi possível adicionar preço atual: {type(e).__name__}: {e}", flush=True)
         # Garante exatamente n_target no máximo (fechados + atual)
         if data and len(data) > n_target:
             data = data[-n_target:]
     except Exception as e:
         if debug:
             print(f"[WARN] Bybit falhou: {e}", flush=True)
+
+    # Fallback 1: tentar Binance Vision pública se Bybit vazio (sem bloquear)
+    if not data:
+        try:
+            candles_needed = n_target
+            start_dt = datetime.fromtimestamp(cur_open_epoch - (candles_needed - 1) * secs, UTC)
+            end_dt = now_utc
+            if debug:
+                print("[INFO] Fallback: tentando Binance Vision (dados públicos)", flush=True)
+            bdata = get_binance_data(symbol, tf, start_dt, end_dt)
+            if bdata:
+                data = bdata[-n_target:]
+                if debug:
+                    print(f"[INFO] Binance Vision: {len(data)} candles carregados", flush=True)
+        except Exception as e:
+            if debug:
+                print(f"[WARN] Fallback Binance Vision falhou: {type(e).__name__}: {e}", flush=True)
 
     # Fallback: snapshot local
     if not data and os.path.exists("df_log.csv") and os.path.getsize("df_log.csv") > 0:
