@@ -676,10 +676,11 @@ class GradientConfig:
     STOP_RISK_PCT: float    = 0.06      # legado: risco % da margem para fallback
 
     # down & anti-flip-flop
-    COOLDOWN_BARS: int      = 0           # cooldown em velas (prioritário)
+    COOLDOWN_BARS: int      = 2           # cooldown em velas (prioritário)
     POST_COOLDOWN_CONFIRM: int = 1        # exigir +1 vela válida após cooldown
     COOLDOWN_MINUTOS: int   = 0           # legado; não usado se COOLDOWN_BARS>0
     ANTI_SPAM_SECS: int     = 3
+    MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
 
     # Stops/TP
     STOP_ATR_MULT: float    = 1.5         # Stop = 1,5×ATR
@@ -706,6 +707,8 @@ class EMAGradientStrategy:
         self._last_adjust_at: Optional[datetime] = None
         self._last_pos_side: Optional[str] = None
         self._first_step_done: bool = False
+        self._entry_bar_idx: Optional[int] = None
+        self._entry_bar_time: Optional[pd.Timestamp] = None
 
         base = symbol.split("/")[0]
         self._df_symbol_hint = f"{base}USDT"
@@ -723,6 +726,7 @@ class EMAGradientStrategy:
         # Cooldown por barras (robusto a janela deslizante)
         self._cd_bars_left: Optional[int] = None
         self._cd_last_bar_time: Optional[pd.Timestamp] = None
+        self._cd_last_seen_idx: Optional[int] = None
         
 
     # ---------- config → params (reuso dos cálculos do backtest) ----------
@@ -770,16 +774,29 @@ class EMAGradientStrategy:
         if (self._cd_bars_left is None) or (self._cd_bars_left <= 0):
             return
         cur_ts = self._get_last_bar_time(df)
+        cur_idx = self._bar_index(df)
         if self._cd_last_bar_time is None:
+            # Se não houver timestamp disponível, usa avanço de índice como fallback
             self._cd_last_bar_time = cur_ts
+            self._cd_last_seen_idx = cur_idx
             return
         try:
             if (cur_ts is not None) and (self._cd_last_bar_time is not None) and (cur_ts > self._cd_last_bar_time):
                 old_left = int(self._cd_bars_left)
                 self._cd_bars_left = max(0, int(self._cd_bars_left) - 1)
                 self._cd_last_bar_time = cur_ts
+                self._cd_last_seen_idx = cur_idx
                 try:
                     print(f"[CD] Avanço de barra: cooldown {old_left}→{self._cd_bars_left} (última={cur_ts})")
+                except Exception:
+                    pass
+            # Fallback por índice quando o DF não possui coluna 'data'
+            elif cur_ts is None and self._cd_last_seen_idx is not None and (cur_idx is not None) and (cur_idx > self._cd_last_seen_idx):
+                old_left = int(self._cd_bars_left)
+                self._cd_bars_left = max(0, int(self._cd_bars_left) - 1)
+                self._cd_last_seen_idx = cur_idx
+                try:
+                    print(f"[CD] Avanço por índice: cooldown {old_left}→{self._cd_bars_left} (idx={cur_idx})")
                 except Exception:
                     pass
         except Exception:
@@ -811,10 +828,12 @@ class EMAGradientStrategy:
             self._cooldown_until_idx = None
             self._cd_bars_left = None
             self._cd_last_bar_time = None
+            self._cd_last_seen_idx = None
             return
         # Novo modo: contar por avanço real de barras
         self._cd_bars_left = bars
         self._cd_last_bar_time = self._get_last_bar_time(df)
+        self._cd_last_seen_idx = self._bar_index(df)
         try:
             print(f"[CD] Iniciado cooldown por {bars} barra(s). Última barra={self._cd_last_bar_time}")
         except Exception:
@@ -1189,22 +1208,38 @@ class EMAGradientStrategy:
             return float(amount)
 
     # ---------- stop reduceOnly ----------
-    def _place_stop(self, side: str, amount: float, stop_price: float):
+    def _place_stop(self, side: str, amount: float, stop_price: float, df_for_log: Optional[pd.DataFrame] = None):
         amt = self._round_amount(amount)
         px  = float(stop_price)
-        price_ref = self._preco_atual()
+        # Apenas ordem de gatilho (stop), nunca market
         params = {"reduceOnly": True, "stopLossPrice": px, "triggerPrice": px, "trigger": "mark"}
+        if self.debug:
+            print(f"🛑 Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f} (sem market)")
         try:
-            if self.debug:
-                print(f"🛑 Criando STOP {side.upper()} reduceOnly @ {px:.6f} (ref {price_ref:.6f})")
-            return self.dex.create_order(self.symbol, "market", side, amt, price_ref, params)
-        except Exception as e1:
-            print(f"⚠️ stop formato1 falhou: {type(e1).__name__}: {e1}")
-        try:
-            return self.dex.create_order(self.symbol, "stop_market", side, amt, price_ref, params)
-        except Exception as e2:
-            print(f"❌ stop formato2 falhou: {type(e2).__name__}: {e2}")
+            # type compatível com Hyperliquid via CCXT
+            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, None, params)
+        except Exception as e:
+            print(f"❌ Falha ao criar STOP gatilho: {type(e).__name__}: {e}")
             raise
+
+        # Diagnóstico do stop criado
+        try:
+            info = ret if isinstance(ret, dict) else {}
+            oid = info.get("id") or info.get("orderId") or (info.get("info", {}) or {}).get("oid")
+            typ = info.get("type") or (info.get("info", {}) or {}).get("type")
+            inf = info.get("info", {}) or {}
+            ro = inf.get("reduceOnly") if isinstance(inf, dict) else None
+            sl = inf.get("stopLossPrice") if isinstance(inf, dict) else None
+            tp = inf.get("triggerPrice") if isinstance(inf, dict) else None
+            print(f"[STOP] id={oid} type={typ} reduceOnly={ro} stopLossPrice={sl} triggerPrice={tp}")
+            # Logger opcional
+            try:
+                self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return ret
 
     # ---------- ordens ----------
     def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
@@ -1237,6 +1272,14 @@ class EMAGradientStrategy:
             exec_amount=amount,
             order_id=str(oid) if oid else None
         )
+
+        # Guarda índice/tempo da barra de entrada (para hold mínimo)
+        try:
+            self._entry_bar_idx = (len(df_for_log) - 1) if isinstance(df_for_log, pd.DataFrame) else None
+            if isinstance(df_for_log, pd.DataFrame) and "data" in df_for_log.columns and len(df_for_log) > 0:
+                self._entry_bar_time = pd.to_datetime(df_for_log["data"].iloc[-1])
+        except Exception:
+            self._entry_bar_idx = None; self._entry_bar_time = None
 
         # Notificação de abertura
         try:
@@ -1274,7 +1317,7 @@ class EMAGradientStrategy:
             if self.debug:
                 print(f"🔎 Stop risco/margem: margem={usd_to_spend:.2f}, risco={self.cfg.STOP_RISK_PCT*100:.2f}% ⇒ stop @ {sl_price:.6f} ({sl_side.upper()})")
 
-        ordem_stop = self._place_stop(sl_side, amount, sl_price)
+        ordem_stop = self._place_stop(sl_side, amount, sl_price, df_for_log=df_for_log)
         try:
             extra = f"ATRx{self.cfg.STOP_ATR_MULT}" if use_atr else f"risk {self.cfg.STOP_RISK_PCT*100:.2f}%"
             print(f"📉 Stop inicial @ {sl_price:.6f} ({extra})", ordem_stop)
@@ -1287,6 +1330,25 @@ class EMAGradientStrategy:
             exec_price=sl_price,
             exec_amount=amount
         )
+
+        # Diagnóstico: listar ordens abertas reduceOnly
+        try:
+            if os.getenv("LIVE_TRADING", "0") in ("1", "true", "True"):
+                open_orders = self.dex.fetch_open_orders(self.symbol)
+                if open_orders:
+                    print("[OPEN ORDERS]")
+                    for o in open_orders:
+                        ro = o.get("reduceOnly")
+                        if ro is None and isinstance(o.get("params"), dict):
+                            ro = o["params"].get("reduceOnly")
+                        if not ro:
+                            continue
+                        info = o.get("info", {}) or {}
+                        print(
+                            f"- id={o.get('id')} type={o.get('type')} side={o.get('side')} reduceOnly={ro} stopLossPrice={info.get('stopLossPrice')} triggerPrice={info.get('triggerPrice')}"
+                        )
+        except Exception as e:
+            print(f"⚠️ Falha ao listar open_orders: {type(e).__name__}: {e}")
         return ordem_entrada, ordem_stop
 
     # ---------- localizar/cancelar stop existente ----------
@@ -1369,7 +1431,11 @@ class EMAGradientStrategy:
                 exec_amount=qty,
                 order_id=str(oid) if oid else None
             )
-            self._marcar_cooldown()
+            # Cooldown por barras (anti-flip)
+            try:
+                self._marcar_cooldown_barras(df_for_log)
+            except Exception:
+                pass
 
             # Notificação de fechamento (inclui tentativa de PnL/valor conta)
             try:
@@ -1445,7 +1511,7 @@ class EMAGradientStrategy:
 
         if oid:
             self._cancel_order_silent(oid)
-        ret = self._place_stop(stop_side, amt, target_stop)
+        ret = self._place_stop(stop_side, amt, target_stop, df_for_log=df_for_log)
         print(f"🔒 Trailing BE±: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f})")
 
         self._safe_log(
@@ -1739,6 +1805,19 @@ class EMAGradientStrategy:
 
         # saídas (com posição)
         lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
+        # Hold mínimo: não sair na mesma vela da entrada
+        if self._entry_bar_idx is not None:
+            try:
+                bars_since_entry = max(0, (len(df) - 1) - int(self._entry_bar_idx))
+                if bars_since_entry < int(self.cfg.MIN_HOLD_BARS):
+                    print(f"⏳ hold_min_bars ativo: bars_since_entry={bars_since_entry} < {self.cfg.MIN_HOLD_BARS}")
+                    self._safe_log("hold_min_bars", df_for_log=df, tipo="info")
+                    print("🔄 Mantendo posição.")
+                    self._safe_log("decisao", df_for_log=df, tipo="info")
+                    self._last_pos_side = lado if lado in ("buy", "sell") else None
+                    return
+            except Exception:
+                pass
         # Saídas por cruzamento de EMA ou inversão sustentada do gradiente
         grad_recent = df["ema_short_grad_pct"].tail(max(2, self.cfg.INV_GRAD_BARS))
         inv_long = grad_recent.notna().all() and (grad_recent <= 0).sum() >= self.cfg.INV_GRAD_BARS
