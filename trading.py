@@ -693,13 +693,14 @@ class GradientConfig:
 
 
 class EMAGradientStrategy:
-    def __init__(self, dex, symbol: str, cfg: GradientConfig = GradientConfig(), logger: "TradeLogger" = None, debug: bool = True, invert_rationale: bool = False):
+    def __init__(self, dex, symbol: str, cfg: GradientConfig = GradientConfig(), logger: "TradeLogger" = None, debug: bool = True, invert_rationale: bool = False, label: str = "PRI"):
         self.dex = dex
         self.symbol = symbol
         self.cfg = cfg
         self.logger = logger
         self.debug = debug
         self.invert_rationale = bool(invert_rationale)
+        self.label = str(label or "PRI").upper()[:3]
 
         self._cooldown_until: Optional[datetime] = None
         self._last_open_at: Optional[datetime] = None
@@ -726,6 +727,19 @@ class EMAGradientStrategy:
         # Cooldown por barras (robusto a janela deslizante)
         self._cd_bars_left: Optional[int] = None
         self._cd_last_bar_time: Optional[pd.Timestamp] = None
+        
+    # ---------- util: prefixo de logs ----------
+    def _wallet_address_short(self) -> str:
+        try:
+            w = self._wallet_address()
+            if not w:
+                return "?"
+            return f"{w[:6]}…{w[-4:]}" if len(w) > 12 else w
+        except Exception:
+            return "?"
+
+    def _log_prefix(self) -> str:
+        return f"[{self.label}] wallet={self._wallet_address_short()} racional={'invertido' if self.invert_rationale else 'normal'}"
         self._cd_last_seen_idx: Optional[int] = None
         
 
@@ -1214,12 +1228,12 @@ class EMAGradientStrategy:
         # Apenas ordem de gatilho (stop), nunca market
         params = {"reduceOnly": True, "stopLossPrice": px, "triggerPrice": px, "trigger": "mark"}
         if self.debug:
-            print(f"🛑 Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f} (sem market)")
+            print(f"{self._log_prefix()} | 🛑 Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f} (sem market)")
         try:
             # type compatível com Hyperliquid via CCXT
             ret = self.dex.create_order(self.symbol, "stop_market", side, amt, None, params)
         except Exception as e:
-            print(f"❌ Falha ao criar STOP gatilho: {type(e).__name__}: {e}")
+            print(f"{self._log_prefix()} | ❌ Falha ao criar STOP gatilho: {type(e).__name__}: {e}")
             raise
 
         # Diagnóstico do stop criado
@@ -1231,7 +1245,7 @@ class EMAGradientStrategy:
             ro = inf.get("reduceOnly") if isinstance(inf, dict) else None
             sl = inf.get("stopLossPrice") if isinstance(inf, dict) else None
             tp = inf.get("triggerPrice") if isinstance(inf, dict) else None
-            print(f"[STOP] id={oid} type={typ} reduceOnly={ro} stopLossPrice={sl} triggerPrice={tp}")
+            print(f"{self._log_prefix()} | [STOP] id={oid} type={typ} reduceOnly={ro} stopLossPrice={sl} triggerPrice={tp}")
             # Logger opcional
             try:
                 self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
@@ -1254,9 +1268,9 @@ class EMAGradientStrategy:
         price  = self._preco_atual()
         amount = self._round_amount((usd_to_spend * self.cfg.LEVERAGE) / price)
 
-        print(f"✅ Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} | amount≈{amount:.6f} @ {price:.4f}")
+        print(f"{self._log_prefix()} | ✅ Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} | amount≈{amount:.6f} @ {price:.4f}")
         ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
-        print("↳ Entrada:", ordem_entrada)
+        print(f"{self._log_prefix()} | ↳ Entrada: {ordem_entrada}")
 
         oid = None
         try:
@@ -1320,9 +1334,9 @@ class EMAGradientStrategy:
         ordem_stop = self._place_stop(sl_side, amount, sl_price, df_for_log=df_for_log)
         try:
             extra = f"ATRx{self.cfg.STOP_ATR_MULT}" if use_atr else f"risk {self.cfg.STOP_RISK_PCT*100:.2f}%"
-            print(f"📉 Stop inicial @ {sl_price:.6f} ({extra})", ordem_stop)
+            print(f"{self._log_prefix()} | 📉 Stop inicial @ {sl_price:.6f} ({extra}) {ordem_stop}")
         except Exception:
-            print(f"📉 Stop inicial @ {sl_price:.6f}", ordem_stop)
+            print(f"{self._log_prefix()} | 📉 Stop inicial @ {sl_price:.6f} {ordem_stop}")
 
         self._safe_log(
             "stop_inicial", df_for_log,
@@ -1336,7 +1350,7 @@ class EMAGradientStrategy:
             if os.getenv("LIVE_TRADING", "0") in ("1", "true", "True"):
                 open_orders = self.dex.fetch_open_orders(self.symbol)
                 if open_orders:
-                    print("[OPEN ORDERS]")
+                    print(f"{self._log_prefix()} | [OPEN ORDERS]")
                     for o in open_orders:
                         ro = o.get("reduceOnly")
                         if ro is None and isinstance(o.get("params"), dict):
@@ -1344,11 +1358,9 @@ class EMAGradientStrategy:
                         if not ro:
                             continue
                         info = o.get("info", {}) or {}
-                        print(
-                            f"- id={o.get('id')} type={o.get('type')} side={o.get('side')} reduceOnly={ro} stopLossPrice={info.get('stopLossPrice')} triggerPrice={info.get('triggerPrice')}"
-                        )
+                        print(f"{self._log_prefix()} | - id={o.get('id')} type={o.get('type')} side={o.get('side')} reduceOnly={ro} stopLossPrice={info.get('stopLossPrice')} triggerPrice={info.get('triggerPrice')}")
         except Exception as e:
-            print(f"⚠️ Falha ao listar open_orders: {type(e).__name__}: {e}")
+            print(f"{self._log_prefix()} | ⚠️ Falha ao listar open_orders: {type(e).__name__}: {e}")
         return ordem_entrada, ordem_stop
 
     # ---------- localizar/cancelar stop existente ----------
@@ -1379,7 +1391,7 @@ class EMAGradientStrategy:
         try:
             if order_id:
                 if self.debug:
-                    print(f"🧹 Cancelando ordem existente id={order_id}")
+                    print(f"{self._log_prefix()} | 🧹 Cancelando ordem existente id={order_id}")
                 self.dex.cancel_order(order_id, self.symbol)
         except Exception as e:
             if self.debug:
@@ -1391,7 +1403,7 @@ class EMAGradientStrategy:
         px  = self._preco_atual()
         params = {"reduceOnly": True}
         if self.debug:
-            print(f"🧲 Fechando com MARKET {side.upper()} reduceOnly qty={amt} ref={px:.6f}")
+            print(f"{self._log_prefix()} | 🧲 Fechando com MARKET {side.upper()} reduceOnly qty={amt} ref={px:.6f}")
         return self.dex.create_order(self.symbol, "market", side, amt, px, params)
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
@@ -1419,7 +1431,7 @@ class EMAGradientStrategy:
         try:
             close_side = "sell" if lado_atual == "buy" else "buy"
             ret = self._market_reduce_only(close_side, qty)
-            print("🔚 Posição encerrada (reduceOnly market):", ret)
+            print(f"{self._log_prefix()} | 🔚 Posição encerrada (reduceOnly market): {ret}")
             oid = ret.get("id") if isinstance(ret, dict) else None
         except Exception as e:
             print("❌ Erro ao fechar posição (reduceOnly):", e); oid = None
@@ -1562,7 +1574,7 @@ class EMAGradientStrategy:
 
         # se havia posição e agora não há → stop/saída ocorreu fora
         if prev_side and not pos:
-            print("📉 Detecção: posição fechada na exchange (provável stop/saída executada).")
+            print(f"{self._log_prefix()} | 📉 Detecção: posição fechada na exchange (provável stop/saída executada).")
             try:
                 last_px = self._preco_atual()
             except Exception:
@@ -1705,7 +1717,7 @@ class EMAGradientStrategy:
                     ))
 
                     if can_long:
-                        print("✅ Confirmação pós-cooldown LONG")
+                        print(f"{self._log_prefix()} | ✅ Confirmação pós-cooldown LONG")
                         self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
@@ -1725,7 +1737,7 @@ class EMAGradientStrategy:
                         (last.volume > last.vol_ma)
                     ))
                     if can_short:
-                        print("✅ Confirmação pós-cooldown SHORT")
+                        print(f"{self._log_prefix()} | ✅ Confirmação pós-cooldown SHORT")
                         self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
@@ -1752,13 +1764,13 @@ class EMAGradientStrategy:
             can_long = base_short if self.invert_rationale else base_long
             can_short = base_long if self.invert_rationale else base_short
             if can_long:
-                print("✅ Sinal LONG (entrada): critérios atendidos")
+                print(f"{self._log_prefix()} | ✅ Sinal LONG (entrada): critérios atendidos")
                 self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
             if can_short:
-                print("✅ Sinal SHORT (entrada): critérios atendidos")
+                print(f"{self._log_prefix()} | ✅ Sinal SHORT (entrada): critérios atendidos")
                 self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
@@ -2333,12 +2345,20 @@ if __name__ == "__main__":
         print(f"[MODE] LIVE_TRADING={os.getenv('LIVE_TRADING', '0')} | DEX_TIMEOUT_MS={os.getenv('DEX_TIMEOUT_MS', '5000')}")
         if not isinstance(df_in, pd.DataFrame) or df_in.empty:
             print("DataFrame de candles está vazio ou inválido."); return
-        strat_local = EMAGradientStrategy(dex=dex_in, symbol=SYMBOL_HL, logger=trade_logger_in, debug=True, invert_rationale=False)
+        strat_local = EMAGradientStrategy(dex=dex_in, symbol=SYMBOL_HL, logger=trade_logger_in, debug=True, invert_rationale=False, label="PRI")
         strat_sec = None
         if dex_in_sec is not None and trade_logger_in_sec is not None:
             # Por padrão usa o mesmo USD por trade, mas permite override
             usd_to_spend_sec = usd_to_spend if usd_to_spend_sec is None else usd_to_spend_sec
-            strat_sec = EMAGradientStrategy(dex=dex_in_sec, symbol=SYMBOL_HL, logger=trade_logger_in_sec, debug=True, invert_rationale=True)
+            strat_sec = EMAGradientStrategy(dex=dex_in_sec, symbol=SYMBOL_HL, logger=trade_logger_in_sec, debug=True, invert_rationale=True, label="SEC")
+        try:
+            wa_pri = strat_local._wallet_address()
+            print(f"[PRI] Inicializada | wallet={wa_pri} | racional=normal")
+            if strat_sec is not None:
+                wa_sec = strat_sec._wallet_address()
+                print(f"[SEC] Inicializada | wallet={wa_sec} | racional=invertido")
+        except Exception:
+            pass
         try:
             strat_local.step(df_in, usd_to_spend=usd_to_spend)
         except Exception as e:
