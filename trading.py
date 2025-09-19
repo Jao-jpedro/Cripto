@@ -406,18 +406,7 @@ if dex:
     else:
         print("[DEX] LIVE_TRADING=0 ⇒ ignorando fetch_balance()", flush=True)
 
-if dex2:
-    print(f"[DEX2] Inicializado (secundário inverso) | LIVE_TRADING={os.getenv('LIVE_TRADING','0')} | DEX_TIMEOUT_MS={dex_timeout}", flush=True)
-    live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-    if live:
-        print("[DEX2] fetch_balance() iniciando…", flush=True)
-        try:
-            dex2.fetch_balance()
-            print("[DEX2] fetch_balance() OK", flush=True)
-        except Exception as e:
-            print(f"[WARN] Falha ao buscar saldo do DEX2: {type(e).__name__}: {e}", flush=True)
-    else:
-        print("[DEX2] LIVE_TRADING=0 ⇒ ignorando fetch_balance()", flush=True)
+# Operação secundária desativada
 
 # COMMAND ----------
 # =========================
@@ -683,9 +672,14 @@ class GradientConfig:
     MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
 
     # Stops/TP
-    STOP_ATR_MULT: float    = 1.5         # Stop = 1,5×ATR
-    TAKEPROFIT_ATR_MULT: float = 0.0      # 0 desativa
+    STOP_ATR_MULT: float    = 0.0         # ATR desativado (usaremos percentuais fixos)
+    TAKEPROFIT_ATR_MULT: float = 0.0      # 0 desativa (usaremos percentuais fixos)
     TRAILING_ATR_MULT: float   = 0.0      # 0 desativa
+
+    # Regras fixas (percentuais de preço/notional)
+    FIXED_STOP_PCT: float   = 0.10        # 10% perda máxima no preço
+    TAKE_PROFIT_PCT: float  = 0.50        # 50% ganho alvo
+    BREAKEVEN_TRIGGER_PCT: float = 0.15   # ao +15% a favor, mover stop = entry
 
     # Breakeven trailing legado (mantido opcionalmente)
     BE_TRIGGER_PCT: float   = 0.005       # +0,5% a favor para acionar BE
@@ -1255,6 +1249,36 @@ class EMAGradientStrategy:
             pass
         return ret
 
+    def _place_takeprofit(self, side: str, amount: float, tp_price: float, df_for_log: Optional[pd.DataFrame] = None):
+        amt = self._round_amount(amount)
+        px  = float(tp_price)
+        # Ordem de gatilho de take profit reduceOnly
+        params = {"reduceOnly": True, "takeProfitPrice": px, "triggerPrice": px, "trigger": "mark"}
+        if self.debug:
+            print(f"{self._log_prefix()} | 🟢 Criando TAKE PROFIT gatilho {side.upper()} reduceOnly @ {px:.6f} (sem market)")
+        try:
+            # tipo compatível; se não suportar, a exchange pode aceitar como 'take_profit_market'
+            ret = self.dex.create_order(self.symbol, "take_profit_market", side, amt, None, params)
+        except Exception as e:
+            print(f"{self._log_prefix()} | ❌ Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}")
+            return None
+        try:
+            info = ret if isinstance(ret, dict) else {}
+            oid = info.get("id") or info.get("orderId") or (info.get("info", {}) or {}).get("oid")
+            typ = info.get("type") or (info.get("info", {}) or {}).get("type")
+            inf = info.get("info", {}) or {}
+            ro = inf.get("reduceOnly") if isinstance(inf, dict) else None
+            tp = inf.get("takeProfitPrice") if isinstance(inf, dict) else None
+            tr = inf.get("triggerPrice") if isinstance(inf, dict) else None
+            print(f"{self._log_prefix()} | [TAKE] id={oid} type={typ} reduceOnly={ro} takeProfitPrice={tp} triggerPrice={tr}")
+            try:
+                self._safe_log("takeprofit_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return ret
+
     # ---------- ordens ----------
     def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
         if self._posicao_aberta():
@@ -1308,32 +1332,23 @@ class EMAGradientStrategy:
         except Exception:
             pass
 
-        # Stop inicial baseado em ATR (preferencial); fallback ao risco por margem legado
-        use_atr = (atr_last is not None) and (self.cfg.STOP_ATR_MULT is not None) and (self.cfg.STOP_ATR_MULT > 0)
-        if use_atr:
-            if self._norm_side(side) == "buy":
-                sl_price = price - (self.cfg.STOP_ATR_MULT * float(atr_last))
-                sl_side  = "sell"
-            else:
-                sl_price = price + (self.cfg.STOP_ATR_MULT * float(atr_last))
-                sl_side  = "buy"
-            if self.debug:
-                print(f"🔎 Stop ATR: ATR={atr_last:.6f}, mult={self.cfg.STOP_ATR_MULT} ⇒ stop @ {sl_price:.6f} ({sl_side.upper()})")
+        # Stop/take fixos por percentual de preço (notional)
+        if self._norm_side(side) == "buy":
+            sl_price = price * (1.0 - float(self.cfg.FIXED_STOP_PCT))
+            tp_price = price * (1.0 + float(self.cfg.TAKE_PROFIT_PCT))
+            sl_side  = "sell"
+            tp_side  = "sell"
         else:
-            capital_loss  = usd_to_spend * self.cfg.STOP_RISK_PCT
-            loss_per_unit = capital_loss / amount
-            if self._norm_side(side) == "buy":
-                sl_price = price - loss_per_unit
-                sl_side  = "sell"
-            else:
-                sl_price = price + loss_per_unit
-                sl_side  = "buy"
-            if self.debug:
-                print(f"🔎 Stop risco/margem: margem={usd_to_spend:.2f}, risco={self.cfg.STOP_RISK_PCT*100:.2f}% ⇒ stop @ {sl_price:.6f} ({sl_side.upper()})")
+            sl_price = price * (1.0 + float(self.cfg.FIXED_STOP_PCT))
+            tp_price = price * (1.0 - float(self.cfg.TAKE_PROFIT_PCT))
+            sl_side  = "buy"
+            tp_side  = "buy"
+        if self.debug:
+            print(f"{self._log_prefix()} | 🔎 Regras fixas: stop={self.cfg.FIXED_STOP_PCT*100:.1f}% ⇒ {sl_price:.6f} | take={self.cfg.TAKE_PROFIT_PCT*100:.1f}% ⇒ {tp_price:.6f}")
 
         ordem_stop = self._place_stop(sl_side, amount, sl_price, df_for_log=df_for_log)
         try:
-            extra = f"ATRx{self.cfg.STOP_ATR_MULT}" if use_atr else f"risk {self.cfg.STOP_RISK_PCT*100:.2f}%"
+            extra = f"fix {self.cfg.FIXED_STOP_PCT*100:.1f}%"
             print(f"{self._log_prefix()} | 📉 Stop inicial @ {sl_price:.6f} ({extra}) {ordem_stop}")
         except Exception:
             print(f"{self._log_prefix()} | 📉 Stop inicial @ {sl_price:.6f} {ordem_stop}")
@@ -1344,6 +1359,12 @@ class EMAGradientStrategy:
             exec_price=sl_price,
             exec_amount=amount
         )
+
+        # Take Profit (gatilho reduceOnly)
+        try:
+            self._place_takeprofit(tp_side, amount, tp_price, df_for_log=df_for_log)
+        except Exception:
+            pass
 
         # Diagnóstico: listar ordens abertas reduceOnly
         try:
@@ -1473,28 +1494,26 @@ class EMAGradientStrategy:
             return
 
         px_now = self._preco_atual()
-        trg, off = self.cfg.BE_TRIGGER_PCT, self.cfg.BE_OFFSET_PCT
+        trg = float(self.cfg.BREAKEVEN_TRIGGER_PCT)
 
         if self.debug:
             trig_mult = (1.0 + trg) if side == "buy" else (1.0 - trg)
-            off_mult  = (1.0 + off) if side == "buy" else (1.0 - off)
-            print(f"🔎 Checando BE± | side={side.upper()} entry={entry:.6f} px_now={px_now:.6f} "
-                  f"trigger_mult={trig_mult:.6f} off_mult={off_mult:.6f}")
+            print(f"{self._log_prefix()} | 🔎 Checando BE | side={side.upper()} entry={entry:.6f} px_now={px_now:.6f} trigger_mult={trig_mult:.6f}")
 
         if side == "buy":
             if px_now < entry * (1.0 + trg):
                 if self.debug:
-                    print(f"… BE não ativado (LONG): px_now {px_now:.6f} < {entry*(1+trg):.6f}")
+                    print(f"{self._log_prefix()} | … BE não ativado (LONG): px_now {px_now:.6f} < {entry*(1+trg):.6f}")
                 return
-            target_stop = entry * (1.0 + off)
+            target_stop = entry  # BE: stop = preço de entrada
             stop_side   = "sell"
             better      = lambda new, cur: (cur is None) or (new > cur)
         elif side == "sell":
             if px_now > entry * (1.0 - trg):
                 if self.debug:
-                    print(f"… BE não ativado (SHORT): px_now {px_now:.6f} > {entry*(1-trg):.6f}")
+                    print(f"{self._log_prefix()} | … BE não ativado (SHORT): px_now {px_now:.6f} > {entry*(1-trg):.6f}")
                 return
-            target_stop = entry * (1.0 - off)
+            target_stop = entry  # BE para short
             stop_side   = "buy"
             better      = lambda new, cur: (cur is None) or (new < cur)
         else:
@@ -1524,7 +1543,7 @@ class EMAGradientStrategy:
         if oid:
             self._cancel_order_silent(oid)
         ret = self._place_stop(stop_side, amt, target_stop, df_for_log=df_for_log)
-        print(f"🔒 Trailing BE±: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f})")
+        print(f"{self._log_prefix()} | 🔒 BE ativado: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f})")
 
         self._safe_log(
             "ajuste_stop", df_for_log,
@@ -2338,36 +2357,21 @@ if __name__ == "__main__":
     EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
     def executar_estrategia(df_in: pd.DataFrame, dex_in, trade_logger_in: TradeLogger,
-                            usd_to_spend: float = 10.0, loop: bool = True, sleep_seconds: int = 60,
-                            dex_in_sec=None, trade_logger_in_sec: TradeLogger | None = None,
-                            usd_to_spend_sec: float | None = None):
+                            usd_to_spend: float = 10.0, loop: bool = True, sleep_seconds: int = 60):
         """Compatível com chamadas antigas (Render.com)."""
         print(f"[MODE] LIVE_TRADING={os.getenv('LIVE_TRADING', '0')} | DEX_TIMEOUT_MS={os.getenv('DEX_TIMEOUT_MS', '5000')}")
         if not isinstance(df_in, pd.DataFrame) or df_in.empty:
             print("DataFrame de candles está vazio ou inválido."); return
         strat_local = EMAGradientStrategy(dex=dex_in, symbol=SYMBOL_HL, logger=trade_logger_in, debug=True, invert_rationale=False, label="PRI")
-        strat_sec = None
-        if dex_in_sec is not None and trade_logger_in_sec is not None:
-            # Por padrão usa o mesmo USD por trade, mas permite override
-            usd_to_spend_sec = usd_to_spend if usd_to_spend_sec is None else usd_to_spend_sec
-            strat_sec = EMAGradientStrategy(dex=dex_in_sec, symbol=SYMBOL_HL, logger=trade_logger_in_sec, debug=True, invert_rationale=True, label="SEC")
         try:
             wa_pri = strat_local._wallet_address()
             print(f"[PRI] Inicializada | wallet={wa_pri} | racional=normal")
-            if strat_sec is not None:
-                wa_sec = strat_sec._wallet_address()
-                print(f"[SEC] Inicializada | wallet={wa_sec} | racional=invertido")
         except Exception:
             pass
         try:
             strat_local.step(df_in, usd_to_spend=usd_to_spend)
         except Exception as e:
             print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
-        if strat_sec is not None:
-            try:
-                strat_sec.step(df_in, usd_to_spend=(usd_to_spend_sec if usd_to_spend_sec is not None else usd_to_spend))
-            except Exception as e:
-                print(f"Erro ao executar a estratégia secundária: {type(e).__name__}: {e}")
         if not loop:
             return
         import time as _t
@@ -2392,9 +2396,6 @@ if __name__ == "__main__":
                 usd_env = os.getenv("USD_PER_TRADE")
                 if usd_env:
                     usd_to_spend = float(usd_env)
-                usd_env2 = os.getenv("USD_PER_TRADE2")
-                if usd_env2:
-                    usd_to_spend_sec = float(usd_env2)
             except Exception:
                 pass
             try:
@@ -2407,11 +2408,6 @@ if __name__ == "__main__":
                 strat_local.step(df_in, usd_to_spend=usd_to_spend)
             except Exception as e:
                 print(f"Erro ao executar a estratégia: {type(e).__name__}: {e}")
-            if strat_sec is not None:
-                try:
-                    strat_sec.step(df_in, usd_to_spend=(usd_to_spend_sec if usd_to_spend_sec is not None else usd_to_spend))
-                except Exception as e:
-                    print(f"Erro ao executar a estratégia secundária: {type(e).__name__}: {e}")
             try:
                 ss_env = os.getenv("SLEEP_SECONDS")
                 if ss_env:
@@ -2422,14 +2418,5 @@ if __name__ == "__main__":
 
     # Instancia os loggers de trades (primário e secundário)
     trade_logger = TradeLogger(df.columns if isinstance(df, pd.DataFrame) else [])
-    trade_logger_sec = TradeLogger(
-        df.columns if isinstance(df, pd.DataFrame) else [],
-        csv_path="trade_log_secondary.csv",
-        xlsx_path_dbfs="trade_log_secondary.xlsx",
-    ) if dex2 else None
-
-    # Chama o executor com estratégia primária e secundária (se configurada)
-    executar_estrategia(
-        df, dex, trade_logger,
-        dex_in_sec=dex2, trade_logger_in_sec=trade_logger_sec
-    )
+    # Chama o executor apenas para a estratégia principal
+    executar_estrategia(df, dex, trade_logger)
