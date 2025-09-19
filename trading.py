@@ -680,6 +680,8 @@ class GradientConfig:
     FIXED_STOP_PCT: float   = 0.10        # 10% perda máxima no preço
     TAKE_PROFIT_PCT: float  = 0.50        # 50% ganho alvo
     BREAKEVEN_TRIGGER_PCT: float = 0.15   # ao +15% a favor, mover stop = entry
+    MID_TRAIL_TRIGGER_PCT: float = 0.10   # ao +10% a favor, mover stop para -5%
+    MID_TRAIL_STOP_OFFSET_PCT: float = 0.05  # -5% relativo ao entry
 
     # Breakeven trailing legado (mantido opcionalmente)
     BE_TRIGGER_PCT: float   = 0.005       # +0,5% a favor para acionar BE
@@ -1226,9 +1228,19 @@ class EMAGradientStrategy:
         try:
             # type compatível com Hyperliquid via CCXT
             ret = self.dex.create_order(self.symbol, "stop_market", side, amt, None, params)
-        except Exception as e:
-            print(f"{self._log_prefix()} | ❌ Falha ao criar STOP gatilho: {type(e).__name__}: {e}")
-            raise
+        except Exception as e1:
+            print(f"{self._log_prefix()} | ⚠️ stop_market falhou: {type(e1).__name__}: {e1} → tentando 'stop' com mesmos params")
+            try:
+                ret = self.dex.create_order(self.symbol, "stop", side, amt, None, params)
+            except Exception as e2:
+                print(f"{self._log_prefix()} | ⚠️ stop falhou: {type(e2).__name__}: {e2} → tentando variantes de campos + trigger 'last'")
+                # Tenta chaves alternativas aceitas por algumas integrações
+                alt_params = {"reduceOnly": True, "stopLoss": px, "triggerPrice": px, "trigger": "last"}
+                try:
+                    ret = self.dex.create_order(self.symbol, "stop_market", side, amt, None, alt_params)
+                except Exception as e3:
+                    print(f"{self._log_prefix()} | ❌ Todas variantes de STOP falharam: {type(e3).__name__}: {e3}")
+                    raise
 
         # Diagnóstico do stop criado
         try:
@@ -1257,11 +1269,19 @@ class EMAGradientStrategy:
         if self.debug:
             print(f"{self._log_prefix()} | 🟢 Criando TAKE PROFIT gatilho {side.upper()} reduceOnly @ {px:.6f} (sem market)")
         try:
-            # tipo compatível; se não suportar, a exchange pode aceitar como 'take_profit_market'
             ret = self.dex.create_order(self.symbol, "take_profit_market", side, amt, None, params)
-        except Exception as e:
-            print(f"{self._log_prefix()} | ❌ Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}")
-            return None
+        except Exception as e1:
+            print(f"{self._log_prefix()} | ⚠️ take_profit_market falhou: {type(e1).__name__}: {e1} → tentando 'take_profit'")
+            try:
+                ret = self.dex.create_order(self.symbol, "take_profit", side, amt, None, params)
+            except Exception as e2:
+                print(f"{self._log_prefix()} | ⚠️ take_profit falhou: {type(e2).__name__}: {e2} → tentando chaves alternativas")
+                alt_params = {"reduceOnly": True, "takeProfit": px, "triggerPrice": px, "trigger": "last"}
+                try:
+                    ret = self.dex.create_order(self.symbol, "take_profit_market", side, amt, None, alt_params)
+                except Exception as e3:
+                    print(f"{self._log_prefix()} | ❌ Todas variantes de TAKE PROFIT falharam: {type(e3).__name__}: {e3}")
+                    return None
         try:
             info = ret if isinstance(ret, dict) else {}
             oid = info.get("id") or info.get("orderId") or (info.get("info", {}) or {}).get("oid")
@@ -1376,10 +1396,8 @@ class EMAGradientStrategy:
                         ro = o.get("reduceOnly")
                         if ro is None and isinstance(o.get("params"), dict):
                             ro = o["params"].get("reduceOnly")
-                        if not ro:
-                            continue
                         info = o.get("info", {}) or {}
-                        print(f"{self._log_prefix()} | - id={o.get('id')} type={o.get('type')} side={o.get('side')} reduceOnly={ro} stopLossPrice={info.get('stopLossPrice')} triggerPrice={info.get('triggerPrice')}")
+                        print(f"{self._log_prefix()} | - id={o.get('id')} type={o.get('type')} side={o.get('side')} reduceOnly={ro} stopLossPrice={info.get('stopLossPrice')} takeProfitPrice={info.get('takeProfitPrice')} triggerPrice={info.get('triggerPrice')}")
         except Exception as e:
             print(f"{self._log_prefix()} | ⚠️ Falha ao listar open_orders: {type(e).__name__}: {e}")
         return ordem_entrada, ordem_stop
@@ -1494,56 +1512,66 @@ class EMAGradientStrategy:
             return
 
         px_now = self._preco_atual()
-        trg = float(self.cfg.BREAKEVEN_TRIGGER_PCT)
+        trg_be  = float(self.cfg.BREAKEVEN_TRIGGER_PCT)
+        trg_mid = float(self.cfg.MID_TRAIL_TRIGGER_PCT)
+        off_mid = float(self.cfg.MID_TRAIL_STOP_OFFSET_PCT)
 
+        # Diagnóstico geral
         if self.debug:
-            trig_mult = (1.0 + trg) if side == "buy" else (1.0 - trg)
-            print(f"{self._log_prefix()} | 🔎 Checando BE | side={side.upper()} entry={entry:.6f} px_now={px_now:.6f} trigger_mult={trig_mult:.6f}")
+            print(f"{self._log_prefix()} | 🔎 Trailing step | side={side.upper()} entry={entry:.6f} px_now={px_now:.6f} mid_trg={trg_mid:.3f} be_trg={trg_be:.3f}")
+
+        target_stop = None
+        stop_side = None
+        better = None
 
         if side == "buy":
-            if px_now < entry * (1.0 + trg):
-                if self.debug:
-                    print(f"{self._log_prefix()} | … BE não ativado (LONG): px_now {px_now:.6f} < {entry*(1+trg):.6f}")
-                return
-            target_stop = entry  # BE: stop = preço de entrada
-            stop_side   = "sell"
-            better      = lambda new, cur: (cur is None) or (new > cur)
+            ret = (px_now - entry) / entry
+            stop_side = "sell"
+            better = (lambda new, cur: (cur is None) or (new > cur))
+            if ret >= trg_be:
+                target_stop = entry  # 0%
+            elif ret >= trg_mid:
+                target_stop = entry * (1.0 - off_mid)  # -5%
         elif side == "sell":
-            if px_now > entry * (1.0 - trg):
-                if self.debug:
-                    print(f"{self._log_prefix()} | … BE não ativado (SHORT): px_now {px_now:.6f} > {entry*(1-trg):.6f}")
-                return
-            target_stop = entry  # BE para short
-            stop_side   = "buy"
-            better      = lambda new, cur: (cur is None) or (new < cur)
+            ret = (entry - px_now) / entry
+            stop_side = "buy"
+            better = (lambda new, cur: (cur is None) or (new < cur))
+            if ret >= trg_be:
+                target_stop = entry
+            elif ret >= trg_mid:
+                target_stop = entry * (1.0 + off_mid)
         else:
+            return
+
+        if target_stop is None:
+            # nenhum ajuste necessário no estágio atual
             return
 
         oid, cur_stop, cur_is_sell = self._find_existing_stop()
         if self.debug:
-            print(f"🔎 Stop atual: id={oid} px={cur_stop} lado_sell?={cur_is_sell} | target_stop={target_stop:.6f}")
+            print(f"{self._log_prefix()} | 🔎 Stop atual: id={oid} px={cur_stop} lado_sell?={cur_is_sell} | target_stop={target_stop:.6f}")
 
         # stop do lado errado? remove
         if cur_stop is not None:
             if (side == "buy" and not cur_is_sell) or (side == "sell" and cur_is_sell):
                 if self.debug:
-                    print("🧹 Stop do lado errado ⇒ cancelando para recriar do lado correto.")
+                    print(f"{self._log_prefix()} | 🧹 Stop do lado errado ⇒ cancelando para recriar do lado correto.")
                 self._cancel_order_silent(oid)
                 cur_stop, oid = None, None
 
         if not better(target_stop, cur_stop):
             if self.debug:
-                print("… Não melhora o stop atual ⇒ mantendo.")
+                print(f"{self._log_prefix()} | … Não melhora o stop atual ⇒ mantendo.")
             return
         if not self._anti_spam_ok("adjust"):
             if self.debug:
-                print("⏳ Anti-spam (adjust) acionado ⇒ sem ajuste.")
+                print(f"{self._log_prefix()} | ⏳ Anti-spam (adjust) acionado ⇒ sem ajuste.")
             return
 
         if oid:
             self._cancel_order_silent(oid)
         ret = self._place_stop(stop_side, amt, target_stop, df_for_log=df_for_log)
-        print(f"{self._log_prefix()} | 🔒 BE ativado: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f})")
+        print(f"{self._log_prefix()} | 🔒 Trailing step: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f})")
 
         self._safe_log(
             "ajuste_stop", df_for_log,
