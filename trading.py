@@ -1221,26 +1221,25 @@ class EMAGradientStrategy:
     def _place_stop(self, side: str, amount: float, stop_price: float, df_for_log: Optional[pd.DataFrame] = None):
         amt = self._round_amount(amount)
         px  = float(stop_price)
-        # Apenas ordem de gatilho (stop), nunca market
+        # Em Hyperliquid via CCXT, ordens condicionais são enviadas como type='market' com gatilhos
         params = {"reduceOnly": True, "stopLossPrice": px, "triggerPrice": px, "trigger": "mark"}
-        if self.debug:
-            print(f"{self._log_prefix()} | 🛑 Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f} (sem market)")
+        price_ref = None
         try:
-            # type compatível com Hyperliquid via CCXT
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, None, params)
+            price_ref = self._preco_atual()
+        except Exception:
+            pass
+        if self.debug:
+            print(f"{self._log_prefix()} | 🛑 Criando STOP condicional {side.upper()} reduceOnly @ {px:.6f} (type=market, trigger=mark)")
+        try:
+            ret = self.dex.create_order(self.symbol, "market", side, amt, price_ref, params)
         except Exception as e1:
-            print(f"{self._log_prefix()} | ⚠️ stop_market falhou: {type(e1).__name__}: {e1} → tentando 'stop' com mesmos params")
+            print(f"{self._log_prefix()} | ⚠️ market+mark falhou: {type(e1).__name__}: {e1} → tentando trigger 'last'")
+            params2 = {"reduceOnly": True, "stopLossPrice": px, "triggerPrice": px, "trigger": "last"}
             try:
-                ret = self.dex.create_order(self.symbol, "stop", side, amt, None, params)
+                ret = self.dex.create_order(self.symbol, "market", side, amt, price_ref, params2)
             except Exception as e2:
-                print(f"{self._log_prefix()} | ⚠️ stop falhou: {type(e2).__name__}: {e2} → tentando variantes de campos + trigger 'last'")
-                # Tenta chaves alternativas aceitas por algumas integrações
-                alt_params = {"reduceOnly": True, "stopLoss": px, "triggerPrice": px, "trigger": "last"}
-                try:
-                    ret = self.dex.create_order(self.symbol, "stop_market", side, amt, None, alt_params)
-                except Exception as e3:
-                    print(f"{self._log_prefix()} | ❌ Todas variantes de STOP falharam: {type(e3).__name__}: {e3}")
-                    raise
+                print(f"{self._log_prefix()} | ❌ STOP condicional falhou: {type(e2).__name__}: {e2}")
+                return None
 
         # Diagnóstico do stop criado
         try:
@@ -1264,24 +1263,25 @@ class EMAGradientStrategy:
     def _place_takeprofit(self, side: str, amount: float, tp_price: float, df_for_log: Optional[pd.DataFrame] = None):
         amt = self._round_amount(amount)
         px  = float(tp_price)
-        # Ordem de gatilho de take profit reduceOnly
+        # Ordem condicional de take profit reduceOnly em HL é type='market' com parâmetros de gatilho
         params = {"reduceOnly": True, "takeProfitPrice": px, "triggerPrice": px, "trigger": "mark"}
-        if self.debug:
-            print(f"{self._log_prefix()} | 🟢 Criando TAKE PROFIT gatilho {side.upper()} reduceOnly @ {px:.6f} (sem market)")
+        price_ref = None
         try:
-            ret = self.dex.create_order(self.symbol, "take_profit_market", side, amt, None, params)
+            price_ref = self._preco_atual()
+        except Exception:
+            pass
+        if self.debug:
+            print(f"{self._log_prefix()} | 🟢 Criando TAKE PROFIT condicional {side.upper()} reduceOnly @ {px:.6f} (type=market, trigger=mark)")
+        try:
+            ret = self.dex.create_order(self.symbol, "market", side, amt, price_ref, params)
         except Exception as e1:
-            print(f"{self._log_prefix()} | ⚠️ take_profit_market falhou: {type(e1).__name__}: {e1} → tentando 'take_profit'")
+            print(f"{self._log_prefix()} | ⚠️ market+mark TP falhou: {type(e1).__name__}: {e1} → tentando trigger 'last'")
+            params2 = {"reduceOnly": True, "takeProfitPrice": px, "triggerPrice": px, "trigger": "last"}
             try:
-                ret = self.dex.create_order(self.symbol, "take_profit", side, amt, None, params)
+                ret = self.dex.create_order(self.symbol, "market", side, amt, price_ref, params2)
             except Exception as e2:
-                print(f"{self._log_prefix()} | ⚠️ take_profit falhou: {type(e2).__name__}: {e2} → tentando chaves alternativas")
-                alt_params = {"reduceOnly": True, "takeProfit": px, "triggerPrice": px, "trigger": "last"}
-                try:
-                    ret = self.dex.create_order(self.symbol, "take_profit_market", side, amt, None, alt_params)
-                except Exception as e3:
-                    print(f"{self._log_prefix()} | ❌ Todas variantes de TAKE PROFIT falharam: {type(e3).__name__}: {e3}")
-                    return None
+                print(f"{self._log_prefix()} | ❌ TAKE PROFIT condicional falhou: {type(e2).__name__}: {e2}")
+                return None
         try:
             info = ret if isinstance(ret, dict) else {}
             oid = info.get("id") or info.get("orderId") or (info.get("info", {}) or {}).get("oid")
