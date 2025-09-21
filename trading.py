@@ -658,9 +658,9 @@ class GradientConfig:
     TAKE_PROFIT_CAPITAL_PCT: float = 0.30  # 30% da margem como alvo
 
     # down & anti-flip-flop
-    COOLDOWN_BARS: int      = 2           # cooldown em velas (prioritário)
-    POST_COOLDOWN_CONFIRM: int = 1        # exigir +1 vela válida após cooldown
-    COOLDOWN_MINUTOS: int   = 0           # legado; não usado se COOLDOWN_BARS>0
+    COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
+    POST_COOLDOWN_CONFIRM: int = 0        # confirmações pós-cooldown desativadas
+    COOLDOWN_MINUTOS: int   = 30          # tempo mínimo entre entradas após saída
     ANTI_SPAM_SECS: int     = 3
     MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
 
@@ -871,6 +871,9 @@ class EMAGradientStrategy:
         return False
 
     def _marcar_cooldown_barras(self, df: pd.DataFrame):
+        # Sempre registra cooldown temporal, independente das barras
+        if int(self.cfg.COOLDOWN_MINUTOS or 0) > 0:
+            self._marcar_cooldown()
         bars = max(0, int(self.cfg.COOLDOWN_BARS or 0))
         if bars <= 0:
             # limpa ambos os modos
@@ -1544,6 +1547,9 @@ class EMAGradientStrategy:
         price  = self._preco_atual()
         amount = self._round_amount((usd_to_spend * self.cfg.LEVERAGE) / price)
 
+        # Ao abrir nova posição, limpa cooldown temporal
+        self._cooldown_until = None
+
         self._log(
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
@@ -1894,7 +1900,23 @@ class EMAGradientStrategy:
             except Exception:
                 pass
 
-        # Cooldown por barras (prioritário); fallback por minutos (legado)
+        # Cooldown temporal (tempo fixo pós-saída)
+        if not pos and self._cooldown_ativo():
+            now = datetime.now(timezone.utc)
+            remaining_sec = (self._cooldown_until - now).total_seconds() if self._cooldown_until else 0
+            if remaining_sec <= 0:
+                self._cooldown_until = None
+            else:
+                remaining_min = remaining_sec / 60.0
+                self._log(
+                    f"Cooldown temporal ativo: novas entradas liberadas em {remaining_min:.1f} minuto(s).",
+                    level="INFO",
+                )
+                self._safe_log("cooldown_temporal", df_for_log=df, tipo="info")
+                self._last_pos_side = None
+                return
+
+        # Cooldown por barras (legado; mantido para compatibilidade)
         if self._cooldown_barras_ativo(df):
             try:
                 cd_left = None
