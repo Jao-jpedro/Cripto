@@ -1402,6 +1402,7 @@ class EMAGradientStrategy:
             "reduceOnly": True,
             "triggerPrice": px,
             "stopLossPrice": px,
+            "trigger": "mark",
         }
         if self.debug:
             self._log(f"Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
@@ -1415,8 +1416,8 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            # Hyperliquid exige preço-base mesmo para stop market (usado apenas para slippage)
-            ret = self.dex.create_order(self.symbol, "market", side, amt, px, params)
+            # Hyperliquid exige especificar preço base mesmo para stop_market
+            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)
         except Exception as e:
             self._log(f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}", level="ERROR")
             raise
