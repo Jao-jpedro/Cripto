@@ -1294,12 +1294,16 @@ class EMAGradientStrategy:
         amt = self._round_amount(amount)
         px  = float(stop_price)
         # Apenas ordem de gatilho (stop), nunca market
-        params = {"reduceOnly": True, "stopLossPrice": px, "triggerPrice": px, "trigger": "mark"}
+        params = {
+            "reduceOnly": True,
+            "triggerPrice": px,
+            "stopLossPrice": px,
+        }
         if self.debug:
             self._log(f"Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
         try:
-            # type compatível com Hyperliquid via CCXT
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, None, params)
+            # Hyperliquid exige preço-base mesmo para stop market (usado apenas para slippage)
+            ret = self.dex.create_order(self.symbol, "market", side, amt, px, params)
         except Exception as e:
             self._log(f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}", level="ERROR")
             raise
