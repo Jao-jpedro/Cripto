@@ -1255,6 +1255,110 @@ class EMAGradientStrategy:
         except Exception:
             return None
 
+    def _norm_order_side(self, order: Dict[str, Any]) -> Optional[str]:
+        side = order.get("side")
+        info = order.get("info") or {}
+        params = order.get("params") or {}
+        if side is None and isinstance(info, dict):
+            side = info.get("side") or info.get("orderSide")
+            resting = info.get("resting") or info.get("restingOrder")
+            if isinstance(resting, dict):
+                side = resting.get("side") or resting.get("b")
+        if side is None and isinstance(params, dict):
+            side = params.get("side")
+        if isinstance(side, bool):
+            side = "buy" if side else "sell"
+        return self._norm_side(side)
+
+    def _parse_reduce_only_kind_price(self, order: Dict[str, Any]) -> Tuple[str, Optional[float]]:
+        info = order.get("info") or {}
+        params = order.get("params") or {}
+        trigger_candidates = [
+            order.get("triggerPrice"), order.get("stopPrice"), order.get("stopLossPrice"),
+            info.get("triggerPrice"), info.get("stopPrice"), info.get("stopLossPrice"),
+            params.get("triggerPrice") if isinstance(params, dict) else None,
+            params.get("stopLossPrice") if isinstance(params, dict) else None,
+        ]
+        trigger = next((t for t in trigger_candidates if t is not None), None)
+        if trigger is None and isinstance(info, dict):
+            trigger_info = info.get("trigger") or {}
+            trigger = trigger_info.get("triggerPx")
+        if trigger is not None:
+            try:
+                return "stop", float(trigger)
+            except (TypeError, ValueError):
+                return "stop", None
+
+        price_candidates = [
+            order.get("price"),
+            info.get("price") if isinstance(info, dict) else None,
+            info.get("px") if isinstance(info, dict) else None,
+        ]
+        if isinstance(info, dict):
+            resting = info.get("resting") or {}
+            if isinstance(resting, dict):
+                price_candidates.append(resting.get("px"))
+        if isinstance(params, dict):
+            price_candidates.append(params.get("price"))
+
+        for candidate in price_candidates:
+            if candidate is None:
+                continue
+            try:
+                return "take", float(candidate)
+            except (TypeError, ValueError):
+                continue
+        return "take", None
+
+    def _is_reduce_only(self, order: Dict[str, Any]) -> bool:
+        if not isinstance(order, dict):
+            return False
+        candidates = [order.get("reduceOnly")]
+        info = order.get("info")
+        if isinstance(info, dict):
+            candidates.append(info.get("reduceOnly"))
+            resting = info.get("resting") or {}
+            if isinstance(resting, dict):
+                candidates.append(resting.get("reduceOnly"))
+        params = order.get("params")
+        if isinstance(params, dict):
+            candidates.append(params.get("reduceOnly"))
+        return any(bool(c) for c in candidates)
+
+    def _fetch_reduce_only_orders(self) -> List[Dict[str, Any]]:
+        if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
+            return []
+        try:
+            orders = self.dex.fetch_open_orders(self.symbol)
+        except Exception as e:
+            if self.debug:
+                self._log(f"Falha ao obter open_orders para verificação de proteções: {type(e).__name__}: {e}", level="WARN")
+            return []
+        result = []
+        for order in orders or []:
+            if self._is_reduce_only(order):
+                result.append(order)
+        return result
+
+    def _find_matching_protection(self, kind: str, side: str, price: float) -> Optional[Dict[str, Any]]:
+        target_side = self._norm_side(side)
+        orders = self._fetch_reduce_only_orders()
+        if not orders:
+            return None
+        tol = max(1e-8, abs(price) * 1e-5)
+        for order in orders:
+            order_kind, order_price = self._parse_reduce_only_kind_price(order)
+            if order_kind != kind:
+                continue
+            oside = self._norm_order_side(order)
+            if target_side and oside and target_side != oside:
+                continue
+            if order_price is None:
+                continue
+            if abs(order_price - price) <= tol:
+                return order
+        return None
+
     def _cancel_protective_orders(self, fetch_backup: bool = False):
         for attr in ("_last_stop_order_id", "_last_take_order_id"):
             oid = getattr(self, attr)
@@ -1301,6 +1405,15 @@ class EMAGradientStrategy:
         }
         if self.debug:
             self._log(f"Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+        existing = self._find_matching_protection("stop", side, px)
+        if existing is not None:
+            self._last_stop_order_id = self._extract_order_id(existing)
+            if self.debug:
+                self._log(
+                    f"Stop existente reutilizado id={self._last_stop_order_id} price≈{px:.6f}",
+                    level="DEBUG",
+                )
+            return existing
         try:
             # Hyperliquid exige preço-base mesmo para stop market (usado apenas para slippage)
             ret = self.dex.create_order(self.symbol, "market", side, amt, px, params)
@@ -1318,6 +1431,7 @@ class EMAGradientStrategy:
             sl = inf.get("stopLossPrice") if isinstance(inf, dict) else None
             tp = inf.get("triggerPrice") if isinstance(inf, dict) else None
             self._log(f"STOP criado id={oid} type={typ} reduceOnly={ro} stopLoss={sl} trigger={tp}", level="DEBUG")
+            self._last_stop_order_id = str(oid) if oid else None
             # Logger opcional
             try:
                 self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
@@ -1333,6 +1447,15 @@ class EMAGradientStrategy:
         params = {"reduceOnly": True}
         if self.debug:
             self._log(f"Criando TAKE PROFIT {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+        existing = self._find_matching_protection("take", side, px)
+        if existing is not None:
+            self._last_take_order_id = self._extract_order_id(existing)
+            if self.debug:
+                self._log(
+                    f"Take profit existente reutilizado id={self._last_take_order_id} price≈{px:.6f}",
+                    level="DEBUG",
+                )
+            return existing
         try:
             ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
         except Exception as e:
@@ -1344,6 +1467,7 @@ class EMAGradientStrategy:
             oid = self._extract_order_id(info)
             typ = info.get("type") or (info.get("info", {}) or {}).get("type")
             self._log(f"Take profit criado id={oid} price={px}", level="DEBUG")
+            self._last_take_order_id = oid
             try:
                 self._safe_log("take_profit_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=oid)
             except Exception:
