@@ -737,6 +737,22 @@ class EMAGradientStrategy:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
         print(f"[{level}] [{prefix}] {message}", flush=True)
 
+    def _protection_prices(self, entry_price: float, side: str) -> Tuple[float, float]:
+        if entry_price <= 0:
+            raise ValueError("entry_price deve ser positivo")
+        norm_side = self._norm_side(side)
+        if norm_side not in ("buy", "sell"):
+            raise ValueError("side inválido para proteção")
+        risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
+        reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
+        if norm_side == "buy":
+            stop_px = entry_price * (1.0 - risk_ratio)
+            take_px = entry_price * (1.0 + reward_ratio)
+        else:
+            stop_px = entry_price * (1.0 + risk_ratio)
+            take_px = entry_price * (1.0 - reward_ratio)
+        return stop_px, take_px
+
 
     # ---------- config → params (reuso dos cálculos do backtest) ----------
     def _cfg_to_btparams(self):
@@ -1341,8 +1357,10 @@ class EMAGradientStrategy:
         return result
 
     def _find_matching_protection(self, kind: str, side: str, price: float) -> Optional[Dict[str, Any]]:
+        return self._find_matching_protection_in_orders(kind, side, price, self._fetch_reduce_only_orders())
+
+    def _find_matching_protection_in_orders(self, kind: str, side: str, price: float, orders: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
         target_side = self._norm_side(side)
-        orders = self._fetch_reduce_only_orders()
         if not orders:
             return None
         tol = max(1e-8, abs(price) * 1e-5)
@@ -1394,7 +1412,9 @@ class EMAGradientStrategy:
                 self._log(f"Falha ao cancelar ordens de proteção remanescentes: {e}", level="WARN")
 
     # ---------- stop reduceOnly ----------
-    def _place_stop(self, side: str, amount: float, stop_price: float, df_for_log: Optional[pd.DataFrame] = None):
+    def _place_stop(self, side: str, amount: float, stop_price: float,
+                    df_for_log: Optional[pd.DataFrame] = None,
+                    existing_orders: Optional[List[Dict[str, Any]]] = None):
         amt = self._round_amount(amount)
         px  = float(stop_price)
         # Apenas ordem de gatilho (stop), nunca market
@@ -1406,7 +1426,10 @@ class EMAGradientStrategy:
         }
         if self.debug:
             self._log(f"Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
-        existing = self._find_matching_protection("stop", side, px)
+        if existing_orders is None:
+            existing = self._find_matching_protection("stop", side, px)
+        else:
+            existing = self._find_matching_protection_in_orders("stop", side, px, existing_orders)
         if existing is not None:
             self._last_stop_order_id = self._extract_order_id(existing)
             if self.debug:
@@ -1442,13 +1465,18 @@ class EMAGradientStrategy:
             pass
         return ret
 
-    def _place_take_profit(self, side: str, amount: float, target_price: float, df_for_log: Optional[pd.DataFrame] = None):
+    def _place_take_profit(self, side: str, amount: float, target_price: float,
+                           df_for_log: Optional[pd.DataFrame] = None,
+                           existing_orders: Optional[List[Dict[str, Any]]] = None):
         amt = self._round_amount(amount)
         px = float(target_price)
         params = {"reduceOnly": True}
         if self.debug:
             self._log(f"Criando TAKE PROFIT {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
-        existing = self._find_matching_protection("take", side, px)
+        if existing_orders is None:
+            existing = self._find_matching_protection("take", side, px)
+        else:
+            existing = self._find_matching_protection_in_orders("take", side, px, existing_orders)
         if existing is not None:
             self._last_take_order_id = self._extract_order_id(existing)
             if self.debug:
@@ -1476,6 +1504,32 @@ class EMAGradientStrategy:
         except Exception:
             pass
         return ret
+
+    def _ensure_position_protections(self, pos: Dict[str, Any], df_for_log: Optional[pd.DataFrame] = None):
+        try:
+            qty = float(pos.get("contracts") or 0.0)
+            if qty <= 0:
+                return
+            entry_price = pos.get("entryPrice") or pos.get("entryPx") or pos.get("entry_price")
+            if entry_price is None:
+                return
+            entry = float(entry_price)
+            if entry <= 0:
+                return
+            side_raw = pos.get("side") or pos.get("positionSide")
+            norm_side = self._norm_side(side_raw)
+            if norm_side not in ("buy", "sell"):
+                return
+            stop_px, take_px = self._protection_prices(entry, norm_side)
+            close_side = "sell" if norm_side == "buy" else "buy"
+
+            orders = self._fetch_reduce_only_orders()
+            stop_order = self._place_stop(close_side, qty, stop_px, df_for_log=df_for_log, existing_orders=orders)
+            if orders is not None and stop_order is not None and stop_order not in orders:
+                orders = (orders or []) + [stop_order]
+            self._place_take_profit(close_side, qty, take_px, df_for_log=df_for_log, existing_orders=orders)
+        except Exception as e:
+            self._log(f"Falha ao sincronizar proteções: {type(e).__name__}: {e}", level="WARN")
 
     # ---------- ordens ----------
     def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
@@ -1536,20 +1590,10 @@ class EMAGradientStrategy:
         self._last_stop_order_id = None
         self._last_take_order_id = None
 
-        risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
-        reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         norm_side = self._norm_side(side)
-
-        if norm_side == "buy":
-            sl_price = price * (1.0 - risk_ratio)
-            tp_price = price * (1.0 + reward_ratio)
-            sl_side = "sell"
-            tp_side = "sell"
-        else:
-            sl_price = price * (1.0 + risk_ratio)
-            tp_price = price * (1.0 - reward_ratio)
-            sl_side = "buy"
-            tp_side = "buy"
+        sl_price, tp_price = self._protection_prices(price, norm_side)
+        sl_side = "sell" if norm_side == "buy" else "buy"
+        tp_side = sl_side
 
         if self.debug:
             self._log(
@@ -1890,6 +1934,7 @@ class EMAGradientStrategy:
 
         if pos:
             lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
+            self._ensure_position_protections(pos, df_for_log=df)
             self._log("Posição aberta: aguardando execução de TP/SL.", level="DEBUG")
             self._safe_log("decisao", df_for_log=df, tipo="info")
             self._last_pos_side = lado if lado in ("buy", "sell") else None
