@@ -694,8 +694,9 @@ ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("DOGE-USD", "DOGEUSDT", "DOGE/USDC:USDC", 10, usd_env="USD_PER_TRADE_DOGE"),
     AssetSetup("AVAX-USD", "AVAXUSDT", "AVAX/USDC:USDC", 10, usd_env="USD_PER_TRADE_AVAX"),
     AssetSetup("ENA-USD", "ENAUSDT", "ENA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ENA"),
-    AssetSetup("FARTCOIN-USD", "FARTCOINUSDT", "FARTCOIN/USDC:USDC", 10, usd_env="USD_PER_TRADE_FARTCOIN"),
     AssetSetup("BNB-USD", "BNBUSDT", "BNB/USDC:USDC", 10, usd_env="USD_PER_TRADE_BNB"),
+    AssetSetup("SUI-USD", "SUIUSDT", "SUI/USDC:USDC", 10, usd_env="USD_PER_TRADE_SUI"),
+    AssetSetup("ADA-USD", "ADAUSDT", "ADA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ADA"),
 ]
 
 
@@ -1538,6 +1539,15 @@ class EMAGradientStrategy:
             norm_side = self._norm_side(side_raw)
             if norm_side not in ("buy", "sell"):
                 return
+            try:
+                leverage_info = ((pos.get("info") or {}).get("position") or {}).get("leverage") or {}
+                lev_type = str(leverage_info.get("type") or "").lower()
+                target_lev = int(self.cfg.LEVERAGE)
+                if lev_type != "isolated" and target_lev > 0:
+                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated"})
+                    self._log("Leverage ajustada para isolated em posição existente.", level="INFO")
+            except Exception as e:
+                self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
             stop_px, take_px = self._protection_prices(entry, norm_side)
             close_side = "sell" if norm_side == "buy" else "buy"
 
@@ -1557,6 +1567,18 @@ class EMAGradientStrategy:
             self._log("Entrada ignorada: ordem pendente detectada.", level="WARN"); return None, None
         if not self._anti_spam_ok("open"):
             self._log("Entrada bloqueada pelo anti-spam.", level="DEBUG"); return None, None
+
+        try:
+            lev_int = int(self.cfg.LEVERAGE)
+        except Exception:
+            lev_int = None
+        if lev_int and lev_int > 0:
+            try:
+                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})
+                if self.debug:
+                    self._log(f"Leverage ajustada para {lev_int}x (isolated)", level="DEBUG")
+            except Exception as e:
+                self._log(f"Falha ao ajustar leverage isolada: {type(e).__name__}: {e}", level="WARN")
 
         usd_to_spend = max(usd_to_spend, self.cfg.MIN_ORDER_USD / self.cfg.LEVERAGE)
         price  = self._preco_atual()
