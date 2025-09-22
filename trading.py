@@ -19,6 +19,7 @@ _warnings.filterwarnings(
 import requests
 import pandas as pd
 import numpy as np
+import math
 from datetime import datetime, timedelta, timezone
 import os
 import sys  # Adicione esta linha no topo do arquivo
@@ -1386,6 +1387,34 @@ class EMAGradientStrategy:
                 return order
         return None
 
+    def _order_effective_price(self, order: Dict[str, Any]) -> Optional[float]:
+        if not isinstance(order, dict):
+            return None
+        _, price = self._parse_reduce_only_kind_price(order)
+        if price is not None:
+            return price
+        candidates = [
+            order.get("price"),
+        ]
+        info = order.get("info") or {}
+        if isinstance(info, dict):
+            candidates.append(info.get("price"))
+            candidates.append(info.get("px"))
+        for cand in candidates:
+            if cand is None:
+                continue
+            try:
+                return float(cand)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _classify_protection_price(self, price: float, entry: float, norm_side: str) -> str:
+        if norm_side == "buy":
+            return "stop" if price <= entry else "take"
+        else:  # sell / short
+            return "stop" if price >= entry else "take"
+
     def _cancel_protective_orders(self, fetch_backup: bool = False):
         for attr in ("_last_stop_order_id", "_last_take_order_id"):
             oid = getattr(self, attr)
@@ -1552,10 +1581,48 @@ class EMAGradientStrategy:
             close_side = "sell" if norm_side == "buy" else "buy"
 
             orders = self._fetch_reduce_only_orders()
-            stop_order = self._place_stop(close_side, qty, stop_px, df_for_log=df_for_log, existing_orders=orders)
-            if orders is not None and stop_order is not None and stop_order not in orders:
-                orders = (orders or []) + [stop_order]
-            self._place_take_profit(close_side, qty, take_px, df_for_log=df_for_log, existing_orders=orders)
+            remaining_orders: List[Dict[str, Any]] = []
+            stop_match = None
+            take_match = None
+            tol_stop = max(1e-8, abs(stop_px) * 1e-5)
+            tol_take = max(1e-8, abs(take_px) * 1e-5)
+
+            for order in orders or []:
+                oid = self._extract_order_id(order)
+                price = self._order_effective_price(order)
+                if price is None:
+                    remaining_orders.append(order)
+                    continue
+                oside = self._norm_order_side(order)
+                if oside and oside != close_side:
+                    remaining_orders.append(order)
+                    continue
+                kind_guess = self._classify_protection_price(price, entry, norm_side)
+                if kind_guess == "stop":
+                    if abs(price - stop_px) <= tol_stop:
+                        stop_match = order
+                        self._last_stop_order_id = oid
+                        remaining_orders.append(order)
+                    else:
+                        self._cancel_order_silent(oid)
+                elif kind_guess == "take":
+                    if abs(price - take_px) <= tol_take:
+                        take_match = order
+                        self._last_take_order_id = oid
+                        remaining_orders.append(order)
+                    else:
+                        self._cancel_order_silent(oid)
+                else:
+                    remaining_orders.append(order)
+
+            orders = remaining_orders
+
+            if stop_match is None:
+                stop_order = self._place_stop(close_side, qty, stop_px, df_for_log=df_for_log, existing_orders=orders)
+                if stop_order is not None:
+                    orders.append(stop_order)
+            if take_match is None:
+                self._place_take_profit(close_side, qty, take_px, df_for_log=df_for_log, existing_orders=orders)
         except Exception as e:
             self._log(f"Falha ao sincronizar proteções: {type(e).__name__}: {e}", level="WARN")
 
@@ -1908,7 +1975,7 @@ class EMAGradientStrategy:
         )
 
     # ---------- loop principal ----------
-    def step(self, df: pd.DataFrame, usd_to_spend: float):
+    def step(self, df: pd.DataFrame, usd_to_spend: float, rsi_df_hourly: Optional[pd.DataFrame] = None):
         # filtra símbolo, se DF tiver múltiplos
         if "criptomoeda" in df.columns and (df["criptomoeda"] == self._df_symbol_hint).any():
             df = df.loc[df["criptomoeda"] == self._df_symbol_hint].copy()
@@ -2089,22 +2156,50 @@ class EMAGradientStrategy:
                 self._safe_log("paper_mode", df_for_log=df, tipo="info")
                 self._last_pos_side = None
                 return
-            # no-trade zone
+            # RSI força (ignora no-trade zone se disparar)
+            rsi_val = float('nan')
+            try:
+                hourly_src = rsi_df_hourly
+                if isinstance(hourly_src, pd.DataFrame) and not hourly_src.empty and ("rsi" in hourly_src.columns):
+                    df_rsi = hourly_src
+                    if "criptomoeda" in df_rsi.columns:
+                        df_rsi = df_rsi.loc[df_rsi["criptomoeda"] == self._df_symbol_hint]
+                    if not df_rsi.empty:
+                        rsi_val = float(df_rsi["rsi"].dropna().iloc[-1])
+                if math.isnan(rsi_val):
+                    if hasattr(last, "rsi") and pd.notna(last.rsi):
+                        rsi_val = float(last.rsi)
+                    elif "rsi" in df.columns:
+                        rsi_val = float(df["rsi"].dropna().iloc[-1])
+            except Exception:
+                rsi_val = float('nan')
+            force_long = False
+            force_short = False
+            if not math.isnan(rsi_val):
+                if rsi_val < 20.0:
+                    force_long = True
+                    self._log(f"RSI Force LONG: RSI14={rsi_val:.2f} < 20", level="INFO")
+                elif rsi_val > 80.0:
+                    force_short = True
+                    self._log(f"RSI Force SHORT: RSI14={rsi_val:.2f} > 80", level="INFO")
+
+            # no-trade zone (desconsiderada se RSI exigir entrada)
             eps_nt = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
             diff_nt = abs(float(last.ema_short - last.ema_long))
             atr_ok = (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX)
-            if (diff_nt < eps_nt) or (not atr_ok):
-                reasons_nt = []
-                if diff_nt < eps_nt:
-                    reasons_nt.append(f"|ema7-ema21|({diff_nt:.6f})<eps({eps_nt:.6f})")
-                if last.atr_pct < self.cfg.ATR_PCT_MIN:
-                    reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN}")
-                if last.atr_pct > self.cfg.ATR_PCT_MAX:
-                    reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
-                self._log("No-Trade Zone ativa: " + "; ".join(reasons_nt), level="INFO")
-                self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
-                self._last_pos_side = None
-                return
+            if not (force_long or force_short):
+                if (diff_nt < eps_nt) or (not atr_ok):
+                    reasons_nt = []
+                    if diff_nt < eps_nt:
+                        reasons_nt.append(f"|ema7-ema21|({diff_nt:.6f})<eps({eps_nt:.6f})")
+                    if last.atr_pct < self.cfg.ATR_PCT_MIN:
+                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN}")
+                    if last.atr_pct > self.cfg.ATR_PCT_MAX:
+                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
+                    self._log("No-Trade Zone ativa: " + "; ".join(reasons_nt), level="INFO")
+                    self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
+                    self._last_pos_side = None
+                    return
 
             # intenção pós-cooldown: exigir confirmação adicional
             if self._pending_after_cd is not None:
@@ -2116,7 +2211,7 @@ class EMAGradientStrategy:
                         (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
                         (last.volume > last.vol_ma)
                     )
-                    can_long = base_long
+                    can_long = base_long or force_long
 
                     if can_long:
                         self._log("Confirmação pós-cooldown LONG valida.", level="INFO")
@@ -2132,7 +2227,7 @@ class EMAGradientStrategy:
                         (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
                         (last.volume > last.vol_ma)
                     )
-                    can_short = base_short
+                    can_short = base_short or force_short
                     if can_short:
                         self._log("Confirmação pós-cooldown SHORT valida.", level="INFO")
                         self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
@@ -2158,8 +2253,8 @@ class EMAGradientStrategy:
                 (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
                 (last.volume > last.vol_ma)
             )
-            can_long = base_long
-            can_short = base_short
+            can_long = base_long or force_long
+            can_short = base_short or force_short
             if can_long:
                 self._log("Entrada LONG autorizada: critérios atendidos.", level="INFO")
                 self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
@@ -2723,6 +2818,12 @@ if __name__ == "__main__":
                     _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
                     continue
 
+                try:
+                    df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
+                except Exception as e:
+                    _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
+                    df_asset_hour = pd.DataFrame()
+
                 if not isinstance(df_asset, pd.DataFrame) or df_asset.empty:
                     _log_global("ASSET", f"DataFrame vazio para {asset.name}; pulando.", level="WARN")
                     continue
@@ -2761,7 +2862,7 @@ if __name__ == "__main__":
                     pass
 
                 try:
-                    strategy.step(df_asset, usd_to_spend=usd_asset)
+                    strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
                 except Exception as e:
                     _log_global("ASSET", f"Erro executando {asset.name}: {type(e).__name__}: {e}", level="ERROR")
                 _time.sleep(0.25)
