@@ -691,6 +691,11 @@ ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("ETH-USD", "ETHUSDT", "ETH/USDC:USDC", 25, usd_env="USD_PER_TRADE_ETH"),
     AssetSetup("HYPE-USD", "HYPEUSDT", "HYPE/USDC:USDC", 10, usd_env="USD_PER_TRADE_HYPE"),
     AssetSetup("XRP-USD", "XRPUSDT", "XRP/USDC:USDC", 20, usd_env="USD_PER_TRADE_XRP"),
+    AssetSetup("DOGE-USD", "DOGEUSDT", "DOGE/USDC:USDC", 10, usd_env="USD_PER_TRADE_DOGE"),
+    AssetSetup("AVAX-USD", "AVAXUSDT", "AVAX/USDC:USDC", 10, usd_env="USD_PER_TRADE_AVAX"),
+    AssetSetup("ENA-USD", "ENAUSDT", "ENA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ENA"),
+    AssetSetup("FARTCOIN-USD", "FARTCOINUSDT", "FARTCOIN/USDC:USDC", 10, usd_env="USD_PER_TRADE_FARTCOIN"),
+    AssetSetup("BNB-USD", "BNBUSDT", "BNB/USDC:USDC", 10, usd_env="USD_PER_TRADE_BNB"),
 ]
 
 
@@ -1445,7 +1450,12 @@ class EMAGradientStrategy:
             # Hyperliquid exige especificar preço base mesmo para stop_market
             ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)
         except Exception as e:
-            self._log(f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}", level="ERROR")
+            msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
+            text = str(e).lower()
+            if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
+                self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
+                return None
+            self._log(msg, level="ERROR")
             raise
 
         # Diagnóstico do stop criado
@@ -1491,7 +1501,12 @@ class EMAGradientStrategy:
         try:
             ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
         except Exception as e:
-            self._log(f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}", level="ERROR")
+            msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
+            text = str(e).lower()
+            if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
+                self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
+                return None
+            self._log(msg, level="ERROR")
             raise
 
         try:
