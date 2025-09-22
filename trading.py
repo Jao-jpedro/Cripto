@@ -1572,6 +1572,47 @@ class EMAGradientStrategy:
             order_id=str(oid) if oid else None
         )
 
+        # Atualiza dados da posição após execução
+        fill_price = None
+        fill_amount = None
+        try:
+            if isinstance(ordem_entrada, dict):
+                if ordem_entrada.get("average"):
+                    fill_price = float(ordem_entrada["average"])
+                info_resp = ordem_entrada.get("info") or {}
+                if isinstance(info_resp, dict):
+                    if info_resp.get("average"):
+                        fill_price = float(info_resp["average"])
+                    filled = info_resp.get("filled") or {}
+                    if isinstance(filled, dict):
+                        if filled.get("avgPx"):
+                            fill_price = float(filled["avgPx"])
+                        if filled.get("totalSz"):
+                            fill_amount = float(filled["totalSz"])
+                if ordem_entrada.get("amount"):
+                    fill_amount = float(ordem_entrada["amount"])
+        except Exception:
+            pass
+
+        try:
+            pos_after_exec = self._posicao_aberta()
+        except Exception:
+            pos_after_exec = None
+        if pos_after_exec:
+            try:
+                entry_px_cb = float(pos_after_exec.get("entryPrice") or pos_after_exec.get("entryPx") or 0.0)
+                if entry_px_cb > 0:
+                    fill_price = entry_px_cb
+                filled_cb = float(pos_after_exec.get("contracts") or 0.0)
+                if filled_cb > 0:
+                    fill_amount = filled_cb
+            except Exception:
+                pass
+        if fill_price is None or fill_price <= 0:
+            fill_price = price
+        if fill_amount is None or fill_amount <= 0:
+            fill_amount = amount
+
         # Guarda índice/tempo da barra de entrada (para hold mínimo)
         try:
             self._entry_bar_idx = (len(df_for_log) - 1) if isinstance(df_for_log, pd.DataFrame) else None
@@ -1597,7 +1638,7 @@ class EMAGradientStrategy:
         self._last_take_order_id = None
 
         norm_side = self._norm_side(side)
-        sl_price, tp_price = self._protection_prices(price, norm_side)
+        sl_price, tp_price = self._protection_prices(fill_price, norm_side)
         sl_side = "sell" if norm_side == "buy" else "buy"
         tp_side = sl_side
 
@@ -1608,10 +1649,10 @@ class EMAGradientStrategy:
                 level="DEBUG",
             )
 
-        ordem_stop = self._place_stop(sl_side, amount, sl_price, df_for_log=df_for_log)
+        ordem_stop = self._place_stop(sl_side, fill_amount, sl_price, df_for_log=df_for_log)
         self._last_stop_order_id = self._extract_order_id(ordem_stop)
 
-        ordem_take = self._place_take_profit(tp_side, amount, tp_price, df_for_log=df_for_log)
+        ordem_take = self._place_take_profit(tp_side, fill_amount, tp_price, df_for_log=df_for_log)
         self._last_take_order_id = self._extract_order_id(ordem_take)
 
         self._safe_log(
