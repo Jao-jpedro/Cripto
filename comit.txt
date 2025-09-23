@@ -1,3 +1,0 @@
-git add trading.py requirements.txt trade_log.csv
-git commit -m "Atualiza trading.py, requirements.txt e trade_log.csv"
-git push
