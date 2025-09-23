@@ -1976,21 +1976,29 @@ class EMAGradientStrategy:
             stop_side = "buy"
             better = lambda cur: (cur is None) or (abs(target_stop - (cur or 0.0)) > tol and target_stop < (cur or math.inf))
 
-        oid, cur_stop, cur_is_sell = self._find_existing_stop()
-        if cur_stop is not None:
-            correct_side = (cur_is_sell and stop_side == "sell") or ((not cur_is_sell) and stop_side == "buy")
-        else:
-            correct_side = True
+        existing_stop_id = self._last_stop_order_id
+        existing_stop_px = self._last_stop_order_px
+        if existing_stop_px is None or existing_stop_id is None:
+            found_id, found_px, found_is_sell = self._find_existing_stop()
+            if found_px is not None:
+                existing_stop_id = found_id
+                existing_stop_px = found_px
 
-        if not better(cur_stop if correct_side else None):
-            return
+        if existing_stop_px is not None:
+            if side == "buy" and target_stop <= existing_stop_px + tol:
+                return
+            if side == "sell" and target_stop >= existing_stop_px - tol:
+                return
+
         if not self._anti_spam_ok("adjust"):
             return
 
-        if cur_stop is not None and correct_side:
-            self._cancel_order_silent(oid)
         ret = self._place_stop(stop_side, amt, target_stop, df_for_log=df_for_log)
         if ret is not None:
+            new_stop_id = self._last_stop_order_id
+            if existing_stop_id and existing_stop_id != new_stop_id:
+                self._cancel_order_silent(existing_stop_id)
+            self._last_stop_order_px = target_stop
             self._log(
                 f"Trailing capital: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f}, max_gain={max_gain:.2f}%)",
                 level="INFO",
