@@ -1972,7 +1972,12 @@ class EMAGradientStrategy:
             stop_side = "sell"
             better = lambda cur: (cur is None) or (abs(target_stop - (cur or 0.0)) > tol and target_stop > (cur or -math.inf))
         else:
-            target_stop = entry * (1.0 - (stop_roi / (lev_val * 100.0)))
+            # stop_roi será positivo quando max_gain > base_loss_pct, negativo caso contrário
+            net_roi = base_loss_pct - max_gain
+            if net_roi >= 0:
+                target_stop = entry * (1.0 - (net_roi / (lev_val * 100.0)))
+            else:
+                target_stop = entry * (1.0 - (net_roi / (lev_val * 100.0)))
             stop_side = "buy"
             better = lambda cur: (cur is None) or (abs(target_stop - (cur or 0.0)) > tol and target_stop < (cur or math.inf))
 
