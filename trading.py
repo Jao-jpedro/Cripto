@@ -749,6 +749,7 @@ class EMAGradientStrategy:
         # Controle das ordens de proteção
         self._last_stop_order_id: Optional[str] = None
         self._last_take_order_id: Optional[str] = None
+        self._trail_max_gain_pct: Optional[float] = None
 
     def _log(self, message: str, level: str = "INFO") -> None:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
@@ -1750,6 +1751,7 @@ class EMAGradientStrategy:
 
         self._last_stop_order_id = None
         self._last_take_order_id = None
+        self._trail_max_gain_pct = 0.0
 
         norm_side = self._norm_side(side)
         sl_price, tp_price = self._protection_prices(fill_price, norm_side)
@@ -1884,6 +1886,7 @@ class EMAGradientStrategy:
                 self._marcar_cooldown_barras(df_for_log)
             except Exception:
                 pass
+            self._trail_max_gain_pct = None
 
             # Notificação de fechamento (inclui tentativa de PnL/valor conta)
             try:
@@ -1900,89 +1903,73 @@ class EMAGradientStrategy:
 
     # ---------- trailing BE± ----------
     def _maybe_trailing_breakeven_plus(self, pos: Dict[str, Any], df_for_log: pd.DataFrame):
-        if not pos:
+        if not pos or self.cfg.STOP_LOSS_CAPITAL_PCT <= 0:
             return
-        side  = self._norm_side(pos.get("side") or pos.get("positionSide"))
+        side = self._norm_side(pos.get("side") or pos.get("positionSide"))
         entry = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
-        amt   = float(pos.get("contracts") or 0.0)
-        if entry <= 0 or amt <= 0:
+        amt = float(pos.get("contracts") or 0.0)
+        if side not in ("buy", "sell") or entry <= 0 or amt <= 0:
             return
 
-        px_now = self._preco_atual()
-        trg, off = self.cfg.BE_TRIGGER_PCT, self.cfg.BE_OFFSET_PCT
-
-        if self.debug:
-            trig_mult = (1.0 + trg) if side == "buy" else (1.0 - trg)
-            off_mult  = (1.0 + off) if side == "buy" else (1.0 - off)
-            self._log(
-                f"Verificando BE± side={side.upper()} entry={entry:.6f} px={px_now:.6f} "
-                f"trigger_mult={trig_mult:.6f} off_mult={off_mult:.6f}",
-                level="DEBUG",
-            )
+        try:
+            px_now = self._preco_atual()
+        except Exception:
+            return
+        if px_now <= 0:
+            return
 
         if side == "buy":
-            if px_now < entry * (1.0 + trg):
-                if self.debug:
-                    self._log(
-                        f"BE não acionado (LONG). px_now {px_now:.6f} < {entry*(1+trg):.6f}",
-                        level="DEBUG",
-                    )
-                return
-            target_stop = entry * (1.0 + off)
-            stop_side   = "sell"
-            better      = lambda new, cur: (cur is None) or (new > cur)
-        elif side == "sell":
-            if px_now > entry * (1.0 - trg):
-                if self.debug:
-                    self._log(
-                        f"BE não acionado (SHORT). px_now {px_now:.6f} > {entry*(1-trg):.6f}",
-                        level="DEBUG",
-                    )
-                return
-            target_stop = entry * (1.0 - off)
-            stop_side   = "buy"
-            better      = lambda new, cur: (cur is None) or (new < cur)
+            gain_pct_inst = ((px_now / entry) - 1.0) * 100.0
         else:
+            gain_pct_inst = ((entry / px_now) - 1.0) * 100.0
+        if not math.isfinite(gain_pct_inst):
             return
+
+        if self._trail_max_gain_pct is None:
+            self._trail_max_gain_pct = max(0.0, gain_pct_inst)
+        else:
+            self._trail_max_gain_pct = max(self._trail_max_gain_pct, gain_pct_inst)
+        max_gain = self._trail_max_gain_pct
+
+        base_loss_pct = self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0
+        tol = max(1e-8, entry * 1e-5)
+
+        if side == "buy":
+            stop_pct = max(-base_loss_pct, max_gain - base_loss_pct)
+            target_stop = entry * (1.0 + stop_pct / 100.0)
+            stop_side = "sell"
+            better = lambda cur: (cur is None) or (target_stop > cur + tol)
+        else:
+            stop_pct = min(base_loss_pct, base_loss_pct - max_gain)
+            target_stop = entry * (1.0 + stop_pct / 100.0)
+            stop_side = "buy"
+            better = lambda cur: (cur is None) or (target_stop < cur - tol)
 
         oid, cur_stop, cur_is_sell = self._find_existing_stop()
-        if self.debug:
-            self._log(
-                f"Stop atual id={oid} px={cur_stop} is_sell={cur_is_sell} target={target_stop:.6f}",
-                level="DEBUG",
-            )
-
-        # stop do lado errado? remove
         if cur_stop is not None:
-            if (side == "buy" and not cur_is_sell) or (side == "sell" and cur_is_sell):
-                if self.debug:
-                    self._log("Stop do lado incorreto detectado. Cancelando para recriar.", level="DEBUG")
-                self._cancel_order_silent(oid)
-                cur_stop, oid = None, None
+            correct_side = (cur_is_sell and stop_side == "sell") or ((not cur_is_sell) and stop_side == "buy")
+        else:
+            correct_side = True
 
-        if not better(target_stop, cur_stop):
-            if self.debug:
-                self._log("Ajuste de stop ignorado (não melhora preço).", level="DEBUG")
+        if not better(cur_stop if correct_side else None):
             return
         if not self._anti_spam_ok("adjust"):
-            if self.debug:
-                self._log("Ajuste bloqueado pelo anti-spam.", level="DEBUG")
             return
 
-        if oid:
+        if cur_stop is not None and correct_side:
             self._cancel_order_silent(oid)
         ret = self._place_stop(stop_side, amt, target_stop, df_for_log=df_for_log)
-        self._log(
-            f"Trailing BE±: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f})",
-            level="INFO",
-        )
-
-        self._safe_log(
-            "ajuste_stop", df_for_log,
-            tipo=("long" if side == "buy" else "short"),
-            exec_price=px_now,
-            exec_amount=amt
-        )
+        if ret is not None:
+            self._log(
+                f"Trailing capital: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f}, max_gain={max_gain:.2f}%)",
+                level="INFO",
+            )
+            self._safe_log(
+                "ajuste_stop", df_for_log,
+                tipo=("long" if side == "buy" else "short"),
+                exec_price=px_now,
+                exec_amount=amt
+            )
 
     # ---------- loop principal ----------
     def step(self, df: pd.DataFrame, usd_to_spend: float, rsi_df_hourly: Optional[pd.DataFrame] = None):
@@ -2041,6 +2028,7 @@ class EMAGradientStrategy:
             self._last_pos_side = None
             self._last_stop_order_id = None
             self._last_take_order_id = None
+            self._trail_max_gain_pct = None
 
             # Notificação de fechamento externo (provável stop)
             try:
@@ -2112,6 +2100,29 @@ class EMAGradientStrategy:
         if pos:
             lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
             self._ensure_position_protections(pos, df_for_log=df)
+            self._maybe_trailing_breakeven_plus(pos, df_for_log=df)
+            # Contenção adicional: fecha se perda > limite configurado
+            try:
+                entry_px = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
+                qty_pos = float(pos.get("contracts") or 0.0)
+                px_now = self._preco_atual()
+            except Exception:
+                entry_px = 0.0; qty_pos = 0.0; px_now = 0.0
+            loss_trigger_pct = -abs(self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0)
+            if entry_px > 0 and qty_pos > 0 and px_now > 0:
+                if lado == "buy":
+                    pnl_pct = ((px_now - entry_px) / entry_px) * 100.0
+                else:
+                    pnl_pct = ((entry_px - px_now) / entry_px) * 100.0
+                if self.debug:
+                    self._log(f"Drawdown atual={pnl_pct:.2f}% | limite={loss_trigger_pct:.2f}%", level="DEBUG")
+                if pnl_pct <= loss_trigger_pct:
+                    self._log(
+                        f"Perda de {pnl_pct:.2f}% excedeu limite {loss_trigger_pct:.2f}%. Fechando posição imediatamente.",
+                        level="WARN",
+                    )
+                    self._fechar_posicao(df_for_log=df)
+                    return
             self._log("Posição aberta: aguardando execução de TP/SL.", level="DEBUG")
             self._safe_log("decisao", df_for_log=df, tipo="info")
             self._last_pos_side = lado if lado in ("buy", "sell") else None
