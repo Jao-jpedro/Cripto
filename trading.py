@@ -1942,10 +1942,18 @@ class EMAGradientStrategy:
         if px_now <= 0:
             return
 
+        lev_meta = ((pos.get("info") or {}).get("position") or {}).get("leverage") or {}
+        try:
+            lev_val = float(lev_meta.get("value") or pos.get("leverage") or self.cfg.LEVERAGE)
+        except Exception:
+            lev_val = float(self.cfg.LEVERAGE)
+        if lev_val <= 0:
+            lev_val = float(self.cfg.LEVERAGE)
+
         if side == "buy":
-            gain_pct_inst = ((px_now / entry) - 1.0) * 100.0
+            gain_pct_inst = ((px_now - entry) / entry) * lev_val * 100.0
         else:
-            gain_pct_inst = ((entry / px_now) - 1.0) * 100.0
+            gain_pct_inst = ((entry - px_now) / entry) * lev_val * 100.0
         if not math.isfinite(gain_pct_inst):
             return
 
@@ -1957,15 +1965,14 @@ class EMAGradientStrategy:
 
         base_loss_pct = self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0
         tol = max(1e-8, entry * 1e-5)
+        stop_roi = max(-base_loss_pct, max_gain - base_loss_pct)
 
         if side == "buy":
-            stop_pct = max(-base_loss_pct, max_gain - base_loss_pct)
-            target_stop = entry * (1.0 + stop_pct / 100.0)
+            target_stop = entry * (1.0 + (stop_roi / (lev_val * 100.0)))
             stop_side = "sell"
             better = lambda cur: (cur is None) or (target_stop > cur + tol)
         else:
-            stop_pct = min(base_loss_pct, base_loss_pct - max_gain)
-            target_stop = entry * (1.0 + stop_pct / 100.0)
+            target_stop = entry * (1.0 - (stop_roi / (lev_val * 100.0)))
             stop_side = "buy"
             better = lambda cur: (cur is None) or (target_stop < cur - tol)
 
@@ -2128,27 +2135,31 @@ class EMAGradientStrategy:
             self._ensure_position_protections(pos, df_for_log=df)
             self._maybe_trailing_breakeven_plus(pos, df_for_log=df)
             # Contenção adicional: fecha se perda > limite configurado
-            try:
-                entry_px = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
-                qty_pos = float(pos.get("contracts") or 0.0)
-                px_now = self._preco_atual()
-            except Exception:
-                entry_px = 0.0; qty_pos = 0.0; px_now = 0.0
-            loss_trigger_pct = -abs(self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0)
-            if entry_px > 0 and qty_pos > 0 and px_now > 0:
-                if lado == "buy":
-                    pnl_pct = ((px_now - entry_px) / entry_px) * 100.0
-                else:
-                    pnl_pct = ((entry_px - px_now) / entry_px) * 100.0
-                if self.debug:
-                    self._log(f"Drawdown atual={pnl_pct:.2f}% | limite={loss_trigger_pct:.2f}%", level="DEBUG")
-                if pnl_pct <= loss_trigger_pct:
-                    self._log(
-                        f"Perda de {pnl_pct:.2f}% excedeu limite {loss_trigger_pct:.2f}%. Fechando posição imediatamente.",
-                        level="WARN",
-                    )
-                    self._fechar_posicao(df_for_log=df)
-                    return
+        try:
+            entry_px = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
+            qty_pos = float(pos.get("contracts") or 0.0)
+            px_now = self._preco_atual()
+            lev_meta = ((pos.get("info") or {}).get("position") or {}).get("leverage") or {}
+            lev_val = float(lev_meta.get("value") or pos.get("leverage") or self.cfg.LEVERAGE)
+        except Exception:
+            entry_px = 0.0; qty_pos = 0.0; px_now = 0.0; lev_val = float(self.cfg.LEVERAGE)
+        if lev_val <= 0:
+            lev_val = float(self.cfg.LEVERAGE)
+        loss_trigger_pct = -abs(self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0)
+        if entry_px > 0 and qty_pos > 0 and px_now > 0:
+            if lado == "buy":
+                pnl_pct = ((px_now - entry_px) / entry_px) * lev_val * 100.0
+            else:
+                pnl_pct = ((entry_px - px_now) / entry_px) * lev_val * 100.0
+            if self.debug:
+                self._log(f"Drawdown atual={pnl_pct:.2f}% | limite={loss_trigger_pct:.2f}%", level="DEBUG")
+            if pnl_pct <= loss_trigger_pct:
+                self._log(
+                    f"Perda de {pnl_pct:.2f}% excedeu limite {loss_trigger_pct:.2f}%. Fechando posição imediatamente.",
+                    level="WARN",
+                )
+                self._fechar_posicao(df_for_log=df)
+                return
             self._log("Posição aberta: aguardando execução de TP/SL.", level="DEBUG")
             self._safe_log("decisao", df_for_log=df, tipo="info")
             self._last_pos_side = lado if lado in ("buy", "sell") else None
