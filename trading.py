@@ -750,6 +750,8 @@ class EMAGradientStrategy:
         self._last_stop_order_id: Optional[str] = None
         self._last_take_order_id: Optional[str] = None
         self._trail_max_gain_pct: Optional[float] = None
+        self._last_stop_order_px: Optional[float] = None
+        self._last_take_order_px: Optional[float] = None
 
     def _log(self, message: str, level: str = "INFO") -> None:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
@@ -1420,10 +1422,24 @@ class EMAGradientStrategy:
                 continue
         return None
 
-    def _classify_protection_price(self, price: float, entry: float, norm_side: str) -> str:
+    def _classify_protection_price(self, order: Dict[str, Any], price: float, entry: float, norm_side: str) -> str:
+        info = order.get("info") if isinstance(order, dict) else {}
+        if isinstance(info, dict):
+            trigger_meta = info.get("trigger") or {}
+            if isinstance(trigger_meta, dict):
+                tpsl = str(trigger_meta.get("tpsl") or "").lower()
+                if tpsl == "sl":
+                    return "stop"
+                if tpsl == "tp":
+                    return "take"
+        oid = self._extract_order_id(order)
+        if oid and oid == self._last_stop_order_id:
+            return "stop"
+        if oid and oid == self._last_take_order_id:
+            return "take"
         if norm_side == "buy":
             return "stop" if price <= entry else "take"
-        else:  # sell / short
+        else:
             return "stop" if price >= entry else "take"
 
     def _cancel_protective_orders(self, fetch_backup: bool = False):
@@ -1432,6 +1448,8 @@ class EMAGradientStrategy:
             if oid:
                 self._cancel_order_silent(oid)
                 setattr(self, attr, None)
+        self._last_stop_order_px = None
+        self._last_take_order_px = None
 
         if not fetch_backup:
             return
@@ -1481,6 +1499,7 @@ class EMAGradientStrategy:
             existing = self._find_matching_protection_in_orders("stop", side, px, existing_orders)
         if existing is not None:
             self._last_stop_order_id = self._extract_order_id(existing)
+            self._last_stop_order_px = px
             if self.debug:
                 self._log(
                     f"Stop existente reutilizado id={self._last_stop_order_id} price≈{px:.6f}",
@@ -1510,6 +1529,7 @@ class EMAGradientStrategy:
             tp = inf.get("triggerPrice") if isinstance(inf, dict) else None
             self._log(f"STOP criado id={oid} type={typ} reduceOnly={ro} stopLoss={sl} trigger={tp}", level="DEBUG")
             self._last_stop_order_id = str(oid) if oid else None
+            self._last_stop_order_px = px
             # Logger opcional
             try:
                 self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
@@ -1533,6 +1553,7 @@ class EMAGradientStrategy:
             existing = self._find_matching_protection_in_orders("take", side, px, existing_orders)
         if existing is not None:
             self._last_take_order_id = self._extract_order_id(existing)
+            self._last_take_order_px = px
             if self.debug:
                 self._log(
                     f"Take profit existente reutilizado id={self._last_take_order_id} price≈{px:.6f}",
@@ -1556,6 +1577,7 @@ class EMAGradientStrategy:
             typ = info.get("type") or (info.get("info", {}) or {}).get("type")
             self._log(f"Take profit criado id={oid} price={px}", level="DEBUG")
             self._last_take_order_id = oid
+            self._last_take_order_px = px
             try:
                 self._safe_log("take_profit_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=oid)
             except Exception:
@@ -1608,11 +1630,12 @@ class EMAGradientStrategy:
                 if oside and oside != close_side:
                     remaining_orders.append(order)
                     continue
-                kind_guess = self._classify_protection_price(price, entry, norm_side)
+                kind_guess = self._classify_protection_price(order, price, entry, norm_side)
                 if kind_guess == "stop":
                     if abs(price - stop_px) <= tol_stop:
                         stop_match = order
                         self._last_stop_order_id = oid
+                        self._last_stop_order_px = price
                         remaining_orders.append(order)
                     else:
                         self._cancel_order_silent(oid)
@@ -1620,6 +1643,7 @@ class EMAGradientStrategy:
                     if abs(price - take_px) <= tol_take:
                         take_match = order
                         self._last_take_order_id = oid
+                        self._last_take_order_px = price
                         remaining_orders.append(order)
                     else:
                         self._cancel_order_silent(oid)
@@ -2029,6 +2053,8 @@ class EMAGradientStrategy:
             self._last_stop_order_id = None
             self._last_take_order_id = None
             self._trail_max_gain_pct = None
+            self._last_stop_order_px = None
+            self._last_take_order_px = None
 
             # Notificação de fechamento externo (provável stop)
             try:
