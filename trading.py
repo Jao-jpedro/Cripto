@@ -1970,11 +1970,11 @@ class EMAGradientStrategy:
         if side == "buy":
             target_stop = entry * (1.0 + (stop_roi / (lev_val * 100.0)))
             stop_side = "sell"
-            better = lambda cur: (cur is None) or (target_stop > cur + tol)
+            better = lambda cur: (cur is None) or (abs(target_stop - (cur or 0.0)) > tol and target_stop > (cur or -math.inf))
         else:
             target_stop = entry * (1.0 - (stop_roi / (lev_val * 100.0)))
             stop_side = "buy"
-            better = lambda cur: (cur is None) or (target_stop < cur - tol)
+            better = lambda cur: (cur is None) or (abs(target_stop - (cur or 0.0)) > tol and target_stop < (cur or math.inf))
 
         oid, cur_stop, cur_is_sell = self._find_existing_stop()
         if cur_stop is not None:
