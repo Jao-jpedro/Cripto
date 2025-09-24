@@ -1028,7 +1028,7 @@ class EMAGradientStrategy:
             pos = self._posicao_aberta()
             if pos:
                 pos_side = self._norm_side(pos.get("side") or pos.get("positionSide"))
-                qty = float(pos.get("contracts") or 0.0)
+                qty = abs(float(pos.get("contracts") or 0.0))
                 ep = (pos.get("entryPrice") or pos.get("entryPx") or 0.0)
                 entry = float(ep) if ep else None
         except Exception:
@@ -1250,8 +1250,15 @@ class EMAGradientStrategy:
             return None
         try:
             pos = self.dex.fetch_positions([self.symbol])
-            if pos and float(pos[0].get("contracts", 0)) > 0:
-                return pos[0]
+            if not pos:
+                return None
+            for p in pos:
+                try:
+                    qty = abs(float(p.get("contracts") or 0.0))
+                except Exception:
+                    qty = 0.0
+                if qty > 0:
+                    return p
         except Exception as e:
             if self.debug:
                 self._log(f"fetch_positions falhou: {type(e).__name__}: {e}", level="WARN")
@@ -1608,7 +1615,7 @@ class EMAGradientStrategy:
 
     def _ensure_position_protections(self, pos: Dict[str, Any], df_for_log: Optional[pd.DataFrame] = None):
         try:
-            qty = float(pos.get("contracts") or 0.0)
+            qty = abs(float(pos.get("contracts") or 0.0))
             if qty <= 0:
                 return
             entry_price = pos.get("entryPrice") or pos.get("entryPx") or pos.get("entry_price")
@@ -1784,7 +1791,7 @@ class EMAGradientStrategy:
                 entry_px_cb = float(pos_after_exec.get("entryPrice") or pos_after_exec.get("entryPx") or 0.0)
                 if entry_px_cb > 0:
                     fill_price = entry_px_cb
-                filled_cb = float(pos_after_exec.get("contracts") or 0.0)
+                filled_cb = abs(float(pos_after_exec.get("contracts") or 0.0))
                 if filled_cb > 0:
                     fill_amount = filled_cb
             except Exception:
@@ -1932,13 +1939,18 @@ class EMAGradientStrategy:
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()
-        if not pos or float(pos.get("contracts", 0)) == 0:
+        current_qty = 0.0
+        try:
+            current_qty = abs(float(pos.get("contracts") or 0.0)) if pos else 0.0
+        except Exception:
+            current_qty = 0.0
+        if not pos or current_qty == 0:
             self._log("Fechamento ignorado: posição ausente.", level="DEBUG"); return
         if not self._anti_spam_ok("close"):
             self._log("Fechamento bloqueado pelo anti-spam.", level="DEBUG"); return
 
         lado_atual = self._norm_side(pos.get("side") or pos.get("positionSide"))
-        qty        = float(pos.get("contracts") or 0.0)
+        qty        = current_qty
         price_now  = self._preco_atual()
         if self.debug:
             self._log(f"Fechando posição {lado_atual.upper()} qty={qty} px={price_now:.6f}", level="DEBUG")
@@ -1989,7 +2001,7 @@ class EMAGradientStrategy:
             return
         side = self._norm_side(pos.get("side") or pos.get("positionSide"))
         entry = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
-        amt = float(pos.get("contracts") or 0.0)
+        amt = abs(float(pos.get("contracts") or 0.0))
         if side not in ("buy", "sell") or entry <= 0 or amt <= 0:
             return
 
@@ -2125,9 +2137,15 @@ class EMAGradientStrategy:
         # primeira execução: loga posição preexistente
         if not self._first_step_done:
             pos_now = self._posicao_aberta()
-            if pos_now and float(pos_now.get("contracts", 0)) > 0:
+            if pos_now:
+                try:
+                    qty = abs(float(pos_now.get("contracts") or 0.0))
+                except Exception:
+                    qty = 0.0
+            else:
+                qty = 0.0
+            if pos_now and qty > 0:
                 lado_atual = self._norm_side(pos_now.get("side") or pos_now.get("positionSide"))
-                qty = float(pos_now.get("contracts") or 0.0)
                 entry = float(pos_now.get("entryPrice") or pos_now.get("entryPx") or 0.0) or None
                 self._safe_log(
                     "preexistente", df_for_log=df,
@@ -2239,7 +2257,7 @@ class EMAGradientStrategy:
             # Contenção adicional: fecha se perda > limite configurado
         try:
             entry_px = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
-            qty_pos = float(pos.get("contracts") or 0.0)
+            qty_pos = abs(float(pos.get("contracts") or 0.0))
             contract_sz = float(pos.get("contractSize") or 1.0)
             px_now = self._preco_atual()
             lev_meta = ((pos.get("info") or {}).get("position") or {}).get("leverage") or {}
