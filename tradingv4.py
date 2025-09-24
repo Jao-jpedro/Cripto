@@ -10,9 +10,11 @@ def _log_global(section: str, message: str, level: str = "INFO") -> None:
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
 import warnings as _warnings
-
-# Carteira ativa para logs/execução
-ACTIVE_WALLET = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
+# ===== Hyperliquid account mapping =====
+HL_MAIN_ACCOUNT = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
+HL_SUBACCOUNT_VAULT = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
+HL_API_WALLET = "0x95cf910f947a5be26bc7c18f8b8048185126b4e9"
+# Private key must correspond to HL_API_WALLET and be set via env HYPERLIQUID_PRIVATE_KEY
 
 _warnings.filterwarnings(
     "ignore",
@@ -23,19 +25,6 @@ _warnings.filterwarnings(
 
 import requests
 import pandas as pd
-
-def compute_tp_sl(entry_px, side):
-    """TP=10% e SL=5% fixos por preço."""
-    TAKE_PROFIT_PCT = 0.10
-    STOP_LOSS_PCT = 0.05
-    if side == "SHORT":
-        tp = entry_px * (1 + TAKE_PROFIT_PCT)
-        sl = entry_px * (1 - STOP_LOSS_PCT)
-    else:
-        tp = entry_px * (1 - TAKE_PROFIT_PCT)
-        sl = entry_px * (1 + STOP_LOSS_PCT)
-    return {"tp": tp, "sl": sl}
-
 import numpy as np
 import math
 from datetime import datetime, timedelta, timezone
@@ -388,13 +377,14 @@ DEX (Hyperliquid via ccxt)
 """
 import ccxt  # type: ignore
 
+
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
 # Lê credenciais da env (recomendado) com fallback seguro para dev local
 _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
 dex = ccxt.hyperliquid({
-    "walletAddress": "0x5ff0f14d577166f9ede3d9568a423166be61ea9d",
+    "walletAddress": HL_API_WALLET,
     "privateKey": os.getenv("HYPERLIQUID_PRIVATE_KEY"),
     "enableRateLimit": True,
     "timeout": dex_timeout,
@@ -962,7 +952,7 @@ class EMAGradientStrategy:
 
     def _notify_trade(self, kind: str, side: Optional[str], price: Optional[float], amount: Optional[float], note: str = "", include_hl: bool = False):
         base = self.symbol.split("/")[0] if "/" in self.symbol else self.symbol
-        side_map = {"buy": "SHORT", "sell": "LONG"}
+        side_map = {"buy": "LONG", "sell": "SHORT"}
         side_txt = side_map.get((side or "").lower(), "?") if side else "?"
         kind_map = {
             "open": "Abertura",
@@ -1506,7 +1496,7 @@ class EMAGradientStrategy:
             return existing
         try:
             # Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)
+            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params, {"vaultAddress": HL_SUBACCOUNT_VAULT})
         except Exception as e:
             msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -1557,7 +1547,7 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
+            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params, {"vaultAddress": HL_SUBACCOUNT_VAULT})
         except Exception as e:
             msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -1601,7 +1591,7 @@ class EMAGradientStrategy:
                 lev_type = str(leverage_info.get("type") or "").lower()
                 target_lev = int(self.cfg.LEVERAGE)
                 if lev_type != "isolated" and target_lev > 0:
-                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated"})
+                    self.dex.set_leverage(target_lev, self.symbol, {"vaultAddress": HL_SUBACCOUNT_VAULT, "marginMode": "isolated"})
                     self._log("Leverage ajustada para isolated em posição existente.", level="INFO")
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
@@ -1669,7 +1659,7 @@ class EMAGradientStrategy:
             lev_int = None
         if lev_int and lev_int > 0:
             try:
-                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})
+                self.dex.set_leverage(lev_int, self.symbol, {"vaultAddress": HL_SUBACCOUNT_VAULT, "marginMode": "isolated"})
                 if self.debug:
                     self._log(f"Leverage ajustada para {lev_int}x (isolated)", level="DEBUG")
             except Exception as e:
@@ -1686,10 +1676,8 @@ class EMAGradientStrategy:
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
         )
-        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
+        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price, {"vaultAddress": HL_SUBACCOUNT_VAULT})
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
-        # LOG_WALLET_ON_CREATE
-        self._log(f"Ordem enviada pela carteira: {ACTIVE_WALLET}", level="INFO")
 
         oid = None
         try:
@@ -1854,7 +1842,7 @@ class EMAGradientStrategy:
             if order_id:
                 if self.debug:
                     self._log(f"Cancelando ordem reduceOnly id={order_id}", level="DEBUG")
-                self.dex.cancel_order(order_id, self.symbol)
+                self.dex.cancel_order(order_id, self.symbol, {"vaultAddress": HL_SUBACCOUNT_VAULT})
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao cancelar ordem {order_id}: {e}", level="WARN")
@@ -1866,7 +1854,7 @@ class EMAGradientStrategy:
         params = {"reduceOnly": True}
         if self.debug:
             self._log(f"Fechando posição via MARKET reduceOnly {side.upper()} qty={amt} px_ref={px:.6f}", level="DEBUG")
-        return self.dex.create_order(self.symbol, "market", side, amt, px, params)
+        return self.dex.create_order(self.symbol, "market", side, amt, px, params, {"vaultAddress": HL_SUBACCOUNT_VAULT})
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()
@@ -2124,9 +2112,9 @@ class EMAGradientStrategy:
                 can_long = base_long
                 can_short = base_short
                 if can_long:
-                    self._pending_after_cd = {"side": "SHORT", "reason": "cooldown_intent_long", "created_idx": last_idx}
+                    self._pending_after_cd = {"side": "LONG", "reason": "cooldown_intent_long", "created_idx": last_idx}
                 elif can_short:
-                    self._pending_after_cd = {"side": "LONG", "reason": "cooldown_intent_short", "created_idx": last_idx}
+                    self._pending_after_cd = {"side": "SHORT", "reason": "cooldown_intent_short", "created_idx": last_idx}
             return
 
         if pos:
@@ -2234,7 +2222,7 @@ class EMAGradientStrategy:
             # intenção pós-cooldown: exigir confirmação adicional
             if self._pending_after_cd is not None:
                 intent = self._pending_after_cd
-                if intent.get("side") == "SHORT":
+                if intent.get("side") == "LONG":
                     base_long = (
                         (last.ema_short > last.ema_long) and grad_pos_ok and
                         (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
@@ -2500,7 +2488,7 @@ def run_state_machine(df: pd.DataFrame, p: BacktestParams) -> Dict[str, Any]:
 
     state = "FLAT"
     cd = 0
-    last_side = None  # "SHORT" / "LONG"
+    last_side = None  # "LONG" / "SHORT"
     consec_grad_pos = 0
     consec_grad_neg = 0
     pending_entry_after_cd = None  # None or (side, confirmed_bars)
@@ -2536,18 +2524,18 @@ def run_state_machine(df: pd.DataFrame, p: BacktestParams) -> Dict[str, Any]:
         # (o filtro de volume já entra no _entry_*_condition)
 
         # Saídas por inversão sustentada/cross de EMA
-        if state in ("SHORT", "LONG"):
+        if state in ("LONG", "SHORT"):
             exit_signal = False
             exit_reason = []
             # cruzamento EMA
-            if state == "SHORT" and (row.ema_short < row.ema_long):
+            if state == "LONG" and (row.ema_short < row.ema_long):
                 exit_signal = True; exit_reason.append("EMA7<EMA21")
-            if state == "LONG" and (row.ema_short > row.ema_long):
+            if state == "SHORT" and (row.ema_short > row.ema_long):
                 exit_signal = True; exit_reason.append("EMA7>EMA21")
             # inversão sustentada do gradiente
-            if state == "SHORT" and consec_grad_pos == 0 and consec_grad_neg >= 2:
+            if state == "LONG" and consec_grad_pos == 0 and consec_grad_neg >= 2:
                 exit_signal = True; exit_reason.append("grad<=0 por 2+")
-            if state == "LONG" and consec_grad_neg == 0 and consec_grad_pos >= 2:
+            if state == "SHORT" and consec_grad_neg == 0 and consec_grad_pos >= 2:
                 exit_signal = True; exit_reason.append("grad>=0 por 2+")
 
             if exit_signal and open_trade is not None:
@@ -2575,15 +2563,15 @@ def run_state_machine(df: pd.DataFrame, p: BacktestParams) -> Dict[str, Any]:
                     okL, rL = _entry_long_condition(row, p)
                     okS, rS = _entry_short_condition(row, p)
                     if okL and consec_grad_pos >= p.grad_consistency:
-                        pending_entry_after_cd = ("SHORT", 0, rL)
+                        pending_entry_after_cd = ("LONG", 0, rL)
                     elif okS and consec_grad_neg >= p.grad_consistency:
-                        pending_entry_after_cd = ("LONG", 0, rS)
+                        pending_entry_after_cd = ("SHORT", 0, rS)
                 continue
 
             # se havia intenção, exigir confirmação extra
             if pending_entry_after_cd is not None:
                 side_intent, conf_bars, rIntent = pending_entry_after_cd
-                if side_intent == "SHORT":
+                if side_intent == "LONG":
                     ok, rr = _entry_long_condition(row, p)
                     ok = ok and (consec_grad_pos >= p.grad_consistency)
                 else:
@@ -2618,22 +2606,22 @@ def run_state_machine(df: pd.DataFrame, p: BacktestParams) -> Dict[str, Any]:
             okL, rL = _entry_long_condition(row, p)
             okS, rS = _entry_short_condition(row, p)
             if okL and consec_grad_pos >= p.grad_consistency:
-                state = "SHORT"; last_side = "SHORT"
+                state = "LONG"; last_side = "LONG"
                 open_trade = {
                     "entry_idx": i,
                     "entry_dt": dfi["data"].iloc[i] if "data" in dfi.columns else i,
-                    "side": "SHORT",
+                    "side": "LONG",
                     "entry_px": float(row.valor_fechamento),
                     "atr_at_entry": float(row.atr),
                     "reason_entry": rL
                 }
                 action = "ENTER_LONG"; reason = rL
             elif okS and consec_grad_neg >= p.grad_consistency:
-                state = "LONG"; last_side = "LONG"
+                state = "SHORT"; last_side = "SHORT"
                 open_trade = {
                     "entry_idx": i,
                     "entry_dt": dfi["data"].iloc[i] if "data" in dfi.columns else i,
-                    "side": "LONG",
+                    "side": "SHORT",
                     "entry_px": float(row.valor_fechamento),
                     "atr_at_entry": float(row.atr),
                     "reason_entry": rS
@@ -2670,10 +2658,10 @@ def _apply_exits_and_equity(trades: list, dfi: pd.DataFrame, p: BacktestParams) 
         e_idx = t["entry_idx"]
         e_px = t["entry_px"]
         atr0 = t["atr_at_entry"]
-        stop = e_px - p.stop_atr_mult * atr0 if side == "SHORT" else e_px + p.stop_atr_mult * atr0
+        stop = e_px - p.stop_atr_mult * atr0 if side == "LONG" else e_px + p.stop_atr_mult * atr0
         take = None
         if p.takeprofit_atr_mult is not None:
-            take = e_px + p.takeprofit_atr_mult * atr0 if side == "SHORT" else e_px - p.takeprofit_atr_mult * atr0
+            take = e_px + p.takeprofit_atr_mult * atr0 if side == "LONG" else e_px - p.takeprofit_atr_mult * atr0
 
         # percorre barras até exit_idx se já setado (sinal inverso) ou até fim
         exit_idx = t.get("exit_idx", None)
@@ -2684,24 +2672,24 @@ def _apply_exits_and_equity(trades: list, dfi: pd.DataFrame, p: BacktestParams) 
             atrj = float(dfi["atr"].iloc[j])
             # trailing
             if p.trailing_atr_mult is not None:
-                if side == "SHORT":
+                if side == "LONG":
                     trail = max(trail or -np.inf, px - p.trailing_atr_mult * atrj)
                     stop = max(stop, trail)
                 else:
                     trail = min(trail or np.inf, px + p.trailing_atr_mult * atrj)
                     stop = min(stop, trail)
             # Checa SL/TP a preço de fechamento (aprox)
-            if side == "SHORT" and px <= stop:
+            if side == "LONG" and px <= stop:
                 exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "stop"
                 break
-            if side == "LONG" and px >= stop:
+            if side == "SHORT" and px >= stop:
                 exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "stop"
                 break
             if take is not None:
-                if side == "SHORT" and px >= take:
+                if side == "LONG" and px >= take:
                     exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "take"
                     break
-                if side == "LONG" and px <= take:
+                if side == "SHORT" and px <= take:
                     exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "take"
                     break
 
@@ -2710,7 +2698,7 @@ def _apply_exits_and_equity(trades: list, dfi: pd.DataFrame, p: BacktestParams) 
             reason_exit = reason_exit or "eod"
 
         x_px = float(dfi["valor_fechamento"].iloc[exit_idx])
-        ret = (x_px - e_px) / e_px if side == "SHORT" else (e_px - x_px) / e_px
+        ret = (x_px - e_px) / e_px if side == "LONG" else (e_px - x_px) / e_px
         rows.append({
             "entry_idx": e_idx,
             "exit_idx": exit_idx,
@@ -2764,10 +2752,10 @@ def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = N
         prev = cur
         if a == "ENTER_LONG":
             assert cur == "FLAT", f"Entrada LONG fora de FLAT na barra {i}"
-            cur = "SHORT"
+            cur = "LONG"
         elif a == "ENTER_SHORT":
             assert cur == "FLAT", f"Entrada SHORT fora de FLAT na barra {i}"
-            cur = "LONG"
+            cur = "SHORT"
         elif a in ("EXIT",):
             cur = "FLAT"
         # proibição reversão direta é garantida por cooldown exigir FLAT e cd>0
