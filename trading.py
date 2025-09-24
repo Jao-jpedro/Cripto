@@ -794,6 +794,7 @@ class EMAGradientStrategy:
         self._trail_max_gain_pct: Optional[float] = None
         self._last_stop_order_px: Optional[float] = None
         self._last_take_order_px: Optional[float] = None
+        self._last_price_snapshot: Optional[float] = None
 
     def _log(self, message: str, level: str = "INFO") -> None:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
@@ -1254,13 +1255,19 @@ class EMAGradientStrategy:
             mkts = self.dex.load_markets()
             info = mkts[self.symbol]["info"]
             if info.get("midPx") is not None:
-                return float(info["midPx"])
+                price = float(info["midPx"])
+                self._last_price_snapshot = price
+                self._log(f"Preço atual (midPx): {price:.6f}", level="INFO")
+                return price
         except Exception:
             pass
         try:
             t = self.dex.fetch_ticker(self.symbol)
             if t and t.get("last"):
-                return float(t["last"])
+                price = float(t["last"])
+                self._last_price_snapshot = price
+                self._log(f"Preço atual (ticker): {price:.6f}", level="INFO")
+                return price
         except Exception as e:
             if self.debug:
                 self._log(f"fetch_ticker falhou: {type(e).__name__}: {e}", level="WARN")
@@ -2074,6 +2081,26 @@ class EMAGradientStrategy:
         last = df.iloc[-1]
         last_idx = len(df) - 1
         self._last_seen_bar_idx = last_idx
+
+        price_snapshot = None
+        live_enabled = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+        if live_enabled:
+            try:
+                price_snapshot = self._preco_atual()
+            except Exception:
+                price_snapshot = None
+        if price_snapshot is None:
+            fallback_price = None
+            try:
+                fallback_price = float(last.valor_fechamento)
+            except Exception:
+                fallback_price = None
+            if fallback_price is not None and math.isfinite(fallback_price):
+                self._last_price_snapshot = fallback_price
+                self._log(
+                    f"Preço atual aproximado (close último candle): {fallback_price:.6f}",
+                    level="INFO",
+                )
 
         # helpers de consistência do gradiente
         g = df["ema_short_grad_pct"].tail(self.cfg.GRAD_CONSISTENCY)
