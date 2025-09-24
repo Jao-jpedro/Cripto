@@ -381,11 +381,11 @@ import ccxt  # type: ignore
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
 # Lê credenciais da env (recomendado) com fallback seguro para dev local
-_wallet_env = os.getenv("WALLET_ADDRESS")
+_wallet_env = os.getenv("WALLET_TRADINGV4")
 _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
 missing_creds = []
 if not _wallet_env:
-    missing_creds.append("WALLET_ADDRESS")
+    missing_creds.append("WALLET_TRADINGV4")
 if not _priv_env:
     missing_creds.append("HYPERLIQUID_PRIVATE_KEY")
 if missing_creds:
@@ -948,7 +948,7 @@ class EMAGradientStrategy:
 
     def _wallet_address(self) -> Optional[str]:
         # Busca carteira: env > dex attributes/options > None
-        for key in ("WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
+        for key in ("WALLET_TRADINGV4", "WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
             val = os.getenv(key)
             if val:
                 return val
