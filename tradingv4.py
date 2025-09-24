@@ -663,9 +663,9 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.10  # 10% da margem como stop
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.0   # standby (usar trailing para ganhos)
-    MAX_LOSS_ABS_USD: float    = 0.10     # limite absoluto de perda por posição
+    STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.10   # take profit fixo em 10% da margem
+    MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -678,6 +678,7 @@ class GradientConfig:
     STOP_ATR_MULT: float    = 0.0         # desativado (uso por % da margem)
     TAKEPROFIT_ATR_MULT: float = 0.0      # desativado
     TRAILING_ATR_MULT: float   = 0.0      # desativado
+    ENABLE_TRAILING_STOP: bool = False    # trailing stop desativado
 
     # Breakeven trailing legado (mantido opcionalmente)
     BE_TRIGGER_PCT: float   = 0.0
@@ -690,8 +691,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.10
-    take_pct: float = 0.30
+    stop_pct: float = 0.05
+    take_pct: float = 0.10
     usd_env: Optional[str] = None
 
 
@@ -1982,6 +1983,8 @@ class EMAGradientStrategy:
 
     # ---------- trailing BE± ----------
     def _maybe_trailing_breakeven_plus(self, pos: Dict[str, Any], df_for_log: pd.DataFrame):
+        if not getattr(self.cfg, "ENABLE_TRAILING_STOP", False):
+            return
         if not pos or self.cfg.STOP_LOSS_CAPITAL_PCT <= 0:
             return
         side = self._norm_side(pos.get("side") or pos.get("positionSide"))
@@ -2231,7 +2234,8 @@ class EMAGradientStrategy:
         if pos:
             lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
             self._ensure_position_protections(pos, df_for_log=df)
-            self._maybe_trailing_breakeven_plus(pos, df_for_log=df)
+            if getattr(self.cfg, "ENABLE_TRAILING_STOP", False):
+                self._maybe_trailing_breakeven_plus(pos, df_for_log=df)
             # Contenção adicional: fecha se perda > limite configurado
         try:
             entry_px = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
@@ -2399,8 +2403,8 @@ class EMAGradientStrategy:
                     can_long = base_long or force_long
 
                     if can_long:
-                        self._log("Confirmação pós-cooldown LONG valida.", level="INFO")
-                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._log("Confirmação pós-cooldown LONG valida (executando SHORT).", level="INFO")
+                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -2414,8 +2418,8 @@ class EMAGradientStrategy:
                     )
                     can_short = base_short or force_short
                     if can_short:
-                        self._log("Confirmação pós-cooldown SHORT valida.", level="INFO")
-                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._log("Confirmação pós-cooldown SHORT valida (executando LONG).", level="INFO")
+                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -2441,14 +2445,14 @@ class EMAGradientStrategy:
             can_long = base_long or force_long
             can_short = base_short or force_short
             if can_long:
-                self._log("Entrada LONG autorizada: critérios atendidos.", level="INFO")
-                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._log("Entrada LONG autorizada: critérios atendidos (executando SHORT).", level="INFO")
+                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
             if can_short:
-                self._log("Entrada SHORT autorizada: critérios atendidos.", level="INFO")
-                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._log("Entrada SHORT autorizada: critérios atendidos (executando LONG).", level="INFO")
+                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
