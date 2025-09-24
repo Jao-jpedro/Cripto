@@ -232,6 +232,7 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
 
     symbol_bybit = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
     data = []
+    ex = None
     try:
         import ccxt  # type: ignore
         ex = ccxt.bybit({
@@ -329,6 +330,47 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
             if debug:
                 _log_global("DATA", f"Falha ao ler df_log.csv: {e}", level="WARN")
 
+    if data:
+        last_ts = int(data[-1]["data"])
+        if last_ts != cur_open_ms:
+            live_price = None
+            if ex is not None:
+                try:
+                    ticker = ex.fetch_ticker(symbol_bybit)
+                    if ticker and ticker.get("last") is not None:
+                        live_price = float(ticker["last"])
+                        if debug:
+                            _log_global("BYBIT", f"Candle em formação anexado via ticker price={live_price}")
+                except Exception as e:
+                    if debug:
+                        _log_global("BYBIT", f"Ticker Bybit indisponível para candle em formação: {type(e).__name__}: {e}", level="DEBUG")
+            if live_price is None:
+                try:
+                    resp = requests.get(
+                        f"{BASE_URL}ticker/price",
+                        params={"symbol": symbol},
+                        timeout=int(os.getenv("BINANCE_TIMEOUT", "10")),
+                    )
+                    if resp.status_code == 200:
+                        payload = resp.json()
+                        price_val = payload.get("price") if isinstance(payload, dict) else None
+                        if price_val is not None:
+                            live_price = float(price_val)
+                            if debug:
+                                _log_global("BINANCE", f"Candle em formação anexado via ticker price={live_price}")
+                except Exception as e:
+                    if debug:
+                        _log_global("BINANCE", f"Falha ao buscar ticker atual: {type(e).__name__}: {e}", level="DEBUG")
+            if live_price is not None:
+                data.append({
+                    "data": cur_open_ms,
+                    "valor_fechamento": float(live_price),
+                    "criptomoeda": symbol,
+                    "volume_compra": 0.0,
+                    "volume_venda": 0.0,
+                })
+                if len(data) > n_target:
+                    data = data[-n_target:]
     if not data:
         if debug:
             _log_global("DATA", f"Sem dados retornados para {symbol} tf={tf}", level="ERROR")
@@ -1949,6 +1991,8 @@ class EMAGradientStrategy:
             lev_val = float(self.cfg.LEVERAGE)
         if lev_val <= 0:
             lev_val = float(self.cfg.LEVERAGE)
+        if lev_val == 0:
+            return
 
         if side == "buy":
             gain_pct_inst = ((px_now - entry) / entry) * lev_val * 100.0
@@ -1963,23 +2007,25 @@ class EMAGradientStrategy:
             self._trail_max_gain_pct = max(self._trail_max_gain_pct, gain_pct_inst)
         max_gain = self._trail_max_gain_pct
 
-        base_loss_pct = self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0
         tol = max(1e-8, entry * 1e-5)
-        stop_roi = max(-base_loss_pct, max_gain - base_loss_pct)
 
         if side == "buy":
-            target_stop = entry * (1.0 + (stop_roi / (lev_val * 100.0)))
+            # Cálculo solicitado: ((preço atual / preço entrada) - 1) * alavancagem, ajustado em -10%,
+            # normalizado pela alavancagem e convertido novamente para preço.
+            variation = (px_now / entry) - 1.0
+            leveraged_variation = variation * lev_val
+            adjusted_leveraged = leveraged_variation - float(self.cfg.STOP_LOSS_CAPITAL_PCT)
+            normalized_adjusted = adjusted_leveraged / lev_val if lev_val != 0 else 0.0
+            target_stop = entry * (1.0 + normalized_adjusted)
             stop_side = "sell"
-            better = lambda cur: (cur is None) or (abs(target_stop - (cur or 0.0)) > tol and target_stop > (cur or -math.inf))
         else:
-            # stop_roi será positivo quando max_gain > base_loss_pct, negativo caso contrário
-            net_roi = base_loss_pct - max_gain
-            if net_roi >= 0:
-                target_stop = entry * (1.0 - (net_roi / (lev_val * 100.0)))
-            else:
-                target_stop = entry * (1.0 - (net_roi / (lev_val * 100.0)))
+            base_loss_pct = self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0
+            stop_roi = max(-base_loss_pct, max_gain - base_loss_pct)
+            target_stop = entry * (1.0 - (stop_roi / (lev_val * 100.0)))
             stop_side = "buy"
-            better = lambda cur: (cur is None) or (abs(target_stop - (cur or 0.0)) > tol and target_stop < (cur or math.inf))
+
+        if target_stop <= 0:
+            return
 
         existing_stop_id = self._last_stop_order_id
         existing_stop_px = self._last_stop_order_px
