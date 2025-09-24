@@ -235,6 +235,7 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
     data = []
     try:
         import ccxt  # type: ignore
+ACTIVE_WALLET = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
         ex = ccxt.bybit({
             "enableRateLimit": True,
             "timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000")),
@@ -374,14 +375,11 @@ import ccxt  # type: ignore
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
 # Lê credenciais da env (recomendado) com fallback seguro para dev local
-WALLET_HL = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
-WALLET_ADDRESS = WALLET_HL.split("HL:",1)[-1]
-PRIV_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-if not PRIV_KEY:
-    raise RuntimeError("Defina HYPERLIQUID_PRIVATE_KEY nas variáveis de ambiente do Render")
+_wallet_env = os.getenv("WALLET_ADDRESS")
+_priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
 dex = ccxt.hyperliquid({
-    "walletAddress": WALLET_ADDRESS,
-    "privateKey": PRIV_KEY,
+    "walletAddress": "0x5ff0f14d577166f9ede3d9568a423166be61ea9d",
+    "privateKey": os.getenv("HYPERLIQUID_PRIVATE_KEY"),
     "enableRateLimit": True,
     "timeout": dex_timeout,
     "options": {"timeout": dex_timeout},
@@ -764,8 +762,8 @@ class EMAGradientStrategy:
         norm_side = self._norm_side(side)
         if norm_side not in ("buy", "sell"):
             raise ValueError("side inválido para proteção")
-        risk_ratio = 0.05
-        reward_ratio = 0.10
+        risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
+        reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         if norm_side == "buy":
             stop_px = entry_price * (1.0 - risk_ratio)
             take_px = entry_price * (1.0 + reward_ratio)
@@ -1674,6 +1672,8 @@ class EMAGradientStrategy:
         )
         ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
+        # LOG_WALLET_ON_CREATE
+        self._log(f"Ordem enviada pela carteira: {ACTIVE_WALLET}", level="INFO")
 
         oid = None
         try:
@@ -2229,7 +2229,7 @@ class EMAGradientStrategy:
 
                     if can_long:
                         self._log("Confirmação pós-cooldown LONG valida.", level="INFO")
-                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -2244,7 +2244,7 @@ class EMAGradientStrategy:
                     can_short = base_short or force_short
                     if can_short:
                         self._log("Confirmação pós-cooldown SHORT valida.", level="INFO")
-                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -2271,13 +2271,13 @@ class EMAGradientStrategy:
             can_short = base_short or force_short
             if can_long:
                 self._log("Entrada LONG autorizada: critérios atendidos.", level="INFO")
-                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
             if can_short:
                 self._log("Entrada SHORT autorizada: critérios atendidos.", level="INFO")
-                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
