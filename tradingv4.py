@@ -122,14 +122,16 @@ def get_binance_data(symbol, interval, start_date, end_date):
     end_timestamp = int(end_date.timestamp() * 1000)
     all_data = []
     current_start = start_timestamp
-    while current_start < end_timestamp:
+    max_candles = 50  # Limite máximo de candles por ativo
+    candles_fetched = 0
+    while current_start < end_timestamp and candles_fetched < max_candles:
         url = f"{BASE_URL}klines"
         params = {
             "symbol": symbol,
             "interval": interval,
             "startTime": current_start,
             "endTime": end_timestamp,
-            "limit": 1000
+            "limit": min(1000, max_candles - candles_fetched)
         }
         response = requests.get(url, params=params)
         if response.status_code == 200:
@@ -137,10 +139,15 @@ def get_binance_data(symbol, interval, start_date, end_date):
             if not data:
                 break
             all_data.extend(data)
+            candles_fetched += len(data)
+            if candles_fetched >= max_candles:
+                break
             current_start = int(data[-1][0]) + 1
         else:
             _log_global("BINANCE", f"Erro ao buscar dados da API para {symbol}: {response.status_code}", level="ERROR")
             break
+    # Garante que retorna no máximo 50 candles
+    all_data = all_data[-max_candles:]
     formatted_data = [{
         "data": item[0],
         "valor_fechamento": round(float(item[4]), 7),
