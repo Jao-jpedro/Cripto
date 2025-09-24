@@ -1252,25 +1252,33 @@ class EMAGradientStrategy:
                 self._log("_preco_atual não disponível com LIVE_TRADING=0", level="DEBUG")
             raise RuntimeError("LIVE_TRADING desativado")
         try:
-            mkts = self.dex.load_markets()
-            info = mkts[self.symbol]["info"]
-            if info.get("midPx") is not None:
-                price = float(info["midPx"])
-                self._last_price_snapshot = price
-                self._log(f"Preço atual (midPx): {price:.6f}", level="INFO")
-                return price
-        except Exception:
-            pass
-        try:
             t = self.dex.fetch_ticker(self.symbol)
             if t and t.get("last"):
                 price = float(t["last"])
                 self._last_price_snapshot = price
                 self._log(f"Preço atual (ticker): {price:.6f}", level="INFO")
                 return price
+            if t and t.get("info"):
+                info = t["info"] if isinstance(t["info"], dict) else {}
+                px = info.get("indexPx") or info.get("markPx") or info.get("midPx")
+                if px is not None:
+                    price = float(px)
+                    self._last_price_snapshot = price
+                    self._log(f"Preço atual (ticker info): {price:.6f}", level="INFO")
+                    return price
         except Exception as e:
             if self.debug:
                 self._log(f"fetch_ticker falhou: {type(e).__name__}: {e}", level="WARN")
+        try:
+            mkts = self.dex.load_markets(reload=True)
+            info = mkts[self.symbol]["info"]
+            if info.get("midPx") is not None:
+                price = float(info["midPx"])
+                self._last_price_snapshot = price
+                self._log(f"Preço atual (midPx reload): {price:.6f}", level="INFO")
+                return price
+        except Exception:
+            pass
         raise RuntimeError("Não consegui obter preço atual (midPx/last).")
 
     def _posicao_aberta(self) -> Optional[Dict[str, Any]]:
