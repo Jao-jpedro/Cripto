@@ -664,7 +664,8 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.10  # 10% da margem como stop
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.30  # 30% da margem como alvo
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.0   # standby (usar trailing para ganhos)
+    MAX_LOSS_ABS_USD: float    = 0.10     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -1629,6 +1630,9 @@ class EMAGradientStrategy:
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
             stop_px, take_px = self._protection_prices(entry, norm_side)
+            manage_take = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT or 0.0) > 0.0
+            if not manage_take:
+                take_px = None
             if self._last_stop_order_px is not None and math.isfinite(self._last_stop_order_px):
                 if norm_side == "buy":
                     stop_px = max(stop_px, float(self._last_stop_order_px))
@@ -1641,7 +1645,7 @@ class EMAGradientStrategy:
             stop_match = None
             take_match = None
             tol_stop = max(1e-8, abs(stop_px) * 1e-5)
-            tol_take = max(1e-8, abs(take_px) * 1e-5)
+            tol_take = max(1e-8, abs(take_px) * 1e-5) if manage_take and take_px is not None else None
 
             for order in orders or []:
                 oid = self._extract_order_id(order)
@@ -1674,7 +1678,10 @@ class EMAGradientStrategy:
                         else:
                             self._cancel_order_silent(oid)
                 elif kind_guess == "take":
-                    if abs(price - take_px) <= tol_take:
+                    if not manage_take:
+                        self._cancel_order_silent(oid)
+                        continue
+                    if take_px is not None and tol_take is not None and abs(price - take_px) <= tol_take:
                         take_match = order
                         self._last_take_order_id = oid
                         self._last_take_order_px = price
@@ -1690,7 +1697,7 @@ class EMAGradientStrategy:
                 stop_order = self._place_stop(close_side, qty, stop_px, df_for_log=df_for_log, existing_orders=orders)
                 if stop_order is not None:
                     orders.append(stop_order)
-            if take_match is None:
+            if manage_take and take_match is None and take_px is not None:
                 self._place_take_profit(close_side, qty, take_px, df_for_log=df_for_log, existing_orders=orders)
         except Exception as e:
             self._log(f"Falha ao sincronizar proteções: {type(e).__name__}: {e}", level="WARN")
@@ -1808,26 +1815,39 @@ class EMAGradientStrategy:
             pass
 
         self._last_stop_order_id = None
+        self._last_stop_order_px = None
         self._last_take_order_id = None
+        self._last_take_order_px = None
         self._trail_max_gain_pct = 0.0
 
         norm_side = self._norm_side(side)
         sl_price, tp_price = self._protection_prices(fill_price, norm_side)
+        manage_take = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT or 0.0) > 0.0
+        if not manage_take:
+            tp_price = None
         sl_side = "sell" if norm_side == "buy" else "buy"
         tp_side = sl_side
 
         if self.debug:
-            self._log(
-                f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) "
-                f"take={tp_price:.6f} (+{self.cfg.TAKE_PROFIT_CAPITAL_PCT*100:.1f}% margem)",
-                level="DEBUG",
-            )
+            if manage_take and tp_price is not None:
+                self._log(
+                    f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) "
+                    f"take={tp_price:.6f} (+{self.cfg.TAKE_PROFIT_CAPITAL_PCT*100:.1f}% margem)",
+                    level="DEBUG",
+                )
+            else:
+                self._log(
+                    f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) | take=standby",
+                    level="DEBUG",
+                )
 
         ordem_stop = self._place_stop(sl_side, fill_amount, sl_price, df_for_log=df_for_log)
         self._last_stop_order_id = self._extract_order_id(ordem_stop)
 
-        ordem_take = self._place_take_profit(tp_side, fill_amount, tp_price, df_for_log=df_for_log)
-        self._last_take_order_id = self._extract_order_id(ordem_take)
+        self._last_take_order_id = None
+        if manage_take and tp_price is not None:
+            ordem_take = self._place_take_profit(tp_side, fill_amount, tp_price, df_for_log=df_for_log)
+            self._last_take_order_id = self._extract_order_id(ordem_take)
 
         self._safe_log(
             "stop_inicial", df_for_log,
@@ -1836,12 +1856,13 @@ class EMAGradientStrategy:
             exec_amount=amount
         )
 
-        self._safe_log(
-            "take_profit_inicial", df_for_log,
-            tipo=("long" if norm_side == "buy" else "short"),
-            exec_price=tp_price,
-            exec_amount=amount
-        )
+        if manage_take and tp_price is not None:
+            self._safe_log(
+                "take_profit_inicial", df_for_log,
+                tipo=("long" if norm_side == "buy" else "short"),
+                exec_price=tp_price,
+                exec_amount=amount
+            )
 
         # Diagnóstico: listar ordens abertas reduceOnly
         try:
@@ -2215,21 +2236,50 @@ class EMAGradientStrategy:
         try:
             entry_px = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
             qty_pos = float(pos.get("contracts") or 0.0)
+            contract_sz = float(pos.get("contractSize") or 1.0)
             px_now = self._preco_atual()
             lev_meta = ((pos.get("info") or {}).get("position") or {}).get("leverage") or {}
             lev_val = float(lev_meta.get("value") or pos.get("leverage") or self.cfg.LEVERAGE)
         except Exception:
-            entry_px = 0.0; qty_pos = 0.0; px_now = 0.0; lev_val = float(self.cfg.LEVERAGE)
+            entry_px = 0.0; qty_pos = 0.0; contract_sz = 1.0; px_now = 0.0; lev_val = float(self.cfg.LEVERAGE)
         if lev_val <= 0:
             lev_val = float(self.cfg.LEVERAGE)
         loss_trigger_pct = -abs(self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0)
+        pnl_abs = None
+        if pos:
+            raw_abs = pos.get("unrealizedPnl")
+            if raw_abs is None:
+                raw_abs = ((pos.get("info") or {}).get("position") or {}).get("unrealizedPnl")
+            try:
+                pnl_abs = float(raw_abs)
+            except Exception:
+                pnl_abs = None
+            if pnl_abs is None or not math.isfinite(pnl_abs):
+                if entry_px > 0 and qty_pos > 0 and px_now > 0:
+                    qvalue = qty_pos * contract_sz
+                    if qvalue > 0:
+                        if lado == "buy":
+                            pnl_abs = (px_now - entry_px) * qvalue
+                        else:
+                            pnl_abs = (entry_px - px_now) * qvalue
         if entry_px > 0 and qty_pos > 0 and px_now > 0:
             if lado == "buy":
                 pnl_pct = ((px_now - entry_px) / entry_px) * lev_val * 100.0
+                pnl_abs = pnl_abs if pnl_abs is not None else (px_now - entry_px) * qty_pos * contract_sz
             else:
                 pnl_pct = ((entry_px - px_now) / entry_px) * lev_val * 100.0
+                pnl_abs = pnl_abs if pnl_abs is not None else (entry_px - px_now) * qty_pos * contract_sz
             if self.debug:
                 self._log(f"Drawdown atual={pnl_pct:.2f}% | limite={loss_trigger_pct:.2f}%", level="DEBUG")
+            max_loss_abs = float(getattr(self.cfg, "MAX_LOSS_ABS_USD", 0.0) or 0.0)
+            if max_loss_abs > 0 and pnl_abs is not None and math.isfinite(pnl_abs):
+                if pnl_abs <= -abs(max_loss_abs):
+                    self._log(
+                        f"Perda de {pnl_abs:.4f} USDC excedeu limite -{abs(max_loss_abs):.2f}. Fechando posição imediatamente.",
+                        level="WARN",
+                    )
+                    self._fechar_posicao(df_for_log=df)
+                    return
             if pnl_pct <= loss_trigger_pct:
                 self._log(
                     f"Perda de {pnl_pct:.2f}% excedeu limite {loss_trigger_pct:.2f}%. Fechando posição imediatamente.",
