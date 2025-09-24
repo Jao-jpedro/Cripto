@@ -943,7 +943,7 @@ class EMAGradientStrategy:
     def _wallet_address(self) -> Optional[str]:
         # Busca carteira: env > dex attributes/options > None
         fixed = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
-        for key in ("WALLET_TRADINGV4", "WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
+        for key in ("WALLET_TRADINGV4", "HYPERLIQUID_WALLET_ADDRESS"):
             val = os.getenv(key)
             if val:
                 return val
