@@ -378,12 +378,21 @@ import ccxt  # type: ignore
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
-# Lê credenciais da env (recomendado) com fallback seguro para dev local
-_wallet_env = os.getenv("WALLET_ADDRESS")
+# Lê credenciais fixas/env (recomendado definir a chave privada via variável de ambiente)
+WALLET_TRADINGV4 = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
+_wallet_env = WALLET_TRADINGV4
 _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
+if not _priv_env:
+    msg = (
+        "Credenciais da Hyperliquid ausentes: HYPERLIQUID_PRIVATE_KEY. "
+        "Defina a variável de ambiente obrigatória antes de executar."
+    )
+    _log_global("DEX", msg, level="ERROR")
+    raise RuntimeError(msg)
+
 dex = ccxt.hyperliquid({
-    "walletAddress": _wallet_env or "0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
-    "privateKey": _priv_env or "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
+    "walletAddress": _wallet_env,
+    "privateKey": _priv_env,
     "enableRateLimit": True,
     "timeout": dex_timeout,
     "options": {"timeout": dex_timeout},
@@ -933,7 +942,8 @@ class EMAGradientStrategy:
 
     def _wallet_address(self) -> Optional[str]:
         # Busca carteira: env > dex attributes/options > None
-        for key in ("WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
+        fixed = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
+        for key in ("WALLET_TRADINGV4", "WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
             val = os.getenv(key)
             if val:
                 return val
@@ -950,7 +960,7 @@ class EMAGradientStrategy:
                 return val
         except Exception:
             pass
-        return None
+        return fixed
 
     def _notify_trade(self, kind: str, side: Optional[str], price: Optional[float], amount: Optional[float], note: str = "", include_hl: bool = False):
         base = self.symbol.split("/")[0] if "/" in self.symbol else self.symbol
