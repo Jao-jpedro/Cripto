@@ -41,6 +41,11 @@ interval = INTERVAL  # compat com trechos legados
 # df global (placeholder); será preenchido mais adiante
 df: pd.DataFrame = pd.DataFrame()
 
+
+class MarketDataUnavailable(Exception):
+    """Sinaliza indisponibilidade temporária de candles para um ativo/timeframe."""
+    pass
+
 # --- Compat: stubs para ambiente local (sem Databricks) ---
 try:  # display (Databricks) → no-op amigável
     display  # type: ignore[name-defined]
@@ -202,12 +207,13 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
              debug: bool = True,
              target_candles: int = None) -> pd.DataFrame:
     # Sempre prioriza um número alvo de candles (inclui o atual não fechado)
-    n_target = int(os.getenv("TARGET_CANDLES", "0"))
+    n_target = 20
     if target_candles is not None:
-        n_target = int(target_candles)
-    if n_target <= 0:
-        n_target = 50  # padrão solicitado
-    n_target = min(n_target, 50)
+        n_target = max(1, int(target_candles))
+    else:
+        env_target = int(os.getenv("TARGET_CANDLES", "0"))
+        if env_target > 0:
+            n_target = max(1, env_target)
 
     if debug:
         _log_global("DATA", f"Iniciando build_df symbol={symbol} tf={tf} alvo={n_target}")
@@ -233,102 +239,62 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
     symbol_bybit = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
     data = []
     ex = None
+
+    # Primeiro tenta Binance
     try:
-        import ccxt  # type: ignore
-        ex = ccxt.bybit({
-            "enableRateLimit": True,
-            "timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000")),
-            "options": {"timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000"))},
-        })
-        # Busca até os últimos n_target candles (Bybit normalmente retorna fechados; alguns mercados incluem o em formação)
-        lim = max(1, n_target)
-        cc = []
-        last_err = None
-        for attempt in range(2):
-            try:
-                cc = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, limit=lim) or []
-                break
-            except Exception as e:
-                last_err = e
-                if debug:
-                    _log_global("BYBIT", f"fetch_ohlcv tentativa {attempt+1} falhou: {type(e).__name__}: {e}", level="WARN")
-                _time.sleep(0.3)
-        if cc:
-            # Garante no máximo n_target candles
-            if len(cc) > n_target:
-                cc = cc[-n_target:]
-            data = [{
-                "data": o[0],
-                "valor_fechamento": float(o[4]),
-                "criptomoeda": symbol,
-                "volume_compra": float(o[5] or 0.0),
-                "volume_venda": float(o[5] or 0.0),
-            } for o in cc]
+        candles_needed = n_target
+        start_dt = datetime.fromtimestamp(cur_open_epoch - (candles_needed - 1) * secs, UTC)
+        end_dt = now_utc
+        if debug:
+            _log_global("BINANCE_VISION", "Buscando candles recentes (prioridade)")
+        bdata = get_binance_data(symbol, tf, start_dt, end_dt)
+        if bdata:
+            data = bdata[-n_target:]
             if debug:
-                _log_global("BYBIT", f"{len(data)} candles carregados (API)")
-        else:
-            if debug:
-                _log_global("BYBIT", f"Nenhum candle retornado (último erro: {last_err})", level="WARN")
-        # Se o último candle não é o atual, adiciona o preço atual como candle em formação
-        if data:
-            need_append_live = True
-            last_ts = int(data[-1]["data"])
-            if last_ts == cur_open_ms:
-                need_append_live = False
-            elif last_ts > cur_open_ms:
-                need_append_live = False
-            if need_append_live and len(data) < n_target:
-                try:
-                    ticker = ex.fetch_ticker(symbol_bybit)
-                    if ticker and (ticker.get("last") is not None):
-                        data.append({
-                            "data": cur_open_ms,
-                            "valor_fechamento": float(ticker["last"]),
-                            "criptomoeda": symbol,
-                            "volume_compra": 0.0,
-                            "volume_venda": 0.0,
-                        })
-                        if debug:
-                            _log_global("BYBIT", f"Ticker adicionou candle em formação price={ticker['last']}")
-                except Exception as e:
-                    if debug:
-                        _log_global("BYBIT", f"Não foi possível adicionar preço atual: {type(e).__name__}: {e}", level="WARN")
-        # Garante exatamente n_target no máximo (fechados + atual)
-        if data and len(data) > n_target:
-            data = data[-n_target:]
+                _log_global("BINANCE_VISION", f"{len(data)} candles carregados (prioridade)")
     except Exception as e:
         if debug:
-            _log_global("BYBIT", f"Exceção geral: {type(e).__name__}: {e}", level="WARN")
+            _log_global("BINANCE_VISION", f"Falhou ao buscar prioridade: {type(e).__name__}: {e}", level="WARN")
 
-    # Fallback 1: tentar Binance Vision pública se Bybit vazio (sem bloquear)
+    # Fallback: Bybit
     if not data:
         try:
-            candles_needed = n_target
-            start_dt = datetime.fromtimestamp(cur_open_epoch - (candles_needed - 1) * secs, UTC)
-            end_dt = now_utc
-            if debug:
-                _log_global("BINANCE_VISION", "Ativando fallback público")
-            bdata = get_binance_data(symbol, tf, start_dt, end_dt)
-            if bdata:
-                data = bdata[-n_target:]
+            import ccxt  # type: ignore
+            ex = ccxt.bybit({
+                "enableRateLimit": True,
+                "timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000")),
+                "options": {"timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000"))},
+            })
+            lim = max(1, n_target)
+            cc = []
+            last_err = None
+            for attempt in range(2):
+                try:
+                    cc = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, limit=lim) or []
+                    break
+                except Exception as e:
+                    last_err = e
+                    if debug:
+                        _log_global("BYBIT", f"fetch_ohlcv tentativa {attempt+1} falhou: {type(e).__name__}: {e}", level="WARN")
+                    _time.sleep(0.3)
+            if cc:
+                if len(cc) > n_target:
+                    cc = cc[-n_target:]
+                data = [{
+                    "data": o[0],
+                    "valor_fechamento": float(o[4]),
+                    "criptomoeda": symbol,
+                    "volume_compra": float(o[5] or 0.0),
+                    "volume_venda": float(o[5] or 0.0),
+                } for o in cc]
                 if debug:
-                    _log_global("BINANCE_VISION", f"{len(data)} candles carregados")
+                    _log_global("BYBIT", f"{len(data)} candles carregados (fallback)")
+            else:
+                if debug:
+                    _log_global("BYBIT", f"Nenhum candle retornado (último erro: {last_err})", level="WARN")
         except Exception as e:
             if debug:
-                _log_global("BINANCE_VISION", f"Falhou: {type(e).__name__}: {e}", level="WARN")
-
-    # Fallback: snapshot local
-    if not data and os.path.exists("df_log.csv") and os.path.getsize("df_log.csv") > 0:
-        try:
-            df_local = pd.read_csv("df_log.csv")
-            if "data" in df_local.columns:
-                df_local["data"] = pd.to_datetime(df_local["data"])
-            if debug:
-                _log_global("DATA", "Fallback local df_log.csv carregado")
-            return df_local
-        except Exception as e:
-            if debug:
-                _log_global("DATA", f"Falha ao ler df_log.csv: {e}", level="WARN")
+                _log_global("BYBIT", f"Exceção geral: {type(e).__name__}: {e}", level="WARN")
 
     if data:
         last_ts = int(data[-1]["data"])
@@ -373,8 +339,8 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
                     data = data[-n_target:]
     if not data:
         if debug:
-            _log_global("DATA", f"Sem dados retornados para {symbol} tf={tf}", level="ERROR")
-        return pd.DataFrame()
+            _log_global("DATA", f"Nenhum dado encontrado para {symbol} tf={tf}", level="ERROR")
+        raise MarketDataUnavailable(f"sem dados para {symbol} tf={tf}")
 
     df_out = pd.DataFrame(data)
     df_out["data"] = pd.to_datetime(df_out["data"], unit="ms")
@@ -1256,7 +1222,6 @@ class EMAGradientStrategy:
             if t and t.get("last"):
                 price = float(t["last"])
                 self._last_price_snapshot = price
-                self._log(f"Preço atual (ticker): {price:.6f}", level="INFO")
                 return price
             if t and t.get("info"):
                 info = t["info"] if isinstance(t["info"], dict) else {}
@@ -1264,7 +1229,6 @@ class EMAGradientStrategy:
                 if px is not None:
                     price = float(px)
                     self._last_price_snapshot = price
-                    self._log(f"Preço atual (ticker info): {price:.6f}", level="INFO")
                     return price
         except Exception as e:
             if self.debug:
@@ -1275,7 +1239,6 @@ class EMAGradientStrategy:
             if info.get("midPx") is not None:
                 price = float(info["midPx"])
                 self._last_price_snapshot = price
-                self._log(f"Preço atual (midPx reload): {price:.6f}", level="INFO")
                 return price
         except Exception:
             pass
@@ -1668,6 +1631,11 @@ class EMAGradientStrategy:
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
             stop_px, take_px = self._protection_prices(entry, norm_side)
+            if self._last_stop_order_px is not None and math.isfinite(self._last_stop_order_px):
+                if norm_side == "buy":
+                    stop_px = max(stop_px, float(self._last_stop_order_px))
+                else:
+                    stop_px = min(stop_px, float(self._last_stop_order_px))
             close_side = "sell" if norm_side == "buy" else "buy"
 
             orders = self._fetch_reduce_only_orders()
@@ -1689,13 +1657,24 @@ class EMAGradientStrategy:
                     continue
                 kind_guess = self._classify_protection_price(order, price, entry, norm_side)
                 if kind_guess == "stop":
-                    if abs(price - stop_px) <= tol_stop:
-                        stop_match = order
-                        self._last_stop_order_id = oid
-                        self._last_stop_order_px = price
-                        remaining_orders.append(order)
+                    if norm_side == "buy":
+                        if price >= stop_px - tol_stop:
+                            stop_match = order
+                            stop_px = max(stop_px, price)
+                            self._last_stop_order_id = oid
+                            self._last_stop_order_px = price
+                            remaining_orders.append(order)
+                        else:
+                            self._cancel_order_silent(oid)
                     else:
-                        self._cancel_order_silent(oid)
+                        if price <= stop_px + tol_stop:
+                            stop_match = order
+                            stop_px = min(stop_px, price)
+                            self._last_stop_order_id = oid
+                            self._last_stop_order_px = price
+                            remaining_orders.append(order)
+                        else:
+                            self._cancel_order_silent(oid)
                 elif kind_guess == "take":
                     if abs(price - take_px) <= tol_take:
                         take_match = order
@@ -2023,6 +2002,7 @@ class EMAGradientStrategy:
         max_gain = self._trail_max_gain_pct
 
         tol = max(1e-8, entry * 1e-5)
+        risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(lev_val)
 
         if side == "buy":
             # Cálculo solicitado: ((preço atual / preço entrada) - 1) * alavancagem, ajustado em -10%,
@@ -2050,10 +2030,17 @@ class EMAGradientStrategy:
                 existing_stop_id = found_id
                 existing_stop_px = found_px
 
-        if existing_stop_px is not None:
-            if side == "buy" and target_stop <= existing_stop_px + tol:
+        baseline_stop = None
+        if side == "buy":
+            baseline_stop = entry * (1.0 - risk_ratio)
+        else:
+            baseline_stop = entry * (1.0 + risk_ratio)
+
+        reference_stop = existing_stop_px if existing_stop_px is not None else baseline_stop
+        if reference_stop is not None:
+            if side == "buy" and target_stop <= reference_stop + tol:
                 return
-            if side == "sell" and target_stop >= existing_stop_px - tol:
+            if side == "sell" and target_stop >= reference_stop - tol:
                 return
 
         if not self._anti_spam_ok("adjust"):
@@ -2084,6 +2071,8 @@ class EMAGradientStrategy:
         else:
             df = df.copy()
 
+        self._last_price_snapshot = None
+
         # indicadores e gradiente em %/barra
         df = self._compute_indicators_live(df)
         last = df.iloc[-1]
@@ -2105,10 +2094,6 @@ class EMAGradientStrategy:
                 fallback_price = None
             if fallback_price is not None and math.isfinite(fallback_price):
                 self._last_price_snapshot = fallback_price
-                self._log(
-                    f"Preço atual aproximado (close último candle): {fallback_price:.6f}",
-                    level="INFO",
-                )
 
         # helpers de consistência do gradiente
         g = df["ema_short_grad_pct"].tail(self.cfg.GRAD_CONSISTENCY)
@@ -2966,12 +2951,26 @@ if __name__ == "__main__":
                 _log_global("ASSET", f"Processando {asset.name}")
                 try:
                     df_asset = build_df(asset.data_symbol, INTERVAL, debug=True)
+                except MarketDataUnavailable as e:
+                    _log_global(
+                        "ASSET",
+                        f"Sem dados recentes para {asset.name} ({asset.data_symbol}) {INTERVAL}: {e}",
+                        level="WARN",
+                    )
+                    continue
                 except Exception as e:
                     _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
                     continue
 
                 try:
                     df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
+                except MarketDataUnavailable:
+                    _log_global(
+                        "ASSET",
+                        f"Sem dados 1h para {asset.name} ({asset.data_symbol}); seguindo sem rsi_aux.",
+                        level="WARN",
+                    )
+                    df_asset_hour = pd.DataFrame()
                 except Exception as e:
                     _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
                     df_asset_hour = pd.DataFrame()
@@ -3015,6 +3014,12 @@ if __name__ == "__main__":
 
                 try:
                     strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
+                    price_seen = getattr(strategy, "_last_price_snapshot", None)
+                    if price_seen is not None and math.isfinite(price_seen):
+                        try:
+                            strategy._log(f"Preço atual: {price_seen:.6f}", level="INFO")
+                        except Exception:
+                            pass
                 except Exception as e:
                     _log_global("ASSET", f"Erro executando {asset.name}: {type(e).__name__}: {e}", level="ERROR")
                 _time.sleep(0.25)
