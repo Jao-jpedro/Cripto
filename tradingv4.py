@@ -1,5 +1,3 @@
-#codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
-
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 
 
@@ -381,24 +379,11 @@ import ccxt  # type: ignore
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
 # Lê credenciais da env (recomendado) com fallback seguro para dev local
-_wallet_env = os.getenv("WALLET_TRADINGV4")
+_wallet_env = os.getenv("WALLET_ADDRESS")
 _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-missing_creds = []
-if not _wallet_env:
-    missing_creds.append("WALLET_TRADINGV4")
-if not _priv_env:
-    missing_creds.append("HYPERLIQUID_PRIVATE_KEY")
-if missing_creds:
-    msg = (
-        "Credenciais da Hyperliquid ausentes: " + ", ".join(missing_creds) +
-        ". Defina as variáveis de ambiente obrigatórias antes de executar."
-    )
-    _log_global("DEX", msg, level="ERROR")
-    raise RuntimeError(msg)
-
 dex = ccxt.hyperliquid({
-    "walletAddress": _wallet_env,
-    "privateKey": _priv_env,
+    "walletAddress": _wallet_env or "0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
+    "privateKey": _priv_env or "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
     "enableRateLimit": True,
     "timeout": dex_timeout,
     "options": {"timeout": dex_timeout},
@@ -948,7 +933,7 @@ class EMAGradientStrategy:
 
     def _wallet_address(self) -> Optional[str]:
         # Busca carteira: env > dex attributes/options > None
-        for key in ("WALLET_TRADINGV4", "WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
+        for key in ("WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
             val = os.getenv(key)
             if val:
                 return val
@@ -1257,60 +1242,14 @@ class EMAGradientStrategy:
             pass
         raise RuntimeError("Não consegui obter preço atual (midPx/last).")
 
-    def _position_quantity(self, pos: Optional[Dict[str, Any]]) -> float:
-        if not pos:
-            return 0.0
-        candidates: List[Any] = [
-            pos.get("contracts"),
-            pos.get("size"),
-            pos.get("total"),
-            pos.get("positionAmt"),
-            pos.get("positionAmount"),
-        ]
-        info = pos.get("info") if isinstance(pos, dict) else None
-        if isinstance(info, dict):
-            candidates.extend([
-                info.get("contracts"),
-                info.get("size"),
-                info.get("positionSize"),
-                info.get("positionAmt"),
-            ])
-            inner = info.get("position")
-            if isinstance(inner, dict):
-                candidates.extend([
-                    inner.get("size"),
-                    inner.get("contracts"),
-                    inner.get("totalSz"),
-                ])
-        for raw in candidates:
-            try:
-                if raw is None:
-                    continue
-                qty = abs(float(raw))
-                if qty > 0:
-                    return qty
-            except Exception:
-                continue
-        return 0.0
-
     def _posicao_aberta(self) -> Optional[Dict[str, Any]]:
         # Permite desligar chamadas à exchange em ambientes restritos (default off)
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
         try:
             pos = self.dex.fetch_positions([self.symbol])
-            if not pos:
-                if self.debug:
-                    self._log("fetch_positions retornou lista vazia.", level="DEBUG")
-                return None
-            for p in pos:
-                qty = self._position_quantity(p)
-                if qty > 0:
-                    if self.debug:
-                        self._log(f"fetch_positions detectou posição: {p}", level="DEBUG")
-                    return p
-            if self.debug:
-                self._log(f"fetch_positions sem contratos >0: {pos}", level="DEBUG")
+            if pos and float(pos[0].get("contracts", 0)) > 0:
+                return pos[0]
         except Exception as e:
             if self.debug:
                 self._log(f"fetch_positions falhou: {type(e).__name__}: {e}", level="WARN")
@@ -1843,7 +1782,7 @@ class EMAGradientStrategy:
                 entry_px_cb = float(pos_after_exec.get("entryPrice") or pos_after_exec.get("entryPx") or 0.0)
                 if entry_px_cb > 0:
                     fill_price = entry_px_cb
-                filled_cb = self._position_quantity(pos_after_exec)
+                filled_cb = float(pos_after_exec.get("contracts") or 0.0)
                 if filled_cb > 0:
                     fill_amount = filled_cb
             except Exception:
@@ -1991,15 +1930,13 @@ class EMAGradientStrategy:
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()
-        current_qty = 0.0
-        current_qty = self._position_quantity(pos)
-        if not pos or current_qty == 0:
+        if not pos or self._position_quantity(pos) == 0:
             self._log("Fechamento ignorado: posição ausente.", level="DEBUG"); return
         if not self._anti_spam_ok("close"):
             self._log("Fechamento bloqueado pelo anti-spam.", level="DEBUG"); return
 
         lado_atual = self._norm_side(pos.get("side") or pos.get("positionSide"))
-        qty        = current_qty
+        qty        = self._position_quantity(pos)
         price_now  = self._preco_atual()
         if self.debug:
             self._log(f"Fechando posição {lado_atual.upper()} qty={qty} px={price_now:.6f}", level="DEBUG")
@@ -2186,9 +2123,9 @@ class EMAGradientStrategy:
         # primeira execução: loga posição preexistente
         if not self._first_step_done:
             pos_now = self._posicao_aberta()
-            qty = self._position_quantity(pos_now) if pos_now else 0.0
-            if pos_now and qty > 0:
+            if pos_now and float(pos_now.get("contracts", 0)) > 0:
                 lado_atual = self._norm_side(pos_now.get("side") or pos_now.get("positionSide"))
+                qty = float(pos_now.get("contracts") or 0.0)
                 entry = float(pos_now.get("entryPrice") or pos_now.get("entryPx") or 0.0) or None
                 self._safe_log(
                     "preexistente", df_for_log=df,
@@ -2292,12 +2229,13 @@ class EMAGradientStrategy:
                     self._pending_after_cd = {"side": "SHORT", "reason": "cooldown_intent_short", "created_idx": last_idx}
             return
 
+        lado = None
         if pos:
             lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
             self._ensure_position_protections(pos, df_for_log=df)
             if getattr(self.cfg, "ENABLE_TRAILING_STOP", False):
                 self._maybe_trailing_breakeven_plus(pos, df_for_log=df)
-            # Contenção adicional: fecha se perda > limite configurado
+        # Contenção adicional: fecha se perda > limite configurado
         try:
             entry_px = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
             qty_pos = self._position_quantity(pos)
