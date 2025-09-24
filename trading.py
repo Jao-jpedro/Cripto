@@ -666,6 +666,15 @@ class GradientConfig:
     STOP_LOSS_CAPITAL_PCT: float = 0.10  # 10% da margem como stop
     TAKE_PROFIT_CAPITAL_PCT: float = 0.0   # standby (usar trailing para ganhos)
     MAX_LOSS_ABS_USD: float    = 0.10     # limite absoluto de perda por posição
+    ENTRY_EPS_HARD: float      = 0.15     # histerese para zona neutra/força mínima
+    ENTRY_ALPHA_ATR: float     = 0.15     # força mínima via ATR
+    ENTRY_GRAD_PERSIST: int    = 4        # barras para persistência do gradiente
+    ENTRY_DEBOUNCE_BARS: int   = 2        # barras de debounce
+    ENTRY_RETRY_BARS: int      = 10       # bloqueio após tentativa falha
+    ENTRY_SCORE_MIN: int       = 3        # score mínimo
+    ENTRY_K_LOW: float         = 1.4      # k quando ATR% baixo
+    ENTRY_K_MID: float         = 1.1      # k quando ATR% médio
+    ENTRY_K_HIGH: float        = 0.9      # k quando ATR% alto
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -746,7 +755,6 @@ class EMAGradientStrategy:
 
         # Estado para cooldown por barras e intenção pós-cooldown
         self._cooldown_until_idx: Optional[int] = None
-        self._pending_after_cd: Optional[Dict[str, Any]] = None  # {side, reason, created_idx}
         self._last_seen_bar_idx: Optional[int] = None
         # Cooldown por barras (robusto a janela deslizante)
         self._cd_bars_left: Optional[int] = None
@@ -760,6 +768,11 @@ class EMAGradientStrategy:
         self._last_stop_order_px: Optional[float] = None
         self._last_take_order_px: Optional[float] = None
         self._last_price_snapshot: Optional[float] = None
+        self._entry_pending_signal: Optional[Dict[str, Any]] = None
+        self._entry_last_block_idx: Dict[str, int] = {"LONG": -10**9, "SHORT": -10**9}
+        self._entry_hysteresis: Dict[str, bool] = {"LONG": False, "SHORT": False}
+        self._cooldown_recent_release: bool = False
+        self._last_cooldown_active: bool = False
 
     def _log(self, message: str, level: str = "INFO") -> None:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
@@ -1179,6 +1192,242 @@ class EMAGradientStrategy:
         x = np.arange(n, dtype=float)
         a, _b = np.polyfit(x, y, 1)
         return float(a)
+
+    # ---------- entrada avançada: helpers ----------
+    def _volume_robust_flag(self, df: pd.DataFrame, window: int = 50) -> Tuple[bool, float, float, float]:
+        try:
+            vol_series = pd.to_numeric(df["volume"].tail(window), errors="coerce").dropna()
+        except Exception:
+            vol_series = pd.Series([], dtype=float)
+        if vol_series.empty:
+            return False, float('nan'), float('nan'), float('nan')
+        median = float(vol_series.median())
+        mad = float((vol_series - median).abs().median())
+        threshold = median + mad if mad and math.isfinite(mad) else median
+        try:
+            current = float(df["volume"].iloc[-1])
+        except Exception:
+            current = float('nan')
+        flag = math.isfinite(current) and current > threshold
+        return flag, current, median, mad
+
+    def _grad_persistence(self, df: pd.DataFrame, side: str, m: int) -> Tuple[bool, int]:
+        try:
+            grads = pd.to_numeric(df["ema_short_grad_pct"].tail(m), errors="coerce")
+        except Exception:
+            grads = pd.Series([], dtype=float)
+        if grads.empty or grads.isna().all():
+            return False, 0
+        if side == "LONG":
+            count = int((grads > 0).sum())
+        else:
+            count = int((grads < 0).sum())
+        persist = count >= max(1, m - 1)
+        return persist, count
+
+    def _update_hysteresis(self, spread: float, atr: float) -> None:
+        alpha = float(self.cfg.ENTRY_ALPHA_ATR or 0.0)
+        if atr <= 0:
+            self._entry_hysteresis = {"LONG": False, "SHORT": False}
+            return
+        long_on = self._entry_hysteresis.get("LONG", False)
+        short_on = self._entry_hysteresis.get("SHORT", False)
+        if spread > alpha * atr:
+            long_on = True
+        elif spread < -alpha * atr:
+            long_on = False
+        if -spread > alpha * atr:
+            short_on = True
+        elif -spread < -alpha * atr:
+            short_on = False
+        self._entry_hysteresis = {"LONG": long_on, "SHORT": short_on}
+
+    def _adaptive_k(self, atr_pct: float) -> float:
+        atr_min = float(self.cfg.ATR_PCT_MIN)
+        atr_max = float(self.cfg.ATR_PCT_MAX)
+        span = max(1e-6, atr_max - atr_min)
+        low_cut = atr_min + 0.25 * span
+        high_cut = atr_min + 0.75 * span
+        if atr_pct <= low_cut:
+            return float(self.cfg.ENTRY_K_LOW)
+        if atr_pct >= high_cut:
+            return float(self.cfg.ENTRY_K_HIGH)
+        return float(self.cfg.ENTRY_K_MID)
+
+    def _entry_side_label(self, side: str) -> str:
+        return "LONG" if side.lower() == "buy" else "SHORT"
+
+    def _record_entry_block(self, side: str, idx: int) -> None:
+        label = self._entry_side_label(side)
+        self._entry_last_block_idx[label] = idx
+        if self._entry_pending_signal and self._entry_pending_signal.get("side") == label:
+            self._entry_pending_signal = None
+
+    def _entry_one_shot_blocked(self, label: str, idx: int) -> bool:
+        last_idx = self._entry_last_block_idx.get(label, -10**9)
+        return (idx - last_idx) < int(self.cfg.ENTRY_RETRY_BARS or 0)
+
+    def _log_entry_telemetry(self, side: str, telemetry: Dict[str, Any]) -> None:
+        parts = [f"{k}={telemetry[k]}" for k in (
+            "ema_spread_in_atr", "grad_persist", "atr_pct", "k_used", "rsi",
+            "vol_flag", "score"
+        ) if k in telemetry and telemetry[k] is not None]
+        reason = telemetry.get("reason")
+        msg = f"Entrada {side}: " + ", ".join(parts)
+        if reason:
+            msg += f" | reason={reason}"
+        self._log(msg, level="INFO")
+
+    def _current_rsi(self, df: pd.DataFrame, rsi_df_hourly: Optional[pd.DataFrame]) -> float:
+        rsi_val = float('nan')
+        try:
+            if isinstance(rsi_df_hourly, pd.DataFrame) and not rsi_df_hourly.empty and ("rsi" in rsi_df_hourly.columns):
+                df_rsi = rsi_df_hourly
+                if "criptomoeda" in df_rsi.columns:
+                    df_rsi = df_rsi.loc[df_rsi["criptomoeda"] == self._df_symbol_hint]
+                if not df_rsi.empty:
+                    val = df_rsi["rsi"].dropna().iloc[-1]
+                    rsi_val = float(val)
+        except Exception:
+            rsi_val = float('nan')
+        if math.isnan(rsi_val):
+            try:
+                if "rsi" in df.columns:
+                    rsi_val = float(df["rsi"].dropna().iloc[-1])
+            except Exception:
+                rsi_val = float('nan')
+        if math.isnan(rsi_val):
+            try:
+                last = df.iloc[-1]
+                if hasattr(last, "rsi") and pd.notna(last.rsi):
+                    rsi_val = float(last.rsi)
+            except Exception:
+                rsi_val = float('nan')
+        return rsi_val
+
+    def _assess_entry(self,
+                      metrics: Dict[str, Any],
+                      side: str,
+                      last_idx: int,
+                      rsi_val: float,
+                      just_released_cooldown: bool) -> Dict[str, Any]:
+        label = side
+        ema7 = metrics["ema7"]
+        ema21 = metrics["ema21"]
+        spread = metrics["spread"]
+        atr = metrics["atr"]
+        atr_pct = metrics["atr_pct"]
+        price = metrics["price"]
+        vol_flag = metrics["vol_flag"]
+        grad_persist_flag = metrics["grad_persist_flags"][label]
+        grad_count = metrics["grad_counts"][label]
+        k_used = metrics["k_values"][label]
+        alpha = float(self.cfg.ENTRY_ALPHA_ATR or 0.0)
+        eps_hard = float(self.cfg.ENTRY_EPS_HARD or 0.0)
+        atr_min = float(self.cfg.ATR_PCT_MIN)
+        atr_max = float(self.cfg.ATR_PCT_MAX)
+        reasons = []
+        telemetry: Dict[str, Any] = {
+            "ema_spread_in_atr": round(spread / atr, 4) if atr else None,
+            "grad_persist": grad_count,
+            "atr_pct": round(atr_pct, 4) if math.isfinite(atr_pct) else None,
+            "k_used": round(k_used, 4),
+            "rsi": round(rsi_val, 2) if math.isfinite(rsi_val) else None,
+            "vol_flag": vol_flag,
+        }
+
+        # Global filters
+        if not (atr_min <= atr_pct <= atr_max):
+            reasons.append("atr_range")
+        if atr <= 0 or abs(spread) < eps_hard * atr:
+            reasons.append("zona_neutra")
+        if not vol_flag:
+            reasons.append("volume_fraco")
+        if not self._entry_hysteresis.get(label, False):
+            reasons.append("histerese_off")
+        if self._entry_one_shot_blocked(label, last_idx):
+            reasons.append("retry_block")
+
+        # Context checks
+        tendency = (ema7 > ema21) if label == "LONG" else (ema7 < ema21)
+        grad_ok = grad_persist_flag
+        force_ok = (spread > alpha * atr) if label == "LONG" else (-spread > alpha * atr)
+        rsi_ok = False
+        if label == "LONG":
+            rsi_ok = 30.0 <= rsi_val <= 60.0 if math.isfinite(rsi_val) else False
+        else:
+            rsi_ok = 40.0 <= rsi_val <= 70.0 if math.isfinite(rsi_val) else False
+        if not tendency:
+            reasons.append("tendencia")
+        if not grad_ok:
+            reasons.append("grad")
+        if not force_ok:
+            reasons.append("forca")
+        if not rsi_ok:
+            reasons.append("rsi_ctx")
+
+        # Trigger
+        trigger = False
+        if label == "LONG":
+            trigger = price > (ema7 + k_used * atr)
+        else:
+            trigger = price < (ema7 - k_used * atr)
+        if not trigger:
+            reasons.append("gatilho")
+
+        # Score
+        score = 0
+        if tendency:
+            score += 1
+        if force_ok:
+            score += 1
+        if vol_flag:
+            score += 1
+        if trigger:
+            score += 1
+        if grad_ok:
+            score += 1
+        if label == "LONG" and math.isfinite(rsi_val) and rsi_val < 25.0:
+            score -= 1
+        if label == "SHORT" and math.isfinite(rsi_val) and rsi_val > 75.0:
+            score -= 1
+        atr_span = max(1e-6, atr_max - atr_min)
+        if atr_pct - atr_min <= 0.05 * atr_span or atr_max - atr_pct <= 0.05 * atr_span:
+            score -= 1
+        telemetry["score"] = score
+
+        if just_released_cooldown:
+            if not (tendency and grad_ok):
+                reasons.append("cooldown_ctx")
+            if not (vol_flag or grad_ok):
+                reasons.append("cooldown_conf")
+
+        if score < int(self.cfg.ENTRY_SCORE_MIN or 0):
+            reasons.append("score")
+
+        approved = len(reasons) == 0
+        reason_text = None if approved else ",".join(reasons)
+        telemetry["reason"] = reason_text
+        self._log_entry_telemetry(label, telemetry)
+
+        decision = {
+            "side": label,
+            "approved": approved,
+            "score": score,
+            "telemetry": telemetry,
+            "reason": reason_text,
+            "k_used": k_used,
+            "tendency": tendency,
+            "grad_ok": grad_ok,
+            "force_ok": force_ok,
+            "rsi_ok": rsi_ok,
+            "trigger": trigger,
+            "vol_flag": vol_flag,
+        }
+        candidate_ready = trigger or (tendency and grad_ok and force_ok)
+        if not approved and candidate_ready:
+            self._entry_last_block_idx[label] = last_idx
+        return decision
 
     def _ensure_emas_and_slopes(self, df: pd.DataFrame) -> pd.DataFrame:
         if "valor_fechamento" not in df.columns:
@@ -2191,7 +2440,9 @@ class EMAGradientStrategy:
                 return
 
         # Cooldown por barras (legado; mantido para compatibilidade)
+        just_released_cooldown = False
         if self._cooldown_barras_ativo(df):
+            self._last_cooldown_active = True
             try:
                 cd_left = None
                 if self._cd_bars_left is not None:
@@ -2206,27 +2457,11 @@ class EMAGradientStrategy:
                 self._log("Cooldown ativo (fallback).", level="INFO")
             self._safe_log("cooldown", df_for_log=df, tipo="info")
             self._last_pos_side = (self._norm_side(pos.get("side")) if pos else None)
-            # memoriza intenção durante cooldown
-            if not pos:
-                base_long = (
-                    (last.ema_short > last.ema_long) and grad_pos_ok and
-                    (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
-                    (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
-                    (last.volume > last.vol_ma)
-                )
-                base_short = (
-                    (last.ema_short < last.ema_long) and grad_neg_ok and
-                    (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
-                    (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
-                    (last.volume > last.vol_ma)
-                )
-                can_long = base_long
-                can_short = base_short
-                if can_long:
-                    self._pending_after_cd = {"side": "LONG", "reason": "cooldown_intent_long", "created_idx": last_idx}
-                elif can_short:
-                    self._pending_after_cd = {"side": "SHORT", "reason": "cooldown_intent_short", "created_idx": last_idx}
             return
+        else:
+            if self._last_cooldown_active:
+                just_released_cooldown = True
+            self._last_cooldown_active = False
 
         if pos:
             lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
@@ -2292,203 +2527,96 @@ class EMAGradientStrategy:
             self._last_pos_side = lado if lado in ("buy", "sell") else None
             return
 
-        # entradas (sem posição), respeitando no-trade zone e intenção pós-cooldown
         if not pos:
-            # Diagnóstico das variáveis de gatilho (apenas quando sem posição)
-            try:
-                g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
-                eps = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
-                diff = float(last.ema_short - last.ema_long)
-                self._log(
-                    "Trigger snapshot | close={:.6f} ema7={:.6f} ema21={:.6f} atr={:.6f} atr%={:.3f} "
-                    "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f}".format(
-                        float(last.valor_fechamento), float(last.ema_short), float(last.ema_long), float(last.atr),
-                        float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last
-                    ),
-                    level="DEBUG",
-                )
-                self._log(
-                    f"No-trade check | |ema7-ema21|={abs(diff):.6f} vs eps={eps:.6f} | atr% saudável="
-                    f"{self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX}",
-                    level="DEBUG",
-                )
-                # LONG conds
-                L1 = last.ema_short > last.ema_long
-                L2 = bool(grad_pos_ok)
-                L3 = self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX
-                L4 = last.valor_fechamento > (last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr)
-                L5 = last.volume > last.vol_ma
-                self._log(
-                    f"Trigger LONG | EMA7>EMA21={L1} grad_ok={L2} atr_ok={L3} breakout={L4} vol_ok={L5}",
-                    level="DEBUG",
-                )
-                # SHORT conds
-                S1 = last.ema_short < last.ema_long
-                S2 = bool(grad_neg_ok)
-                S3 = L3
-                S4 = last.valor_fechamento < (last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr)
-                S5 = L5
-                self._log(
-                    f"Trigger SHORT | EMA7<EMA21={S1} grad_ok={S2} atr_ok={S3} breakout={S4} vol_ok={S5}",
-                    level="DEBUG",
-                )
-            except Exception:
-                pass
-            # evita qualquer tentativa de ordem se LIVE_TRADING=0
             live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
             if not live:
                 self._log("LIVE_TRADING=0: avaliando sinais sem enviar ordens.", level="INFO")
                 self._safe_log("paper_mode", df_for_log=df, tipo="info")
                 self._last_pos_side = None
+                self._entry_pending_signal = None
                 return
-            # RSI força (ignora no-trade zone se disparar)
-            rsi_val = float('nan')
-            try:
-                hourly_src = rsi_df_hourly
-                if isinstance(hourly_src, pd.DataFrame) and not hourly_src.empty and ("rsi" in hourly_src.columns):
-                    df_rsi = hourly_src
-                    if "criptomoeda" in df_rsi.columns:
-                        df_rsi = df_rsi.loc[df_rsi["criptomoeda"] == self._df_symbol_hint]
-                    if not df_rsi.empty:
-                        rsi_val = float(df_rsi["rsi"].dropna().iloc[-1])
-                if math.isnan(rsi_val):
-                    if hasattr(last, "rsi") and pd.notna(last.rsi):
-                        rsi_val = float(last.rsi)
-                    elif "rsi" in df.columns:
-                        rsi_val = float(df["rsi"].dropna().iloc[-1])
-            except Exception:
-                rsi_val = float('nan')
-            force_long = False
-            force_short = False
-            if not math.isnan(rsi_val):
-                if rsi_val < 20.0:
-                    force_long = True
-                    self._log(f"RSI Force LONG: RSI14={rsi_val:.2f} < 20", level="INFO")
-                elif rsi_val > 80.0:
-                    force_short = True
-                    self._log(f"RSI Force SHORT: RSI14={rsi_val:.2f} > 80", level="INFO")
 
-            # no-trade zone (desconsiderada se RSI exigir entrada)
-            eps_nt = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
-            diff_nt = abs(float(last.ema_short - last.ema_long))
-            atr_ok = (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX)
-            if not (force_long or force_short):
-                if (diff_nt < eps_nt) or (not atr_ok):
-                    reasons_nt = []
-                    if diff_nt < eps_nt:
-                        reasons_nt.append(f"|ema7-ema21|({diff_nt:.6f})<eps({eps_nt:.6f})")
-                    if last.atr_pct < self.cfg.ATR_PCT_MIN:
-                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN}")
-                    if last.atr_pct > self.cfg.ATR_PCT_MAX:
-                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
-                    self._log("No-Trade Zone ativa: " + "; ".join(reasons_nt), level="INFO")
-                    self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
+            ema7 = float(last.ema_short)
+            ema21 = float(last.ema_long)
+            atr = float(last.atr)
+            atr_pct = float(last.atr_pct)
+            price = float(last.valor_fechamento)
+            spread = ema7 - ema21
+            self._update_hysteresis(spread, atr)
+
+            vol_flag, vol_current, vol_median, vol_mad = self._volume_robust_flag(df)
+            m_persist = max(1, int(self.cfg.ENTRY_GRAD_PERSIST or 1))
+            persist_long, count_long = self._grad_persistence(df, "LONG", m_persist)
+            persist_short, count_short = self._grad_persistence(df, "SHORT", m_persist)
+            k_val = self._adaptive_k(atr_pct)
+            rsi_val = self._current_rsi(df, rsi_df_hourly)
+
+            metrics = {
+                "ema7": ema7,
+                "ema21": ema21,
+                "spread": spread,
+                "atr": atr,
+                "atr_pct": atr_pct,
+                "price": price,
+                "vol_flag": vol_flag,
+                "grad_persist_flags": {"LONG": persist_long, "SHORT": persist_short},
+                "grad_counts": {"LONG": count_long, "SHORT": count_short},
+                "k_values": {"LONG": k_val, "SHORT": k_val},
+            }
+
+            decisions = [
+                self._assess_entry(metrics, "LONG", last_idx, rsi_val, just_released_cooldown),
+                self._assess_entry(metrics, "SHORT", last_idx, rsi_val, just_released_cooldown),
+            ]
+
+            approved = [d for d in decisions if d["approved"]]
+            best = max(approved, key=lambda d: d["score"]) if approved else None
+
+            if best:
+                pending = self._entry_pending_signal
+                wait_required = max(0, int(self.cfg.ENTRY_DEBOUNCE_BARS or 0))
+                if wait_required == 0:
+                    order_side = "buy" if best["side"] == "LONG" else "sell"
+                    self._entry_pending_signal = None
+                    self._abrir_posicao_com_stop(order_side, usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                    pos_after = self._posicao_aberta()
+                    self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
+                    return
+                if pending and pending.get("side") == best["side"]:
+                    pending["info"] = best
+                    waited = last_idx - pending["start_idx"]
+                    if waited >= wait_required:
+                        order_side = "buy" if best["side"] == "LONG" else "sell"
+                        self._entry_pending_signal = None
+                        self._abrir_posicao_com_stop(order_side, usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        pos_after = self._posicao_aberta()
+                        self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
+                        return
+                    else:
+                        remaining = max(0, wait_required - waited)
+                        self._log(
+                            f"Entrada pendente ({best['side']}) aguardando debounce: faltam {remaining} barra(s)",
+                            level="INFO",
+                        )
+                        self._last_pos_side = None
+                        return
+                else:
+                    self._entry_pending_signal = {"side": best["side"], "start_idx": last_idx, "info": best}
+                    self._log(
+                        f"Entrada pendente ({best['side']}) iniciada (score={best['score']})",
+                        level="INFO",
+                    )
                     self._last_pos_side = None
                     return
 
-            # intenção pós-cooldown: exigir confirmação adicional
-            if self._pending_after_cd is not None:
-                intent = self._pending_after_cd
-                if intent.get("side") == "LONG":
-                    base_long = (
-                        (last.ema_short > last.ema_long) and grad_pos_ok and
-                        (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
-                        (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
-                        (last.volume > last.vol_ma)
-                    )
-                    can_long = base_long or force_long
-
-                    if can_long:
-                        self._log("Confirmação pós-cooldown LONG valida.", level="INFO")
-                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
-                        pos_after = self._posicao_aberta()
-                        self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
-                        self._pending_after_cd = None
-                        return
-                else:
-                    base_short = (
-                        (last.ema_short < last.ema_long) and grad_neg_ok and
-                        (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
-                        (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
-                        (last.volume > last.vol_ma)
-                    )
-                    can_short = base_short or force_short
-                    if can_short:
-                        self._log("Confirmação pós-cooldown SHORT valida.", level="INFO")
-                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
-                        pos_after = self._posicao_aberta()
-                        self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
-                        self._pending_after_cd = None
-                        return
-                self._log("Entrada descartada: confirmação pós-cooldown perdida.", level="INFO")
-                self._pending_after_cd = None
-                self._last_pos_side = None
-                return
-
-            # Entradas normais
-            base_long = (
-                (last.ema_short > last.ema_long) and grad_pos_ok and
-                (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
-                (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
-                (last.volume > last.vol_ma)
-            )
-            base_short = (
-                (last.ema_short < last.ema_long) and grad_neg_ok and
-                (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
-                (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
-                (last.volume > last.vol_ma)
-            )
-            can_long = base_long or force_long
-            can_short = base_short or force_short
-            if can_long:
-                self._log("Entrada LONG autorizada: critérios atendidos.", level="INFO")
-                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
-                pos_after = self._posicao_aberta()
-                self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
-                return
-            if can_short:
-                self._log("Entrada SHORT autorizada: critérios atendidos.", level="INFO")
-                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
-                pos_after = self._posicao_aberta()
-                self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
-                return
-            # motivos exatos para negar entrada
-            try:
-                # LONG
-                reasons_long = []
-                thr_long = float(last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr)
-                if not (last.ema_short > last.ema_long):
-                    reasons_long.append("EMA7<=EMA21")
-                if not grad_pos_ok:
-                    g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
-                    reasons_long.append(f"gradiente não >0 por {self.cfg.GRAD_CONSISTENCY} velas (grad%={g_last:.4f})")
-                if not (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX):
-                    reasons_long.append(f"ATR% fora [{self.cfg.ATR_PCT_MIN},{self.cfg.ATR_PCT_MAX}] (ATR%={last.atr_pct:.3f})")
-                if not (last.valor_fechamento > thr_long):
-                    reasons_long.append(f"close<=EMA7+{self.cfg.BREAKOUT_K_ATR}*ATR (close={float(last.valor_fechamento):.6f}, thr={thr_long:.6f})")
-                if not (last.volume > last.vol_ma):
-                    reasons_long.append(f"volume<=média (vol={float(last.volume):.2f}, ma={float(last.vol_ma):.2f})")
-                self._log("LONG rejeitado: " + ("; ".join(reasons_long) if reasons_long else "sem motivos"), level="DEBUG")
-
-                # SHORT
-                reasons_short = []
-                thr_short = float(last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr)
-                if not (last.ema_short < last.ema_long):
-                    reasons_short.append("EMA7>=EMA21")
-                if not grad_neg_ok:
-                    g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
-                    reasons_short.append(f"gradiente não <0 por {self.cfg.GRAD_CONSISTENCY} velas (grad%={g_last:.4f})")
-                if not (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX):
-                    reasons_short.append(f"ATR% fora [{self.cfg.ATR_PCT_MIN},{self.cfg.ATR_PCT_MAX}] (ATR%={last.atr_pct:.3f})")
-                if not (last.valor_fechamento < thr_short):
-                    reasons_short.append(f"close>=EMA7-{self.cfg.BREAKOUT_K_ATR}*ATR (close={float(last.valor_fechamento):.6f}, thr={thr_short:.6f})")
-                if not (last.volume > last.vol_ma):
-                    reasons_short.append(f"volume<=média (vol={float(last.volume):.2f}, ma={float(last.vol_ma):.2f})")
-                self._log("SHORT rejeitado: " + ("; ".join(reasons_short) if reasons_short else "sem motivos"), level="DEBUG")
-            except Exception:
-                pass
-            self._log("Sem posição: critérios de entrada não atendidos.", level="DEBUG")
-            self._safe_log("decisao", df_for_log=df, tipo="info")
+            # Nenhum candidato aprovado: limpa pendente e mantém bloqueio
+            if self._entry_pending_signal is not None:
+                self._log(
+                    f"Entrada pendente cancelada ({self._entry_pending_signal['side']}) por perda de contexto.",
+                    level="INFO",
+                )
+                self._entry_last_block_idx[self._entry_pending_signal["side"]] = last_idx
+                self._entry_pending_signal = None
             self._last_pos_side = None
             return
 
