@@ -3109,72 +3109,134 @@ def _approx(a, b, tol=0.001):
 
 
 
+
 def ensure_tpsl_for_position(dex, symbol, *, vault):
     """
-    Garante TP (takeProfit gatilho a mercado) e SL (stop gatilho a mercado) reduceOnly
-    para a posição atual da subconta. Se já existir, não recria.
+    Garante TP (+10%) e SL (-5%) *sobre o montante* considerando alavancagem (delta preço = alvo/L).
+    Regras:
+      - Se o preço atual já tiver cruzado TP ou SL: fechar a posição a mercado (reduceOnly) imediatamente.
+      - Se existir TP/SL abertos com gatilho diferente do racional: cancelar e recriar com os alvos corretos.
+      - Se estiver faltando TP ou SL: criar.
     """
     qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
     if qty <= 0 or not entry or not side:
         return {"created_stop": None, "created_take": None, "qty": qty, "lev": lev, "entry": entry}
 
+    # Calcula alvos com alavancagem
     targets = compute_tp_sl_leveraged(entry, side, lev, qty)
-    tp, sl = targets["tp"], targets["sl"]
-    exit_side = "sell" if (side.lower() in ("long", "buy")) else "buy"
+    tp, sl = float(targets["tp"]), float(targets["sl"])
+    exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
 
+    # 1) Fechamento imediato se já cruzou TP/SL
+    try:
+        ticker = dex.fetch_ticker(symbol) or {}
+        last = float(ticker.get("last") or ticker.get("close") or 0.0)
+    except Exception:
+        last = 0.0
+    crossed = False
+    if last:
+        s = str(side).lower()
+        if s in ("long", "buy"):
+            if last >= tp or last <= sl:
+                crossed = True
+        else:
+            if last <= tp or last >= sl:
+                crossed = True
+    if crossed:
+        try:
+            dex.create_order(symbol, "market", exit_side, qty, None,
+                             {"vaultAddress": vault, "reduceOnly": True})
+            return {"closed_on_cross": True, "qty": qty, "lev": lev, "entry": entry, "tp": tp, "sl": sl}
+        except Exception:
+            pass  # segue para tentar normalizar TP/SL
+
+    # 2) Verifica ordens abertas e cancela/recria se divergentes
     try:
         open_ords = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
     except Exception:
         open_ords = []
 
-    has_stop = False
-    has_take = False
+    want_stop = True
+    want_take = True
+    to_cancel = []
+    tol_pct = 0.001  # 0,1% do preço como tolerância
+
+    def _get_trig(o):
+        info = o.get("info") or {}
+        trig = o.get("triggerPrice")
+        if trig is None:
+            trig = info.get("triggerPx") if isinstance(info, dict) else None
+        if trig is None:
+            # algumas APIs usam stopLossPrice/takeProfitPrice
+            trig = info.get("stopLossPrice") or info.get("takeProfitPrice")
+        return float(trig) if trig is not None else None
+
     for o in open_ords:
         try:
-            if (o.get("side") or "").lower() != exit_side:
+            if (str(o.get("side") or "").lower() != exit_side):
                 continue
             info = o.get("info") or {}
             reduce_only = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
             if not reduce_only:
                 continue
-            trig = o.get("triggerPrice") or (info.get("triggerPx") if isinstance(info, dict) else None)
-            sl_key = (info.get("stopLossPrice") if isinstance(info, dict) else None)
-            tp_key = (info.get("takeProfitPrice") if isinstance(info, dict) else None)
-            otype = (o.get("type") or info.get("type") or "").lower()
-            if (otype in ("stop", "") and (trig is not None or sl_key is not None)) and _approx(trig or sl_key, sl):
-                has_stop = True
-            if (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)) and _approx(trig or tp_key, tp):
-                has_take = True
+            otype = (o.get("type") or "").lower()
+            trig = _get_trig(o)
+            if trig is None:
+                continue
+
+            # classifica como stop ou take por posição do gatilho vs entry
+            if trig < entry and str(side).lower() in ("long","buy") or trig > entry and str(side).lower() in ("short","sell"):
+                # deve ser STOP
+                # confere tolerância
+                ref = max(abs(sl), abs(trig), 1e-12)
+                if abs(trig - sl) <= max(ref*tol_pct, 1e-9):
+                    want_stop = False
+                else:
+                    to_cancel.append(o.get("id") or (o.get("info") or {}).get("oid"))
+            else:
+                # deve ser TAKE
+                ref = max(abs(tp), abs(trig), 1e-12)
+                if abs(trig - tp) <= max(ref*tol_pct, 1e-9):
+                    want_take = False
+                else:
+                    to_cancel.append(o.get("id") or (o.get("info") or {}).get("oid"))
         except Exception:
             continue
+
+    # Cancela divergentes
+    for oid in [x for x in to_cancel if x]:
+        try:
+            dex.cancel_order(oid, symbol, {"vaultAddress": vault})
+        except Exception:
+            pass
 
     params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
     created_stop = created_take = None
 
-    if not has_stop and qty > 0:
+    # 3) Cria faltantes
+    if want_stop and qty > 0:
         stop_params = dict(params_base)
         stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
         try:
             created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
         except Exception:
-            stop_params_fb = dict(params_base)
-            stop_params_fb.update({"triggerPrice": sl})
-            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
+            try:
+                created_stop = dex.create_order(symbol, "stop", exit_side, qty, None, {"vaultAddress": vault, "triggerPrice": sl, "reduceOnly": True})
+            except Exception:
+                created_stop = None
 
-    if not has_take and qty > 0:
+    if want_take and qty > 0:
         take_params = dict(params_base)
         take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
         try:
             created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params)
         except Exception:
-            take_params_fb = dict(params_base)
-            take_params_fb.update({"triggerPrice": tp})
-            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
+            try:
+                created_take = dex.create_order(symbol, "takeProfit", exit_side, qty, None, {"vaultAddress": vault, "triggerPrice": tp, "reduceOnly": True})
+            except Exception:
+                created_take = None
 
-    return {"tp": tp, "sl": sl, "created_stop": created_stop, "created_take": created_take,
-            "qty": qty, "lev": lev, "entry": entry, "side": side}
-
-
+    return {"created_stop": created_stop, "created_take": created_take, "qty": qty, "lev": lev, "entry": entry, "tp": tp, "sl": sl}
 
 def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
     """
