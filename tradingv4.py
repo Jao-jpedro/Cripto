@@ -1,3 +1,46 @@
+def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool: ...
+def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool: ...
+
+def close_if_unrealized_pnl_breaches(dex, symbol, *, vault, threshold: float = -0.05) -> bool:
+    """
+    Fecha imediatamente se unrealizedPnl <= threshold (ex.: threshold=-0.05 para -5 cents).
+    Se unrealizedPnl não estiver disponível, não faz nada (fallbacks separados cuidam do resto).
+    """
+    try:
+        pos = _get_position_for_vault(dex, symbol, vault)
+    except Exception:
+        pos = None
+    if not pos:
+        return False
+    # Tenta extrair unrealizedPnl em vários formatos
+    pnl = None
+    try:
+        pnl = pos.get("unrealizedPnl")
+        if pnl is None:
+            pnl = (pos.get("info", {}) or {}).get("unrealizedPnl")
+        if pnl is None:
+            pnl = ((pos.get("info", {}) or {}).get("position", {}) or {}).get("unrealizedPnl")
+    except Exception:
+        pnl = None
+    if pnl is None:
+        return False
+    try:
+        pnl_f = float(pnl)
+    except Exception:
+        return False
+
+    if pnl_f <= float(threshold):
+        # Fecha a posição inteira no lado de saída
+        try:
+            qty, _, _, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+            if not side or qty <= 0: 
+                return False
+            exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
+            dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True, "vaultAddress": vault})
+            return True
+        except Exception:
+            return False
+    return False
 
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
@@ -9,6 +52,35 @@ def _log_global(section: str, message: str, level: str = "INFO") -> None:
     print(f"[{level}] [{section}] {message}", flush=True)
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    import requests  # type: ignore
+    import pandas as pd  # type: ignore
+    import numpy as np  # type: ignore
+    from requests.adapters import HTTPAdapter  # type: ignore
+    from urllib3.util.retry import Retry  # type: ignore
+else:
+    try:
+        import requests  # type: ignore
+    except Exception:
+        requests = None  # type: ignore
+    try:
+        import pandas as pd  # type: ignore
+    except Exception:
+        pd = None  # type: ignore
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        np = None  # type: ignore
+    try:
+        from requests.adapters import HTTPAdapter  # type: ignore
+        from urllib3.util.retry import Retry  # type: ignore
+    except Exception:
+        HTTPAdapter = object  # type: ignore
+        class Retry:  # type: ignore
+            def __init__(self, *args, **kwargs): pass
+
 import warnings as _warnings
 # ===== Hyperliquid accounts / vault / signer =====
 HL_MAIN_ACCOUNT = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
@@ -22,9 +94,6 @@ _warnings.filterwarnings(
     module=r"urllib3.*",
 )
 
-import requests
-import pandas as pd
-
 def compute_tp_sl(entry_px, side):
     """Calcula TP=10% e SL=5% por preço (fixos).""" 
     TAKE_PROFIT_PCT = 0.10
@@ -37,7 +106,6 @@ def compute_tp_sl(entry_px, side):
         sl = entry_px * (1 + STOP_LOSS_PCT)
     return {"tp": float(tp), "sl": float(sl)}
 
-import numpy as np
 import math
 from datetime import datetime, timedelta, timezone
 import os
@@ -91,8 +159,7 @@ def _binance_bases():
 def _binance_session():
     s = requests.Session()
     try:
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
+
         retry = Retry(
             total=int(os.getenv("BINANCE_RETRIES", "3")),
             backoff_factor=float(os.getenv("BINANCE_BACKOFF", "0.5")),
@@ -390,6 +457,23 @@ DEX (Hyperliquid via ccxt)
 import ccxt  # type: ignore
 
 
+def guard_close_all(dex, symbol, current_px: float, *, vault) -> bool:
+    try:
+        if close_if_unrealized_pnl_breaches(dex, symbol, vault=vault, threshold=-0.05):
+            return True
+    except Exception:
+        pass
+    try:
+        if close_if_breached_leveraged(dex, symbol, current_px, vault=vault):
+            return True
+    except Exception:
+        pass
+    try:
+        if close_if_abs_loss_exceeds_5c(dex, symbol, current_px, vault=vault):
+            return True
+    except Exception:
+        pass
+    return False
 def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: float):
     """
     Calcula TP=+10% e SL=-5% de retorno, convertendo para PREÇO pela alavancagem.
@@ -405,121 +489,20 @@ def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: fl
         p_tp = entry * (1.0 + 0.10 / L)
         # alvo -5% => delta_preço = 0.05 / L
         p_sl = entry * (1.0 - 0.05 / L)
-        # CAP absoluto para perda de $0.05: |entry - SL| * qty <= 0.05  =>  SL >= entry - 0.05/qty
+        # CAP $0.05
         p_sl_cap = entry - (0.05 / q)
         p_sl_final = max(p_sl, p_sl_cap)
         return {"tp": float(p_tp), "sl": float(p_sl_final)}
-# === Early shims to prevent NameError during runtime calls ===
-def _approx(a, b, tol=0.001):
-    try:
-        a, b = float(a), float(b)
-        return abs(a - b) <= max(1e-12, tol * max(abs(a), abs(b), 1.0))
-    except Exception:
-        return False
+    else:
+        # SHORT
+        p_tp = entry / (1.0 + 0.10 / L)
+        p_sl = entry / (1.0 - 0.05 / L)
+        p_sl_cap = entry + (0.05 / q)
+        p_sl_final = min(p_sl, p_sl_cap)
+        return {"tp": float(p_tp), "sl": float(p_sl_final)}
 
-def _get_pos_size_and_leverage(dex, symbol, *, vault):
-    try:
-        p = _get_position_for_vault(dex, symbol, vault)
-    except Exception:
-        p = None
-    if not p:
-        return 0.0, 1.0, None, None
-    qty = float(p.get("contracts") or 0.0)
-    entry = float(p.get("entryPrice") or 0.0) or None
-    side = p.get("side") or None
-    lev = p.get("leverage")
-    if isinstance(lev, dict):
-        lev = lev.get("value")
-    if lev is None:
-        info = p.get("info") or {}
-        lev = ((info.get("position") or {}).get("leverage") or {}).get("value")
-    if lev is None:
-        lev = 1.0
-    return float(qty), float(lev), entry, side
 
-def ensure_tpsl_for_position(dex, symbol, *, vault):
-    """
-    Early definition: garante TP/SL 10%/5% (retorno alavancado).
-    Cancela apenas ordens reduceOnly divergentes; mantém as que já batem nos gatilhos.
-    """
-    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
-    if qty <= 0 or not entry or not side:
-        return {"created_stop": None, "created_take": None, "qty": qty, "lev": lev, "entry": entry}
-    targets = compute_tp_sl_leveraged(entry, side, lev, qty)
-    tp, sl = targets["tp"], targets["sl"]
-    exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
 
-    try:
-        open_ords = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
-    except Exception:
-        open_ords = []
-
-    has_stop = False
-    has_take = False
-    to_cancel = []
-    for o in open_ords:
-        try:
-            if (str(o.get("side") or "").lower()) != exit_side:
-                continue
-            info = o.get("info") or {}
-            if not (bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))):
-                continue
-            trig = o.get("triggerPrice") or (info.get("triggerPx") if isinstance(info, dict) else None)
-            sl_key = (info.get("stopLossPrice") if isinstance(info, dict) else None)
-            tp_key = (info.get("takeProfitPrice") if isinstance(info, dict) else None)
-            otype = (o.get("type") or info.get("type") or "").lower()
-            oqty = None
-            try:
-                oqty = float(o.get("amount") or o.get("remaining") or o.get("info", {}).get("sz") or 0.0)
-            except Exception:
-                oqty = None
-            qty_match = (oqty is None) or _approx(oqty, qty, tol=0.005)
-
-            if (otype in ("stop", "") and (trig is not None or sl_key is not None)) and qty_match and (_approx(trig or sl_key, sl) or _approx(sl_key or trig, sl)):
-                has_stop = True
-                continue
-            if (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)) and qty_match and (_approx(trig or tp_key, tp) or _approx(tp_key or trig, tp)):
-                has_take = True
-                continue
-
-            oid = o.get("id") or (o.get("info", {}).get("oid") if isinstance(o.get("info"), dict) else None)
-            if oid:
-                to_cancel.append(oid)
-        except Exception:
-            continue
-
-    for cid in to_cancel:
-        try:
-            dex.cancel_order(cid, symbol)
-        except Exception:
-            pass
-
-    params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
-    created_stop = created_take = None
-
-    if not has_stop and qty > 0:
-        stop_params = dict(params_base)
-        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
-        try:
-            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
-        except Exception:
-            stop_params_fb = dict(params_base)
-            stop_params_fb.update({"triggerPrice": sl})
-            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
-
-    if not has_take and qty > 0:
-        take_params = dict(params_base)
-        take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
-        try:
-            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params)
-        except Exception:
-            take_params_fb = dict(params_base)
-            take_params_fb.update({"triggerPrice": tp})
-            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
-
-    return {"tp": tp, "sl": sl, "created_stop": created_stop, "created_take": created_take,
-            "qty": qty, "lev": lev, "entry": entry, "side": side}
-# === End early shims ===
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
@@ -586,7 +569,7 @@ if dex:
 # 🔔 LOGGER (CSV + XLSX em DBFS com workaround /tmp → dbutils.fs.cp)
 # =========================
 import os
-import pandas as pd
+
 from datetime import datetime, timezone
 now = datetime.now(timezone.utc)
 try:
@@ -814,8 +797,6 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime, timezone
 now = datetime.now(timezone.utc)
-import numpy as np
-import pandas as pd
 
 @dataclass
 class GradientConfig:
@@ -865,14 +846,11 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.05
-    take_pct: float = 0.10
+    stop_pct: float = 0.10
+    take_pct: float = 0.30
     usd_env: Optional[str] = None
 
 
-    def __post_init__(self):
-        self.stop_pct = 0.05
-        self.take_pct = 0.10
 ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("BTC-USD", "BTCUSDT", "BTC/USDC:USDC", 40, usd_env="USD_PER_TRADE_BTC"),
     AssetSetup("SOL-USD", "SOLUSDT", "SOL/USDC:USDC", 20, usd_env="USD_PER_TRADE_SOL"),
@@ -1871,7 +1849,8 @@ class EMAGradientStrategy:
                 )
             px_ref = float(avg_px) if avg_px else float(price)
             tpsl = _place_tp_sl_orders_idempotent(self.dex, self.symbol, side, px_ref, vault=HL_SUBACCOUNT_VAULT)
-            self._log(f"TP/SL criados | TP={tpsl['tp']:.6f} SL={tpsl['sl']:.6f}", level="DEBUG")
+            self._log(f"TP/SL criados | TP={tpsl['tp']:.6f} SL={tpsl['sl']:.6f}", level="DEBUG");
+            guard_close_all(self.dex, self.symbol, float(self._preco_atual()), vault=HL_SUBACCOUNT_VAULT)
         except Exception as e:
             self._log(f"Falha ao criar TP/SL: {type(e).__name__}: {e}", level="WARN")
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
@@ -2202,17 +2181,6 @@ class EMAGradientStrategy:
         last = df.iloc[-1]
         last_idx = len(df) - 1
         self._last_seen_bar_idx = last_idx
-
-
-        # Proteção imediata: fecha posição se já bateu TP/SL alavancado ou perda absoluta > $0.05
-        try:
-            px_now_guard = self._preco_atual()
-            try:
-                guard_close_all(self.dex, self.symbol, float(px_now_guard), vault=HL_SUBACCOUNT_VAULT)
-            except Exception:
-                pass
-        except Exception:
-            pass
 
         # helpers de consistência do gradiente
         g = df["ema_short_grad_pct"].tail(self.cfg.GRAD_CONSISTENCY)
@@ -3224,63 +3192,6 @@ def _approx(a, b, tol=0.001):
         return False
 
 
-
-def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
-    """
-    Fecha a posição imediatamente se a PERDA NÃO REALIZADA absoluta (USD) for > $0.05.
-    Considera: loss = |entry - current_px| * qty, ajustado pelo lado.
-    """
-    qty, _, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
-    if qty <= 0 or not entry or not side or current_px in (None, 0):
-        return False
-    try:
-        s = (side or "").lower()
-        if s in ("long", "buy"):
-            loss = max(0.0, (float(entry) - float(current_px)) * float(qty))
-        else:
-            loss = max(0.0, (float(current_px) - float(entry)) * float(qty))
-    except Exception:
-        return False
-    if loss > 0.05:
-        try:
-            exit_side = "sell" if (s in ("long", "buy")) else "buy"
-            dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True, "vaultAddress": vault})
-            return True
-        except Exception:
-            return False
-    return False
-
-def _place_tp_sl_orders_idempotent(dex, symbol, side: str, entry_px: float, *, vault):
-    """
-    Cria (ou garante) TP/SL reduceOnly para a POSIÇÃO ATUAL.
-    Idempotente: se já existem com os gatilhos corretos, não duplica.
-    Retorna dict com {"tp","sl","created_stop","created_take","qty","lev","entry","side"}.
-    """
-    try:
-        res = ensure_tpsl_for_position(dex, symbol, vault=vault)
-        return res if isinstance(res, dict) else {"tp": None, "sl": None}
-    except Exception:
-        return {"tp": None, "sl": None}
-
-def guard_close_all(dex, symbol, current_px: float, *, vault) -> bool:
-    """
-    Executa as duas proteções:
-    (a) Fechamento por TP/SL de +10% / -5% (retorno alavancado)
-    (b) Fechamento por perda absoluta > $0.05
-    Retorna True se fechou, False caso contrário.
-    """
-    closed = False
-    try:
-        if guard_close_all(dex, symbol, current_px, vault=vault):
-            closed = True
-    except Exception:
-        pass
-    try:
-        if close_if_abs_loss_exceeds_5c(dex, symbol, current_px, vault=vault):
-            closed = True
-    except Exception:
-        pass
-    return closed
 
 def ensure_tpsl_for_position(dex, symbol, *, vault):
     """
