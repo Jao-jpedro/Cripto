@@ -11,6 +11,7 @@ import pandas as pd
 import ccxt  # type: ignore
 
 MAIN_ACCOUNT_ADDRESS = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
+MAX_CANDLES = 50  # enforce fetch_ohlcv limit per symbol
 
 # -------------------------
 # Helpers (env & logging)
@@ -34,6 +35,10 @@ def _env_int(name: str, default: int) -> int:
         return int(float(os.getenv(name, str(default))))
     except Exception:
         return default
+
+LOG_SIGNALS = (os.getenv('LOG_SIGNALS', '1') != '0')
+ENTRY_RULE = os.getenv('ENTRY_RULE', 'ema_and_vol')  # ema_and_vol | ema_only | always
+MIN_TRADE_INTERVAL_SEC = _env_int('MIN_TRADE_INTERVAL_SEC', 60)
 
 def norm_side(side: str) -> str:
     s = (side or "").lower()
@@ -63,7 +68,7 @@ def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np
 class Config:
     SYMBOLS: List[str] = None
     TIMEFRAME: str = "15m"
-    HISTORY_BARS: int = 200
+    HISTORY_BARS: int = 50
     EMA_SHORT: int = 7
     EMA_LONG: int = 21
     ATR_PERIOD: int = 14
@@ -175,10 +180,12 @@ class EMAGradientStrategy:
         self.symbol = symbol
         self.cfg = cfg
         self.trailer = TrailingManager(dex, cfg.LEVERAGE, cfg.DEBUG)
+        self._last_entry_ts: float = 0.0
 
     def _fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
-        log("INFO", symbol, f"Fetching OHLCV tf={timeframe} limit={limit}")
-        data = self.dex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        lim = min(int(limit), int(MAX_CANDLES))
+        log("INFO", symbol, f"Fetching OHLCV tf={timeframe} limit={lim}")
+        data = self.dex.fetch_ohlcv(symbol, timeframe=timeframe, limit=lim)
         df = pd.DataFrame(data, columns=["ts","open","high","low","close","volume"])
         df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
         return df
@@ -211,37 +218,102 @@ class EMAGradientStrategy:
 
     def step(self):
         # Data + indicators
-        df = self._fetch_ohlcv(self.symbol, self.cfg.TIMEFRAME, self.cfg.HISTORY_BARS)
+        df = self._fetch_ohlcv(self.symbol, self.cfg.TIMEFRAME, self.cfg.HISTORY_BARS)  # clamped to MAX_CANDLES
         df = self._indicators(df)
         row = df.iloc[-1]
         px = float(row["close"])
 
         # Signals
-        ema_up = row["ema_short"] > row["ema_long"]
-        ema_down = row["ema_short"] < row["ema_long"]
-        vol_ok = row["volume"] >= (row["vol_ma"] or 0.0)
+        ema_up = row['ema_short'] > row['ema_long']
+        ema_down = row['ema_short'] < row['ema_long']
+        vol_ok = row['volume'] >= (row['vol_ma'] or 0.0)
+        if LOG_SIGNALS:
+            log('DEBUG', self.symbol, (
+                f"px={px:.6f} ema_s={row['ema_short']:.6f} ema_l={row['ema_long']:.6f} "
+                f"ema_up={ema_up} ema_down={ema_down} vol={row['volume']} vol_ma={row['vol_ma']} vol_ok={vol_ok}"
+            ))
 
         pos = self._get_position()
         if pos is None:
-            # Entry allowed
-            usd_risk = _env_float("USD_RISK_PER_TRADE", 10.0)
+            now = time.time()
+            if now - self._last_entry_ts < MIN_TRADE_INTERVAL_SEC:
+                if self.cfg.DEBUG:
+                    log('DEBUG', self.symbol, f'Skipping entry due to MIN_TRADE_INTERVAL_SEC={MIN_TRADE_INTERVAL_SEC}')
+                return
+            usd_risk = _env_float('USD_RISK_PER_TRADE', 10.0)
             qty = self._qty_from_usd(usd_risk * self.cfg.LEVERAGE, px)
-            if ema_up and vol_ok:
+            should_long = should_short = False
+            if ENTRY_RULE == 'always':
+                should_long = bool(ema_up)
+                should_short = (not ema_up and ema_down)
+            elif ENTRY_RULE == 'ema_only':
+                should_long = ema_up
+                should_short = ema_down
+            else:
+                should_long = ema_up and vol_ok
+                should_short = ema_down and vol_ok
+            if should_long and qty > 0:
                 try:
-                    if hasattr(self.dex, "set_leverage"):
-                        self.dex.set_leverage(int(self.cfg.LEVERAGE), {"symbol": self.symbol})
+                    if hasattr(self.dex, 'set_leverage'):
+                        self.dex.set_leverage(int(self.cfg.LEVERAGE), {'symbol': self.symbol})
                 except Exception as e:
-                    log("WARN", self.symbol, f"set_leverage failed: {e}")
-                self.dex.create_order(self.symbol, "market", "buy", qty)
-                log("INFO", self.symbol, f"Entered LONG qty={qty:.6f} ~{px:.6f}")
-            elif ema_down and vol_ok:
+                    log('WARN', self.symbol, f'set_leverage failed: {e}')
+                self.dex.create_order(self.symbol, 'market', 'buy', qty)
+                self._last_entry_ts = now
+                log('INFO', self.symbol, f'Entered LONG qty={qty:.6f} ~{px:.6f}')
+                return
+            if should_short and qty > 0:
                 try:
-                    if hasattr(self.dex, "set_leverage"):
-                        self.dex.set_leverage(int(self.cfg.LEVERAGE), {"symbol": self.symbol})
+                    if hasattr(self.dex, 'set_leverage'):
+                        self.dex.set_leverage(int(self.cfg.LEVERAGE), {'symbol': self.symbol})
                 except Exception as e:
-                    log("WARN", self.symbol, f"set_leverage failed: {e}")
-                self.dex.create_order(self.symbol, "market", "sell", qty)
-                log("INFO", self.symbol, f"Entered SHORT qty={qty:.6f} ~{px:.6f}")
+                    log('WARN', self.symbol, f'set_leverage failed: {e}')
+                self.dex.create_order(self.symbol, 'market', 'sell', qty)
+                self._last_entry_ts = now
+                log('INFO', self.symbol, f'Entered SHORT qty={qty:.6f} ~{px:.6f}')
+                return
+            if self.cfg.DEBUG:
+                log('DEBUG', self.symbol, f'No entry signal (ENTRY_RULE={ENTRY_RULE}).')
+            return
+
+        # Position open → manage exits
+            log('DEBUG', self.symbol, (
+                f"px={px:.6f} ema_s={row['ema_short']:.6f} ema_l={row['ema_long']:.6f} "
+                f"ema_up={ema_up} ema_down={ema_down} vol={row['volume']} vol_ma={row['vol_ma']} vol_ok={vol_ok}"
+            ))
+
+        pos = self._get_position()
+        if pos is None:
+            # Throttle entries
+            now = time.time()
+            if now - self._last_entry_ts < MIN_TRADE_INTERVAL_SEC:
+                return
+            usd_risk = _env_float('USD_RISK_PER_TRADE', 10.0)
+            qty = self._qty_from_usd(usd_risk * self.cfg.LEVERAGE, px)
+
+            def _enter(side: str):
+                try:
+                    if hasattr(self.dex, 'set_leverage'):
+                        self.dex.set_leverage(int(self.cfg.LEVERAGE), {'symbol': self.symbol})
+                except Exception as e:
+                    log('WARN', self.symbol, f'set_leverage failed: {e}')
+                self.dex.create_order(self.symbol, 'market', side, qty)
+                log('INFO', self.symbol, f'Entered {side.upper()} qty={qty:.6f} ~{px:.6f}')
+                self._last_entry_ts = now
+
+            if ENTRY_RULE == 'always':
+                _enter('buy' if ema_up else 'sell')
+                return
+            elif ENTRY_RULE == 'ema_only':
+                if ema_up:
+                    _enter('buy'); return
+                if ema_down:
+                    _enter('sell'); return
+            else:  # ema_and_vol
+                if ema_up and vol_ok:
+                    _enter('buy'); return
+                if ema_down and vol_ok:
+                    _enter('sell'); return
             return
 
         info = pos.get("info") or {}
