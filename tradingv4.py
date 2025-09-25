@@ -10,11 +10,10 @@ def _log_global(section: str, message: str, level: str = "INFO") -> None:
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
 import warnings as _warnings
-# ===== Hyperliquid account mapping =====
+# ===== Hyperliquid accounts / vault / signer =====
 HL_MAIN_ACCOUNT = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
 HL_SUBACCOUNT_VAULT = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
 HL_API_WALLET = "0x95cf910f947a5be26bc7c18f8b8048185126b4e9"
-# Private key must correspond to HL_API_WALLET and be set via env HYPERLIQUID_PRIVATE_KEY
 
 _warnings.filterwarnings(
     "ignore",
@@ -25,6 +24,19 @@ _warnings.filterwarnings(
 
 import requests
 import pandas as pd
+
+def compute_tp_sl(entry_px, side):
+    """Calcula TP=10% e SL=5% por preço (fixos).""" 
+    TAKE_PROFIT_PCT = 0.10
+    STOP_LOSS_PCT = 0.05
+    if side.upper() in ("LONG", "BUY"):
+        tp = entry_px * (1 + TAKE_PROFIT_PCT)
+        sl = entry_px * (1 - STOP_LOSS_PCT)
+    else:
+        tp = entry_px * (1 - TAKE_PROFIT_PCT)
+        sl = entry_px * (1 + STOP_LOSS_PCT)
+    return {"tp": float(tp), "sl": float(sl)}
+
 import numpy as np
 import math
 from datetime import datetime, timedelta, timezone
@@ -382,10 +394,11 @@ import ccxt  # type: ignore
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
 # Lê credenciais da env (recomendado) com fallback seguro para dev local
+_wallet_env = os.getenv("WALLET_ADDRESS")
 _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
 dex = ccxt.hyperliquid({
-    "walletAddress": HL_API_WALLET,
-    "privateKey": os.getenv("HYPERLIQUID_PRIVATE_KEY"),
+    "walletAddress": _wallet_env or "0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
+    "privateKey": _priv_env or "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
     "enableRateLimit": True,
     "timeout": dex_timeout,
     "options": {"timeout": dex_timeout},
@@ -1496,7 +1509,7 @@ class EMAGradientStrategy:
             return existing
         try:
             # Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params, {"vaultAddress": HL_SUBACCOUNT_VAULT})
+            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)
         except Exception as e:
             msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -1547,7 +1560,7 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params, {"vaultAddress": HL_SUBACCOUNT_VAULT})
+            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
         except Exception as e:
             msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -1591,7 +1604,7 @@ class EMAGradientStrategy:
                 lev_type = str(leverage_info.get("type") or "").lower()
                 target_lev = int(self.cfg.LEVERAGE)
                 if lev_type != "isolated" and target_lev > 0:
-                    self.dex.set_leverage(target_lev, self.symbol, {"vaultAddress": HL_SUBACCOUNT_VAULT, "marginMode": "isolated"})
+                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated"})
                     self._log("Leverage ajustada para isolated em posição existente.", level="INFO")
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
@@ -1659,7 +1672,7 @@ class EMAGradientStrategy:
             lev_int = None
         if lev_int and lev_int > 0:
             try:
-                self.dex.set_leverage(lev_int, self.symbol, {"vaultAddress": HL_SUBACCOUNT_VAULT, "marginMode": "isolated"})
+                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})
                 if self.debug:
                     self._log(f"Leverage ajustada para {lev_int}x (isolated)", level="DEBUG")
             except Exception as e:
@@ -1676,7 +1689,18 @@ class EMAGradientStrategy:
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
         )
-        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price, {"vaultAddress": HL_SUBACCOUNT_VAULT})
+        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
+        try:
+            avg_px = None
+            if isinstance(ordem_entrada, dict):
+                avg_px = ordem_entrada.get("average") or (
+                    ((ordem_entrada.get("info", {}) or {}).get("filled", {}) or {}).get("avgPx")
+                )
+            px_ref = float(avg_px) if avg_px else float(price)
+            tpsl = _place_tp_sl_orders(self.dex, self.symbol, side, px_ref, vault=HL_SUBACCOUNT_VAULT)
+            self._log(f"TP/SL criados | TP={tpsl['tp']:.6f} SL={tpsl['sl']:.6f}", level="DEBUG")
+        except Exception as e:
+            self._log(f"Falha ao criar TP/SL: {type(e).__name__}: {e}", level="WARN")
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
 
         oid = None
@@ -1842,7 +1866,7 @@ class EMAGradientStrategy:
             if order_id:
                 if self.debug:
                     self._log(f"Cancelando ordem reduceOnly id={order_id}", level="DEBUG")
-                self.dex.cancel_order(order_id, self.symbol, {"vaultAddress": HL_SUBACCOUNT_VAULT})
+                self.dex.cancel_order(order_id, self.symbol)
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao cancelar ordem {order_id}: {e}", level="WARN")
@@ -1854,7 +1878,7 @@ class EMAGradientStrategy:
         params = {"reduceOnly": True}
         if self.debug:
             self._log(f"Fechando posição via MARKET reduceOnly {side.upper()} qty={amt} px_ref={px:.6f}", level="DEBUG")
-        return self.dex.create_order(self.symbol, "market", side, amt, px, params, {"vaultAddress": HL_SUBACCOUNT_VAULT})
+        return self.dex.create_order(self.symbol, "market", side, amt, px, params)
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()
@@ -2898,3 +2922,23 @@ if __name__ == "__main__":
 
     base_df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     executar_estrategia(base_df, dex, None)
+
+
+def _place_tp_sl_orders(dex, symbol, side, entry_px, *, vault):
+    levels = compute_tp_sl(entry_px, side)
+    tp, sl = levels["tp"], levels["sl"]
+    exit_side = "sell" if side.lower() in ("long", "buy") else "buy"
+    params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
+    # STOP
+    stop_params = dict(params_base); stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
+    try:
+        stop_order = dex.create_order(symbol, "market", exit_side, 0, None, stop_params)
+    except Exception:
+        stop_order = dex.create_order(symbol, "market", exit_side, 0, None, {"vaultAddress": vault, "reduceOnly": True, "triggerPrice": sl})
+    # TAKE
+    take_params = dict(params_base); take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
+    try:
+        take_order = dex.create_order(symbol, "limit", exit_side, 0, tp, take_params)
+    except Exception:
+        take_order = dex.create_order(symbol, "limit", exit_side, 0, tp, {"vaultAddress": vault, "reduceOnly": True})
+    return {"tp": tp, "sl": sl, "stop_order": stop_order, "take_order": take_order}
