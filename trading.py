@@ -90,21 +90,7 @@ def _safe_strategy_step(strategy_obj, *args, **kwargs):
 # Fixed build: ensures EMAGradientStrategy.step exists and is invoked by the runner.
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
-print("\n==========
-
-
-
-def _ensure_strategy_step_instance(strategy_obj):
-    import types
-    if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
-        return strategy_obj
-
-
-
-
- INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
-
-
+print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 def _log_global(section: str, message: str, level: str = "INFO") -> None:
     """Formato padrão para logs fora das classes."""
     print(f"[{level}] [{section}] {message}", flush=True)
