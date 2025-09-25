@@ -5,3 +5,5 @@ ccxt
 flask
 PyJWT
 PyYAML
+python-dateutil
+tzdata
