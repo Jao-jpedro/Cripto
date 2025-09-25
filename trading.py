@@ -3084,3 +3084,19 @@ if __name__ == "__main__":
 
     base_df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     executar_estrategia(base_df, dex, None)
+
+# --- Compat shim: garante que EMAGradientStrategy tenha método `step` ---
+try:
+    _cls = EMAGradientStrategy
+    if not hasattr(_cls, "step"):
+        def _shim_step(self, df: pd.DataFrame, usd_to_spend: float, rsi_df_hourly: Optional[pd.DataFrame] = None):
+            if hasattr(self, "run"):
+                return self.run(df, usd_to_spend, rsi_df_hourly)
+            if hasattr(self, "execute"):
+                return self.execute(df, usd_to_spend, rsi_df_hourly)
+            if hasattr(self, "tick"):
+                return self.tick(df, usd_to_spend, rsi_df_hourly)
+            raise AttributeError("EMAGradientStrategy não possui método step/aliases")
+        EMAGradientStrategy.step = _shim_step
+except Exception:
+    pass
