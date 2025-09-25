@@ -1,3 +1,50 @@
+
+# ==== Compatibility helper: guarantee strategy.step exists ====
+def _ensure_step_method(strategy_obj):
+    """Return a strategy object that definitely has a .step(...) method.
+    If it's missing, attach a wrapper pointing to an equivalent method (run/tick/update/execute/executar_estrategia).
+    """
+    # If .step already exists, nothing to do
+    if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
+        return strategy_obj
+
+    # Try known alternatives in preference order
+    alt_names = ["executar_estrategia", "run", "tick", "update", "execute"]
+    target = None
+    for name in alt_names:
+        if hasattr(strategy_obj, name) and callable(getattr(strategy_obj, name)):
+            target = name
+            break
+
+    if target is None:
+        # As a last resort, create a no-op to avoid crashes but log loudly
+        def _noop_step(self, df, usd_to_spend=None, rsi_df_hourly=None):
+            print("[ERROR] [ENGINE] Strategy has no step-like method. Skipping.", flush=True)
+            return None
+        try:
+            import types
+            strategy_obj.step = types.MethodType(_noop_step, strategy_obj)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return strategy_obj
+
+    # Build a wrapper with compatible signature
+    def _compat_step(self, df, usd_to_spend=None, rsi_df_hourly=None):
+        try:
+            return getattr(self, target)(df, usd_to_spend=usd_to_spend, rsi_df_hourly=rsi_df_hourly)
+        except TypeError:
+            # Fallback: try positional only for legacy signatures
+            return getattr(self, target)(df)
+
+    try:
+        import types
+        strategy_obj.step = types.MethodType(_compat_step, strategy_obj)  # type: ignore[attr-defined]
+        print(f"[INFO] [ENGINE] Attached .step wrapper using '{target}' on {type(strategy_obj).__name__}.", flush=True)
+    except Exception as e:
+        print(f"[WARN] [ENGINE] Failed to attach .step wrapper: {type(e).__name__}: {e}", flush=True)
+    return strategy_obj
+# ==== End compatibility helper ====
+
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
@@ -15,52 +62,6 @@ _warnings.filterwarnings(
     category=Warning,
     module=r"urllib3.*",
 )
-
-
-# ==== Compatibility helper: guarantee strategy.step exists ====
-def _ensure_step_method(strategy_obj):
-    \"\"\"Return a strategy with a .step(...) method.
-    If missing, attach a wrapper pointing to an equivalent method (run/tick/update/execute/executar_estrategia).
-    \"\"\"
-    if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
-        return strategy_obj
-
-    # Try known alternatives in preference order
-    alt_names = ["executar_estrategia", "run", "tick", "update", "execute"]
-    target = None
-    for name in alt_names:
-        if hasattr(strategy_obj, name) and callable(getattr(strategy_obj, name)):
-            target = name
-            break
-
-    if target is None:
-        # As a last resort, create a no-op to avoid crashes but log loudly
-        def _noop_step(df, usd_to_spend=None, rsi_df_hourly=None):
-            print("[ERROR] [ENGINE] Strategy has no step-like method. Skipping.", flush=True)
-            return None
-        try:
-            # bind method
-            import types
-            strategy_obj.step = types.MethodType(_noop_step, strategy_obj)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        return strategy_obj
-
-    # Build a wrapper with compatible signature
-    def _compat_step(self, df, usd_to_spend=None, rsi_df_hourly=None):
-        try:
-            return getattr(self, target)(df, usd_to_spend=usd_to_spend, rsi_df_hourly=rsi_df_hourly)
-        except TypeError:
-            # Fallback: try positional only
-            return getattr(self, target)(df)
-    try:
-        import types
-        strategy_obj.step = types.MethodType(_compat_step, strategy_obj)  # type: ignore[attr-defined]
-        print(f"[INFO] [ENGINE] Attached .step wrapper using '{target}' on {type(strategy_obj).__name__}.", flush=True)
-    except Exception as e:
-        print(f"[WARN] [ENGINE] Failed to attach .step wrapper: {type(e).__name__}: {e}", flush=True)
-    return strategy_obj
-# ==== End compatibility helper ====
 
 import requests
 import pandas as pd
@@ -3090,9 +3091,8 @@ if __name__ == "__main__":
                         logger=logger,
                         debug=True,
                     )
-                                                            strategy = _ensure_step_method(strategy)
-strategy = _ensure_step_method(strategy)
-asset_state[asset.name] = {"strategy": strategy, "logger": logger}
+                    strategy = _ensure_step_method(strategy)
+                    asset_state[asset.name] = {"strategy": strategy, "logger": logger}
                 strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
 
                 usd_asset = usd_to_spend
