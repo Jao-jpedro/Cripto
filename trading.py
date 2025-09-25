@@ -1,44 +1,73 @@
 
-# ==== Compatibility helper: robust guarantee of strategy.step ====
+# ==== Compatibility helper v4: robust and safe selection of step-like method ====
 def _ensure_step_method(strategy_obj):
     """Ensure `strategy_obj.step(df, usd_to_spend=None, rsi_df_hourly=None)` exists.
-    If missing, adapt from the best available callable and log what happened.
+    Pick a method that *actually* looks like a bar-processing step (accepts a dataframe),
+    and avoid maintenance/utility methods like `clear_local_log`.
     """
     try:
-        # 1) Native step?
         if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
             return strategy_obj
 
-        # 2) Known common alternatives (ordered by likelihood)
-        candidates = [
-            "executar_estrategia", "execute_estrategia", "executa_estrategia",
-            "run", "tick", "update", "execute", "process", "apply", "__call__",
-            "loop", "work", "handle", "on_bar", "on_candle"
+        import inspect, types
+
+        # Hard allow-list (ordered by preference)
+        preferred = [
+            "step", "executar_estrategia", "execute_estrategia", "executa_estrategia",
+            "run", "on_bar", "on_candle", "process_bar", "process_candle",
+            "tick", "update", "execute", "process", "apply", "__call__",
         ]
-        available = [name for name in candidates if hasattr(strategy_obj, name) and callable(getattr(strategy_obj, name))]
 
-        # 3) If none of the known names, try fuzzy search over all callables
-        if not available:
-            def _is_callable_method(name):
-                if name.startswith("_"):
-                    return False
-                try:
-                    attr = getattr(strategy_obj, name)
-                except Exception:
-                    return False
-                return callable(attr)
-            all_methods = [n for n in dir(strategy_obj) if _is_callable_method(n)]
-            # prioritize methods containing these fragments
-            priorities = ["step", "estrateg", "strategy", "run", "tick", "exec", "update", "process", "apply", "bar", "candle"]
-            scored = sorted(all_methods, key=lambda n: min([n.find(p) if p in n else 999 for p in priorities]))
-            available = scored[:1] if scored else []
+        # Hard deny-list (must NEVER be used as step)
+        deny = set([
+            "clear_local_log", "export_local_log_csv", "export_log_csv",
+            "export", "logger", "log", "print", "reset", "close", "open",
+            "slope_pct", "cfg", "config", "params", "snapshot", "get_snapshot",
+            "get_state", "set_state", "state", "debug", "save", "load",
+        ])
 
-        # 4) Choose the first viable target and adapt by signature
-        if available:
-            target = available[0]
+        def looks_like_step(name):
+            if name.startswith("_") or name in deny:
+                return False
+            fn = getattr(strategy_obj, name, None)
+            if not callable(fn):
+                return False
+            # Prefer functions that accept a df as first or named param
+            try:
+                sig = inspect.signature(fn)
+            except Exception:
+                return False
+            params = list(sig.parameters.values())
+            # remove 'self'
+            if params and params[0].name == "self":
+                params = params[1:]
+            if not params:
+                return False
+            # Strong signals:
+            # - has a parameter named 'df' OR
+            # - has at least one positional-or-keyword param (dataframe candidate)
+            has_df_name = any(p.name in ("df", "df_asset", "data", "bars") for p in params)
+            has_positional = any(p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) for p in params)
+            return has_df_name or has_positional
+
+        # 1) Try preferred names that pass the shape test
+        for name in preferred:
+            if hasattr(strategy_obj, name) and looks_like_step(name):
+                target = name
+                break
+        else:
+            # 2) Fallback: scan all public methods that look like step
+            candidates = [n for n in dir(strategy_obj) if looks_like_step(n)]
+            # Filter out obvious maintenance utilities by substring
+            bad_subs = ("log", "export", "clear", "snapshot", "state")
+            candidates = [n for n in candidates if not any(s in n.lower() for s in bad_subs)]
+            # Prioritize by useful substrings
+            pri = ("step","estrateg","strategy","run","bar","candle","process","exec","tick","update","apply")
+            candidates.sort(key=lambda n: min([n.lower().find(p) if p in n.lower() else 999 for p in pri]))
+            target = candidates[0] if candidates else None
+
+        if target:
             fn = getattr(strategy_obj, target)
-
-            import inspect, types
             try:
                 sig = inspect.signature(fn)
             except Exception:
@@ -48,7 +77,6 @@ def _ensure_step_method(strategy_obj):
                 try:
                     if sig:
                         params = list(sig.parameters.keys())
-                        # Try kwargs if they exist in target
                         kwargs = {}
                         if "usd_to_spend" in params:
                             kwargs["usd_to_spend"] = usd_to_spend
@@ -56,22 +84,20 @@ def _ensure_step_method(strategy_obj):
                             kwargs["rsi_df_hourly"] = rsi_df_hourly
                         if kwargs:
                             return getattr(self, target)(df, **kwargs)
-                    # Positional fallback
                     return getattr(self, target)(df)
                 except TypeError:
-                    # Last resort: call without df if target expects none
                     return getattr(self, target)()
 
             strategy_obj.step = types.MethodType(_compat_step, strategy_obj)  # type: ignore[attr-defined]
             print(f"[INFO] [ENGINE] step adapted from '{target}' on {type(strategy_obj).__name__}.", flush=True)
             return strategy_obj
 
-        # 5) Nothing to adapt — log methods to help debugging and install no-op to avoid crashes
+        # 3) Last resort: no-op, but log available public methods to help debugging
         try:
             methods = [n for n in dir(strategy_obj) if callable(getattr(strategy_obj, n, None)) and not n.startswith("_")]
         except Exception:
             methods = []
-        print(f"[ERROR] [ENGINE] No step-like method found in {type(strategy_obj).__name__}. Public methods: {methods}", flush=True)
+        print(f"[ERROR] [ENGINE] No valid step-like method found in {type(strategy_obj).__name__}. Public methods: {methods}", flush=True)
 
         def _noop_step(self, df, usd_to_spend=None, rsi_df_hourly=None):
             return None
@@ -81,7 +107,7 @@ def _ensure_step_method(strategy_obj):
     except Exception as e:
         print(f"[ERROR] [ENGINE] _ensure_step_method failed: {type(e).__name__}: {e}", flush=True)
         return strategy_obj
-# ==== End helper ====
+# ==== End helper v4 ====
 
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
