@@ -360,7 +360,7 @@ SYMBOL_BINANCE = "BTCUSDT"
 # Constrói df global na carga, se estiver vazio
 if isinstance(df, pd.DataFrame) and df.empty:
     try:
-        df = build_df(SYMBOL_BINANCE, INTERVAL, START_DATE, END_DATE, debug=True)
+        df = build_df(symbol=SYMBOL_BINANCE, tf=INTERVAL, start=START_DATE, end=END_DATE, debug=True)
     except Exception as _e:
         _log_global("DATA", f"build_df falhou: {_e}", level="WARN")
         df = pd.DataFrame()
@@ -3010,7 +3010,7 @@ if __name__ == "__main__":
                     continue
 
                 try:
-                    df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
+                    df_asset_hour = build_df(symbol=asset.data_symbol, tf="1h", debug=False)
                 except MarketDataUnavailable:
                     _log_global(
                         "ASSET",
