@@ -404,6 +404,39 @@ dex = ccxt.hyperliquid({
     "options": {"timeout": dex_timeout},
 })
 
+
+# === Force all HL calls to use subaccount vault ===
+try:
+    dex.options = dex.options or {}
+    dex.options["vaultAddress"] = HL_SUBACCOUNT_VAULT
+except Exception:
+    pass
+
+def _with_vault(params):
+    p = dict(params or {})
+    p.setdefault("vaultAddress", HL_SUBACCOUNT_VAULT)
+    return p
+
+if hasattr(dex, "create_order"):
+    _orig_create_order = dex.create_order
+    def _create_order_vault(symbol, type, side, amount, price=None, params=None):
+        return _orig_create_order(symbol, type, side, amount, price, _with_vault(params))
+    dex.create_order = _create_order_vault
+
+def _patch_method(name):
+    if hasattr(dex, name):
+        orig = getattr(dex, name)
+        def _fn(*args, **kwargs):
+            if args and isinstance(args[-1], dict):
+                args = (*args[:-1], _with_vault(args[-1]))
+            else:
+                kwargs["params"] = _with_vault(kwargs.get("params"))
+            return orig(*args, **kwargs)
+        setattr(dex, name, _fn)
+
+for _meth in ("cancel_order", "cancel_orders", "fetch_open_orders", "fetch_orders", "fetch_positions",
+              "set_leverage", "set_margin_mode", "set_position_mode"):
+    _patch_method(_meth)
 # Segundo DEX (racional inverso) com credenciais distintas
 if dex:
     _log_global("DEX", f"Inicializado | LIVE_TRADING={os.getenv('LIVE_TRADING','0')} | TIMEOUT_MS={dex_timeout}")
