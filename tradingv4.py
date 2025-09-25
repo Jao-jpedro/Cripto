@@ -3069,9 +3069,48 @@ if __name__ == "__main__":
                     pass
 
                 try:
+                    # --- Segurança global por ativo (antes do step) ---
+                    try:
+                        _px_now = None
+                        try:
+                            _px_now = float(strategy._preco_atual())
+                        except Exception:
+                            try:
+                                _px_now = float(strategy.dex.fetch_ticker(strategy.symbol).get("last"))
+                            except Exception:
+                                _px_now = None
+                        if _px_now is not None:
+                            # Nunca deixar a perda passar de -0,05
+                            guard_close_all(strategy.dex, strategy.symbol, _px_now, vault=HL_SUBACCOUNT_VAULT)
+                        # Sempre garantir TP e SL para qualquer posição aberta
+                        try:
+                            ensure_tpsl_for_position(strategy.dex, strategy.symbol, vault=HL_SUBACCOUNT_VAULT)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
                     strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
                 except Exception as e:
                     _log_global("ASSET", f"Erro executando {asset.name}: {type(e).__name__}: {e}", level="ERROR")
+                # --- Segurança global por ativo (após o step) ---
+                try:
+                    _px_now2 = None
+                    try:
+                        _px_now2 = float(strategy._preco_atual())
+                    except Exception:
+                        try:
+                            _px_now2 = float(strategy.dex.fetch_ticker(strategy.symbol).get("last"))
+                        except Exception:
+                            _px_now2 = None
+                    if _px_now2 is not None:
+                        guard_close_all(strategy.dex, strategy.symbol, _px_now2, vault=HL_SUBACCOUNT_VAULT)
+                    try:
+                        ensure_tpsl_for_position(strategy.dex, strategy.symbol, vault=HL_SUBACCOUNT_VAULT)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
                 _time.sleep(0.25)
 
             if not loop:
