@@ -3121,89 +3121,76 @@ if __name__ == "__main__":
     # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
     EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
-    def executar_estrategia(
+    
+def executar_estrategia(
         df_in: pd.DataFrame,
         dex_in,
-        trade_logger_in: TradeLogger | None,
-        usd_to_spend: float = 1,
+        trade_logger_in: "TradeLogger" | None = None,
+        usd_to_spend: float = 1.0,
         loop: bool = True,
         sleep_seconds: int = 60,
     ):
-        """Executa a estratégia sequencialmente para cada ativo configurado."""
-        _log_global(
-            "ENGINE",
-            f"LIVE_TRADING={os.getenv('LIVE_TRADING', '0')} | DEX_TIMEOUT_MS={os.getenv('DEX_TIMEOUT_MS', '5000')} | assets={len(ASSET_SETUPS)}",
-        )
+    """
+    Runner seguro: monta df por ativo, instancia logger/estratégia se ausentes,
+    evita KeyError com setdefault e garante step executável.
+    """
+    import math, time, os
+    assets: list[Asset] = ASSETS  # usa sua lista de ativos configurada no arquivo
+    asset_state: dict[str, dict] = {}
+    default_cols = list(df_in.columns) if isinstance(df_in, pd.DataFrame) else []
 
-        if trade_logger_in is not None:
-            _log_global("ENGINE", "Logger externo fornecido será ignorado no modo multiativo.", level="DEBUG")
+    iter_count = 0
+    while True:
+        iter_count += 1
+        live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+        print(f"[INFO] [HEARTBEAT] iter={iter_count} live={1 if live else 0}", flush=True)
 
-        asset_state: Dict[str, Dict[str, Any]] = {}
-        default_cols = df_in.columns if isinstance(df_in, pd.DataFrame) else pd.Index([])
-
-        iter_count = 0
-        while True:
-            iter_count += 1
+        for asset in assets:
             try:
-                live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-                _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)}")
-            except Exception:
-                pass
+                print(f"[INFO] [ASSET] Processando {asset.name}", flush=True)
 
-            for asset in ASSET_SETUPS:
-                _log_global("ASSET", f"Processando {asset.name}")
-                try:
-                    df_asset = build_df(asset.data_symbol, INTERVAL, debug=True)
-                except MarketDataUnavailable as e:
-                    _log_global(
-                        "ASSET",
-                        f"Sem dados recentes para {asset.name} ({asset.data_symbol}) {INTERVAL}: {e}",
-                        level="WARN",
-                    )
-                    continue
-                except Exception as e:
-                    _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
+                # Build DF do ativo (suporte a função já existente build_df / build_df_asset)
+                df_asset = build_df(df_in, asset.data_symbol, tf="15m", alvo=20)
+                print("[INFO] [DATA] Total candles retornados:", len(df_asset), flush=True)
+
+                if df_asset is None or len(df_asset) == 0:
+                    print(f"[WARN] [DATA] DataFrame vazio para {asset.name}; pulando.", flush=True)
                     continue
 
-                try:
-                    df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
-                except MarketDataUnavailable:
-                    _log_global(
-                        "ASSET",
-                        f"Sem dados 1h para {asset.name} ({asset.data_symbol}); seguindo sem rsi_aux.",
-                        level="WARN",
-                    )
-                    df_asset_hour = pd.DataFrame()
-                except Exception as e:
-                    _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
-                    df_asset_hour = pd.DataFrame()
+                # Garantir estado do ativo (logger + estratégia) SEMPRE
+                state = asset_state.setdefault(asset.name, {})
 
-                if not isinstance(df_asset, pd.DataFrame) or df_asset.empty:
-                    _log_global("ASSET", f"DataFrame vazio para {asset.name}; pulando.", level="WARN")
-                    continue
-
-                state = asset_state.get(asset.name)
-                if state is None:
-                    cfg = GradientConfig()
-                    cfg.LEVERAGE = asset.leverage
-                    cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
-                    cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
+                # (Re)cria logger/strategy se ausentes
+                if "logger" not in state or "strategy" not in state:
                     safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
                     csv_path = f"trade_log_{safe_suffix}.csv"
                     xlsx_path = f"trade_log_{safe_suffix}.xlsx"
                     cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
                     logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
-                    strategy = StrategyAdapter(EMAGradientStrategy(dex=dex_in,
+
+                    cfg = GradientConfig()
+                    cfg.LEVERAGE = asset.leverage
+                    cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
+                    cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
+
+                    strat_inner = EMAGradientStrategy(
+                        dex=dex_in,
                         symbol=asset.hl_symbol,
                         cfg=cfg,
                         logger=logger,
                         debug=True,
-                    ))
-                    strategy = _strategy_tmp = strategy
-                    strategy = _ensure_strategy_step_instance(_strategy_tmp)
-                strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
+                    )
+                    strategy = StrategyAdapter(strat_inner)
+                    strategy = _ensure_strategy_step_instance(strategy)
 
-                usd_asset = usd_to_spend
+                    state["logger"] = logger
+                    state["strategy"] = strategy
+                    asset_state[asset.name] = state
+
+                strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]  # type: ignore
+
+                # Montante por ativo: base $1, com overrides por ambiente se existirem
+                usd_asset = float(usd_to_spend) if usd_to_spend else 1.0
                 try:
                     global_env = os.getenv("USD_PER_TRADE")
                     if global_env:
@@ -3215,177 +3202,24 @@ if __name__ == "__main__":
                 except Exception:
                     pass
 
-                try:
-                    strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
-                    price_seen = getattr(strategy, "_last_price_snapshot", None)
-                    if price_seen is not None and math.isfinite(price_seen):
-                        try:
-                            strategy._log(f"Preço atual: {price_seen:.6f}", level="INFO")
-                        except Exception:
-                            pass
-                except Exception as e:
-                    _log_global("ASSET", f"Erro executando {asset.name}: {type(e).__name__}: {e}", level="ERROR")
-                _time.sleep(0.25)
+                # Executa a step concreta (assíncrono tolerante)
+                _safe_strategy_step(strategy, df_asset, usd_to_spend=usd_asset, rsi_df_hourly=None)
 
-            if not loop:
-                break
-
-            try:
-                env_sleep = os.getenv("SLEEP_SECONDS")
-                if env_sleep:
-                    sleep_seconds = int(env_sleep)
-            except Exception:
-                pass
-            _time.sleep(max(1, int(sleep_seconds)))
-
-    base_df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-    executar_estrategia(base_df, dex, None)
-
-# --- Compat shim: garante que EMAGradientStrategy tenha método `step` ---
-try:
-    _cls = EMAGradientStrategy
-    if not hasattr(_cls, "step"):
-        def _shim_step(self, df: pd.DataFrame, usd_to_spend: float, rsi_df_hourly: Optional[pd.DataFrame] = None):
-            if hasattr(self, "run"):
-                return self.run(df, usd_to_spend, rsi_df_hourly)
-            if hasattr(self, "execute"):
-                return self.execute(df, usd_to_spend, rsi_df_hourly)
-            if hasattr(self, "tick"):
-                return self.tick(df, usd_to_spend, rsi_df_hourly)
-            raise AttributeError("EMAGradientStrategy não possui método step/aliases")
-        EMAGradientStrategy.step = _shim_step
-except Exception:
-    pass
-
-
-# ---- Final-guard: ensure EMAGradientStrategy exposes .step at class level ----
-try:
-    _EMAG_CLS = EMAGradientStrategy  # type: ignore[name-defined]
-    if not hasattr(_EMAG_CLS, "step"):
-        def _emag_step_compat(self, df, usd_to_spend, rsi_df_hourly=None):
-            # Try common method names if present
-            for name in ("run", "process", "iterate", "tick", "next", "__call__", "run_once", "run_bar", "on_bar", "execute", "handle", "update"):
-                m = getattr(self, name, None)
-                if callable(m):
+                # Log do preço capturado pela estratégia (se disponível)
+                price_seen = getattr(strategy, "_last_price_snapshot", None)
+                if price_seen is not None and math.isfinite(float(price_seen)):
                     try:
-                        return m(df, usd_to_spend, rsi_df_hourly)
-                    except TypeError:
-                        # Try with fewer params
-                        try:
-                            return m(df, usd_to_spend)
-                        except Exception:
-                            try:
-                                return m(df)
-                            except Exception:
-                                pass
-            # Minimal no-op with price snapshot update
-            try:
-                col = "close" if "close" in df.columns else ("valor_fechamento" if "valor_fechamento" in df.columns else None)
-                if col:
-                    val = df[col].iloc[-1]
-                    try:
-                        val = float(val)
+                        strategy._log(f"Preço atual: {float(price_seen):.6f}", level="INFO")
                     except Exception:
-                        pass
-                    setattr(self, "_last_price_snapshot", val)
-            except Exception:
-                pass
-            try:
-                if hasattr(self, "_log"):
-                    self._log("Compat: EMAGradientStrategy.step inexistente — executando no-op.", level="WARN")
-                else:
-                    print("[WARN] [COMPAT] EMAGradientStrategy.step inexistente — no-op.", flush=True)
-            except Exception:
-                pass
-            return None
-        setattr(_EMAG_CLS, "step", _emag_step_compat)
-        print("[WARN] [COMPAT] Added class-level EMAGradientStrategy.step compat method.", flush=True)
-except Exception as _e_compat:
-    try:
-        print(f"[WARN] [COMPAT] Could not attach class-level step to EMAGradientStrategy: {_e_compat}", flush=True)
-    except Exception:
-        pass
+                        print(f"[INFO] [{asset.name}] Preço atual: {float(price_seen):.6f}", flush=True)
 
+            except Exception as e:
+                print(f"[ERROR] [ASSET] Erro executando {asset.name}: {type(e).__name__}: {e}", flush=True)
+                continue
 
-# ---- Concrete step for EMAGradientStrategy (df + usd_to_spend aware) ----
-try:
-    _EMAG = EMAGradientStrategy  # type: ignore[name-defined]
-    def _emag_step_concrete(self, df, usd_to_spend, rsi_df_hourly=None):
-        # Persist last price snapshot from df
+        if not loop:
+            break
         try:
-            _col_close = "close" if "close" in df.columns else ("valor_fechamento" if "valor_fechamento" in df.columns else None)
-            if _col_close:
-                self._last_price_snapshot = float(df[_col_close].iloc[-1])
-        except Exception:
-            pass
-
-        # Resolve EMAs
-        def _col(*names):
-            for n in names:
-                if n in df.columns:
-                    return n
-            return None
-        c_short = _col("ema_short", "ema7")
-        c_long  = _col("ema_long", "ema21")
-        c_atr   = _col("atr", "atr14", "atr_14")
-
-        ema_s = float(df[c_short].iloc[-1]) if c_short else None
-        ema_l = float(df[c_long].iloc[-1]) if c_long else None
-        atr_v = float(df[c_atr].iloc[-1]) if c_atr else None
-
-        # Effective notional by leverage: amount sizing is handled inside _abrir_posicao_com_stop
-        # but we ensure the base usd_to_spend is at least 1 (your requirement).
-        try:
-            base_usd = float(usd_to_spend)
-        except Exception:
-            base_usd = 1.0
-        if base_usd <= 0:
-            base_usd = 1.0
-
-        # If there is an open position, consider exit on cross
-        pos = None
-        try:
-            pos = self._posicao_aberta()
-        except Exception:
-            pos = None
-
-        try:
-            if pos and float(pos.get("contracts", 0)) > 0 and (ema_s is not None and ema_l is not None):
-                side_now = "LONG" if float(pos.get("side", "long")).upper().startswith("LONG") or str(pos.get("side","")).lower()=="long" else "SHORT"
-                # Exit if cross to the opposite
-                if side_now == "LONG" and ema_s < ema_l:
-                    self._fechar_posicao(df_for_log=df)
-                elif side_now == "SHORT" and ema_s > ema_l:
-                    self._fechar_posicao(df_for_log=df)
-        except Exception:
-            pass
-
-        # Entry logic: only if no position
-        try:
-            pos = self._posicao_aberta()
-            has_open = bool(pos and float(pos.get("contracts", 0)) > 0)
-        except Exception:
-            has_open = False
-
-        if not has_open and (ema_s is not None and ema_l is not None):
-            if ema_s > ema_l:
-                # Go LONG
-                self._abrir_posicao_com_stop("buy", base_usd, df_for_log=df, atr_last=atr_v)
-            elif ema_s < ema_l:
-                # Go SHORT
-                self._abrir_posicao_com_stop("sell", base_usd, df_for_log=df, atr_last=atr_v)
-        # trailing protections / BE+ if any
-        try:
-            self._maybe_trailing_breakeven_plus(df_for_log=df)
-        except Exception:
-            pass
-        return None
-    # Attach/override class step
-    setattr(_EMAG, "step", _emag_step_concrete)
-    print("[INFO] [COMPAT] Concrete EMAGradientStrategy.step attached (df + usd_to_spend).", flush=True)
-except Exception as _e_final:
-    try:
-        print(f"[WARN] [COMPAT] Could not attach concrete step: {_e_final}", flush=True)
-    except Exception:
-        pass
-
+            time.sleep(sleep_seconds)
+        except KeyboardInterrupt:
+            break
