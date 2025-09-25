@@ -1,94 +1,55 @@
-print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 
-# ---- Compat helper to call strategy "step" safely ----
-def _safe_strategy_step(strategy_obj, *args, **kwargs):
-    """Call the appropriate stepping method on a strategy instance.
-    Tries .step(), then .run(), then .process(); falls back to iterate/tick/next/__call__.
-    Adds a concise diagnostic log about the class origin.
-    """
-    try:
-        cls = type(strategy_obj)
-        mod = getattr(cls, "__module__", "?")
-        file_hint = None
-        try:
-            import sys, inspect
-            mod_obj = sys.modules.get(mod)
-            if mod_obj is not None:
+
+# ---- StrategyAdapter: guarantees .step() exists and delegates safely ----
+class StrategyAdapter:
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        # Proxy any unknown attribute to the wrapped strategy
+        return getattr(self._inner, name)
+
+    def step(self, *args, **kwargs):
+        # Prefer inner step-like methods
+        for name in ("step", "run", "process", "iterate", "tick", "next", "__call__"):
+            meth = getattr(self._inner, name, None)
+            if callable(meth):
                 try:
-                    file_hint = inspect.getsourcefile(mod_obj) or inspect.getfile(mod_obj)
-                except Exception:
-                    file_hint = getattr(mod_obj, "__file__", None)
+                    return meth(*args, **kwargs)
+                except TypeError:
+                    # If signature mismatch, try calling with fewer kwargs (common for legacy)
+                    try:
+                        return meth(*args)
+                    except Exception:
+                        pass
+        # Minimal graceful fallback: update last price snapshot so higher layers can log
+        try:
+            df = args[0] if args else None
+            if df is not None:
+                col = "close" if "close" in df.columns else ("valor_fechamento" if "valor_fechamento" in df.columns else None)
+                if col:
+                    val = df[col].iloc[-1]
+                    try:
+                        val = float(val)
+                    except Exception:
+                        pass
+                    setattr(self._inner, "_last_price_snapshot", val)
         except Exception:
             pass
-        print(f"[DEBUG] [STRATEGY] Using {cls.__name__} from module={mod} file={file_hint}", flush=True)
-    except Exception:
-        pass
-
-    # Preferred names
-    for name in ("step", "run", "process", "iterate", "tick", "next", "__call__"):
-        meth = getattr(strategy_obj, name, None)
-        if callable(meth):
-            return meth(*args, **kwargs)
-
-    print(f"[ERROR] [STRATEGY] {type(strategy_obj).__name__} does not expose a step/run/process method", flush=True)
-    return None
-# ---- Instance-level compat: ensure the created strategy object has .step() ----
-def _ensure_strategy_step_instance(strategy_obj):
-    """Attach a 'step' method to the instance if the class doesn't expose one."""
-    for name in ("step", "run", "process"):
-        if callable(getattr(strategy_obj, name, None)):
-            return strategy_obj
-
-    def _inst_step(self, *args, **kwargs):  # pragma: no cover
-        for name in ("run", "process", "iterate", "tick", "next", "__call__"):
-            m = getattr(self, name, None)
-            if callable(m):
-                return m(*args, **kwargs)
-        print(f"[ERROR] [STRATEGY] {type(self).__name__} does not expose a step/run/process method", flush=True)
+        try:
+            # Log once per asset loop if available
+            if hasattr(self._inner, "_log"):
+                self._inner._log("Adapter fallback: estratégia sem step/run/process — executando no-op.", level="WARN")
+            else:
+                print("[WARN] [ADAPTER] Strategy lacks step/run/process; performed no-op.", flush=True)
+        except Exception:
+            pass
         return None
 
-    try:
-        import types
-        strategy_obj.step = types.MethodType(_inst_step, strategy_obj)  # bind to instance
-    except Exception:
-        try:
-            strategy_obj.step = _inst_step.__get__(strategy_obj, type(strategy_obj))
-        except Exception:
-            pass
-
-    try:
-        print("[WARN] [COMPAT] Attached instance-level .step() to strategy", flush=True)
-    except Exception:
-        pass
-    return strategy_obj
-
-
-# ---- Compat helper to call strategy "step" safely ----
-def _safe_strategy_step(strategy_obj, *args, **kwargs):
-    """Call the appropriate stepping method on a strategy instance.
-    Tries .step(), then .run(), then .process(). Adds rich diagnostics to logs.
-    """
-    try:
-        cls = type(strategy_obj)
-        mod = getattr(cls, "__module__", "?")
-        file_hint = getattr(__import__(mod), "__file__", None) if isinstance(mod, str) and mod in globals() or mod in locals() else None
-        print(f"[DEBUG] [STRATEGY] Using {cls.__name__} from module={mod} file={file_hint}", flush=True)
-    except Exception:
-        pass
-
-    if hasattr(strategy_obj, "step"):
-        return strategy_obj.step(*args, **kwargs)
-    if hasattr(strategy_obj, "run"):
-        return strategy_obj.run(*args, **kwargs)
-    if hasattr(strategy_obj, "process"):
-        return strategy_obj.process(*args, **kwargs)
-    # As last resort, look for a single-callable method
-    for alt in ["iterate", "tick", "next", "__call__"]:
-        if hasattr(strategy_obj, alt) and callable(getattr(strategy_obj, alt)):
-            return getattr(strategy_obj, alt)(*args, **kwargs)
-    raise AttributeError(f"{type(strategy_obj).__name__} does not expose a step/run/process method")
-# Fixed build: ensures EMAGradientStrategy.step exists and is invoked by the runner.
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
+
+print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
+
 
 def _log_global(section: str, message: str, level: str = "INFO") -> None:
     """Formato padrão para logs fora das classes."""
@@ -2585,9 +2546,6 @@ def _assess_entry(self,
 # 📊 BACKTEST: EMA Gradiente com Máquina de Estados
 # =========================
 @dataclass
-
-
-
 class BacktestParams:
     # Indicadores
     ema_short: int = 7
@@ -3127,14 +3085,12 @@ if __name__ == "__main__":
                     xlsx_path = f"trade_log_{safe_suffix}.xlsx"
                     cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
                     logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
-                    strategy = EMAGradientStrategy(
-                        dex=dex_in,
+                    strategy = StrategyAdapter(EMAGradientStrategy(dex=dex_in,
                         symbol=asset.hl_symbol,
                         cfg=cfg,
                         logger=logger,
                         debug=True,
-                    )
-                    strategy = _ensure_strategy_step_instance(strategy)
+                    ))
                     asset_state[asset.name] = {"strategy": strategy, "logger": logger}
                 strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
 
@@ -3151,7 +3107,7 @@ if __name__ == "__main__":
                     pass
 
                 try:
-                    _safe_strategy_step(strategy, df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
+                    strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
                     price_seen = getattr(strategy, "_last_price_snapshot", None)
                     if price_seen is not None and math.isfinite(price_seen):
                         try:
@@ -3191,24 +3147,3 @@ try:
         EMAGradientStrategy.step = _shim_step
 except Exception:
     pass
-
-# ---- Ensure EMAGradientStrategy exposes .step even if an older build is imported ----
-try:
-    _EMAG = EMAGradientStrategy  # type: ignore[name-defined]
-    if not hasattr(_EMAG, "step"):
-        def _emag_step(self, *args, **kwargs):  # pragma: no cover
-            if hasattr(self, "run"):
-                return self.run(*args, **kwargs)
-            if hasattr(self, "process"):
-                return self.process(*args, **kwargs)
-            raise AttributeError("EMAGradientStrategy does not expose step/run/process")
-        setattr(_EMAG, "step", _emag_step)
-        print("[WARN] [COMPAT] Injected .step() into EMAGradientStrategy at runtime for compatibility.", flush=True)
-except Exception as _compat_err:
-    try:
-        print(f"[WARN] [COMPAT] Could not ensure .step on EMAGradientStrategy: {_compat_err}", flush=True)
-    except Exception:
-        pass
-
-
-
