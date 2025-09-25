@@ -417,6 +417,87 @@ def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: fl
         return {"tp": float(p_tp), "sl": float(p_sl_final)}
 
 
+# --- Early definition to avoid NameError when called during class methods ---
+def ensure_tpsl_for_position(dex, symbol, *, vault):
+    """
+    Garante TP (10%) e SL (5%) reduceOnly, considerando alavancagem.
+    Cancela ordens de saída divergentes e recria as corretas.
+    """
+    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+    if qty <= 0 or not entry or not side:
+        return {"created_stop": None, "created_take": None, "qty": qty, "lev": lev, "entry": entry}
+
+    targets = compute_tp_sl_leveraged(entry, side, lev, qty)
+    tp, sl = targets["tp"], targets["sl"]
+    exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
+
+    try:
+        open_ords = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
+    except Exception:
+        open_ords = []
+
+    has_stop = False
+    has_take = False
+    to_cancel = []
+    for o in open_ords:
+        try:
+            if (str(o.get("side") or "").lower()) != exit_side:
+                continue
+            info = o.get("info") or {}
+            if not (bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))):
+                continue
+            trig = o.get("triggerPrice") or (info.get("triggerPx") if isinstance(info, dict) else None)
+            sl_key = (info.get("stopLossPrice") if isinstance(info, dict) else None)
+            tp_key = (info.get("takeProfitPrice") if isinstance(info, dict) else None)
+            otype = (o.get("type") or info.get("type") or "").lower()
+
+            if (otype in ("stop", "") and (trig is not None or sl_key is not None)) and _approx(trig or sl_key, sl):
+                has_stop = True
+            elif (otype in ("stop", "") and (trig is not None or sl_key is not None)):
+                oid = o.get("id") or (o.get("info", {}).get("oid") if isinstance(o.get("info"), dict) else None)
+                if oid: to_cancel.append(oid)
+
+            if (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)) and _approx(trig or tp_key, tp):
+                has_take = True
+            elif (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)):
+                oid = o.get("id") or (o.get("info", {}).get("oid") if isinstance(o.get("info"), dict) else None)
+                if oid: to_cancel.append(oid)
+        except Exception:
+            continue
+
+    for cid in to_cancel:
+        try:
+            dex.cancel_order(cid, symbol)
+        except Exception:
+            pass
+
+    params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
+    created_stop = created_take = None
+
+    if not has_stop and qty > 0:
+        stop_params = dict(params_base)
+        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
+        try:
+            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
+        except Exception:
+            stop_params_fb = dict(params_base)
+            stop_params_fb.update({"triggerPrice": sl})
+            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
+
+    if not has_take and qty > 0:
+        take_params = dict(params_base)
+        take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
+        try:
+            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params)
+        except Exception:
+            take_params_fb = dict(params_base)
+            take_params_fb.update({"triggerPrice": tp})
+            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
+
+    return {"tp": tp, "sl": sl, "created_stop": created_stop, "created_take": created_take,
+            "qty": qty, "lev": lev, "entry": entry, "side": side}
+# --- End early definition ---
+
 
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
@@ -763,8 +844,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.05
-    take_pct: float = 0.10
+    stop_pct: float = 0.10
+    take_pct: float = 0.30
     usd_env: Optional[str] = None
 
 
