@@ -1,172 +1,3 @@
-# === HEADER HELPERS (do not move) ===
-print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
-
-# Helper must be defined BEFORE any class that uses it
-def _ensure_strategy_step_instance(strategy_obj):
-    """Ensure the given strategy instance has a .step() callable.
-    If missing, attach a bound method that delegates to common names (run/process/etc.).
-    """
-    # If already ok, return as is
-    for name in ("step", "run", "process"):
-        if callable(getattr(strategy_obj, name, None)):
-            return strategy_obj
-
-    # Attach a bound 'step' that delegates to alternatives
-    def _inst_step(self, *args, **kwargs):
-        for alt in ("run", "process", "iterate", "tick", "next", "__call__", "execute", "on_bar", "update"):
-            m = getattr(self, alt, None)
-            if callable(m):
-                try:
-                    return m(*args, **kwargs)
-                except TypeError:
-                    try:
-                        return m(*args)
-                    except Exception:
-                        pass
-        # graceful no-op
-        try:
-            print(f"[ERROR] [STRATEGY] {type(self).__name__} does not expose a step/run/process method", flush=True)
-        except Exception:
-            pass
-        return None
-
-    try:
-        import types
-        strategy_obj.step = types.MethodType(_inst_step, strategy_obj)  # bind to instance
-    except Exception:
-        try:
-            strategy_obj.step = _inst_step.__get__(strategy_obj, type(strategy_obj))
-        except Exception:
-            pass
-    try:
-        print("[WARN] [COMPAT] Attached instance-level .step() to strategy", flush=True)
-    except Exception:
-        pass
-    return strategy_obj
-
-def _safe_strategy_step(strategy_obj, *args, **kwargs):
-    """Call strategy .step or fallbacks. Never raises; logs and returns None on failure."""
-    try:
-        cls = type(strategy_obj)
-        mod = getattr(cls, "__module__", "?")
-        file_hint = None
-        try:
-            import sys, inspect
-            mod_obj = sys.modules.get(mod)
-            if mod_obj is not None:
-                try:
-                    file_hint = inspect.getsourcefile(mod_obj) or inspect.getfile(mod_obj)
-                except Exception:
-                    file_hint = getattr(mod_obj, "__file__", None)
-        except Exception:
-            pass
-        print(f"[DEBUG] [STRATEGY] Using {cls.__name__} from module={mod} file={file_hint}", flush=True)
-    except Exception:
-        pass
-
-    for name in ("step", "run", "process", "iterate", "tick", "next", "__call__", "execute", "on_bar", "update"):
-        meth = getattr(strategy_obj, name, None)
-        if callable(meth):
-            try:
-                return meth(*args, **kwargs)
-            except (TypeError, AttributeError):
-                try:
-                    return meth(*args)
-                except Exception:
-                    continue
-    print(f"[ERROR] [STRATEGY] {type(strategy_obj).__name__} does not expose a step/run/process method", flush=True)
-    return None
-
-# Adapter that ALWAYS exposes .step(); safe to use anywhere in code
-class StrategyAdapter:
-    def __init__(self, inner):
-        # Ensure the wrapped instance has a .step if possible
-        try:
-            inner = _ensure_strategy_step_instance(inner)
-        except Exception:
-            pass
-        self._inner = inner
-
-    def __getattr__(self, name):
-        # Proxy any unknown attribute to the wrapped strategy
-        return getattr(self._inner, name)
-
-    def step(self, *args, **kwargs):
-        # delegate to inner using safe helper
-        return _safe_strategy_step(self._inner, *args, **kwargs)
-
-# === END HEADER HELPERS ===
-# ---- Global exception hook (for Render) ----
-def _install_global_excepthook():
-    import sys, traceback
-    def _hook(exc_type, exc, tb):
-        try:
-            print(f"[FATAL] Uncaught: {exc_type.__name__}: {exc}", flush=True)
-            traceback.print_exception(exc_type, exc, tb)
-        except Exception:
-            pass
-    sys.excepthook = _hook
-
-_install_global_excepthook()
-
-
-def _ensure_strategy_step_instance(strategy_obj):
-    """Top-level stub to avoid NameError; real helper later may override this."""
-    return strategy_obj
-
-
-
-# ---- StrategyAdapter: guarantees .step() exists and delegates safely ----
-class StrategyAdapter:
-    def __init__(self, inner):
-        # Ensure the wrapped instance has a .step if possible
-        try:
-            inner = _ensure_strategy_step_instance(inner)
-        except Exception:
-            pass
-        self._inner = inner
-
-    def __getattr__(self, name):
-        # Proxy any unknown attribute to the wrapped strategy
-        return getattr(self._inner, name)
-
-    def step(self, *args, **kwargs):
-        # Prefer inner step-like methods
-        for name in ("step", "run", "process", "iterate", "tick", "next", "__call__"):
-            meth = getattr(self._inner, name, None)
-            if callable(meth):
-                try:
-                    return meth(*args, **kwargs)
-                except (TypeError, AttributeError):
-                    # If signature mismatch, try calling with fewer kwargs (common for legacy)
-                    try:
-                        return meth(*args)
-                    except Exception:
-                        pass
-        # Minimal graceful fallback: update last price snapshot so higher layers can log
-        try:
-            df = args[0] if args else None
-            if df is not None:
-                col = "close" if "close" in df.columns else ("valor_fechamento" if "valor_fechamento" in df.columns else None)
-                if col:
-                    val = df[col].iloc[-1]
-                    try:
-                        val = float(val)
-                    except Exception:
-                        pass
-                    setattr(self._inner, "_last_price_snapshot", val)
-        except Exception:
-            pass
-        try:
-            # Log once per asset loop if available
-            if hasattr(self._inner, "_log"):
-                self._inner._log("Adapter fallback: estratégia sem step/run/process — executando no-op.", level="WARN")
-            else:
-                print("[WARN] [ADAPTER] Strategy lacks step/run/process; performed no-op.", flush=True)
-        except Exception:
-            pass
-        return None
-
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
@@ -3130,20 +2961,142 @@ def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = N
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
 
-
 if __name__ == "__main__":
-    import time, traceback
-    try:
-        # (Re)build base DF and DEX as your original code expects
-        print("[INFO] [MAIN] Iniciando boot...", flush=True)
-        # As your original main likely did, we call build_df for a seed symbol (BTC) to warm caches
-        base_df = build_df(None, "BTCUSDT", tf="15m", alvo=20)
-        dex = DEX(timeout_ms=5000)
-        print(f"[INFO] [DEX] Inicializado | LIVE_TRADING={1 if (os.getenv('LIVE_TRADING','0') in ('1','true','True')) else 0} | TIMEOUT_MS=5000", flush=True)
-        _ = dex.fetch_balance(); print("[INFO] [DEX] fetch_balance() OK", flush=True)
-        executar_estrategia(base_df, dex, None)
-    except Exception as e:
-        print(f"[FATAL] [MAIN] {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
-        time.sleep(5)
+    # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
+    EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
+    def executar_estrategia(
+        df_in: pd.DataFrame,
+        dex_in,
+        trade_logger_in: TradeLogger | None,
+        usd_to_spend: float = 1,
+        loop: bool = True,
+        sleep_seconds: int = 60,
+    ):
+        """Executa a estratégia sequencialmente para cada ativo configurado."""
+        _log_global(
+            "ENGINE",
+            f"LIVE_TRADING={os.getenv('LIVE_TRADING', '0')} | DEX_TIMEOUT_MS={os.getenv('DEX_TIMEOUT_MS', '5000')} | assets={len(ASSET_SETUPS)}",
+        )
+
+        if trade_logger_in is not None:
+            _log_global("ENGINE", "Logger externo fornecido será ignorado no modo multiativo.", level="DEBUG")
+
+        asset_state: Dict[str, Dict[str, Any]] = {}
+        default_cols = df_in.columns if isinstance(df_in, pd.DataFrame) else pd.Index([])
+
+        iter_count = 0
+        while True:
+            iter_count += 1
+            try:
+                live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+                _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)}")
+            except Exception:
+                pass
+
+            for asset in ASSET_SETUPS:
+                _log_global("ASSET", f"Processando {asset.name}")
+                try:
+                    df_asset = build_df(symbol=asset.data_symbol, tf="15m", target_candles=20)
+                except MarketDataUnavailable as e:
+                    _log_global(
+                        "ASSET",
+                        f"Sem dados recentes para {asset.name} ({asset.data_symbol}) {INTERVAL}: {e}",
+                        level="WARN",
+                    )
+                    continue
+                except Exception as e:
+                    _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
+                    continue
+
+                try:
+                    df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
+                except MarketDataUnavailable:
+                    _log_global(
+                        "ASSET",
+                        f"Sem dados 1h para {asset.name} ({asset.data_symbol}); seguindo sem rsi_aux.",
+                        level="WARN",
+                    )
+                    df_asset_hour = pd.DataFrame()
+                except Exception as e:
+                    _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
+                    df_asset_hour = pd.DataFrame()
+
+                if not isinstance(df_asset, pd.DataFrame) or df_asset.empty:
+                    _log_global("ASSET", f"DataFrame vazio para {asset.name}; pulando.", level="WARN")
+                    continue
+
+                state = asset_state.get(asset.name)
+                if state is None:
+                    cfg = GradientConfig()
+                    cfg.LEVERAGE = asset.leverage
+                    cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
+                    cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
+                    safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
+                    csv_path = f"trade_log_{safe_suffix}.csv"
+                    xlsx_path = f"trade_log_{safe_suffix}.xlsx"
+                    cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
+                    logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
+                    strategy = EMAGradientStrategy(
+                        dex=dex_in,
+                        symbol=asset.hl_symbol,
+                        cfg=cfg,
+                        logger=logger,
+                        debug=True,
+                    )
+                    asset_state[asset.name] = {"strategy": strategy, "logger": logger}
+                strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
+
+                usd_asset = usd_to_spend
+                try:
+                    global_env = os.getenv("USD_PER_TRADE")
+                    if global_env:
+                        usd_asset = float(global_env)
+                    if asset.usd_env:
+                        specific_env = os.getenv(asset.usd_env)
+                        if specific_env:
+                            usd_asset = float(specific_env)
+                except Exception:
+                    pass
+
+                try:
+                    strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
+                    price_seen = getattr(strategy, "_last_price_snapshot", None)
+                    if price_seen is not None and math.isfinite(price_seen):
+                        try:
+                            strategy._log(f"Preço atual: {price_seen:.6f}", level="INFO")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    _log_global("ASSET", f"Erro executando {asset.name}: {type(e).__name__}: {e}", level="ERROR")
+                _time.sleep(0.25)
+
+            if not loop:
+                break
+
+            try:
+                env_sleep = os.getenv("SLEEP_SECONDS")
+                if env_sleep:
+                    sleep_seconds = int(env_sleep)
+            except Exception:
+                pass
+            _time.sleep(max(1, int(sleep_seconds)))
+
+    base_df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    executar_estrategia(base_df, dex, None)
+
+# --- Compat shim: garante que EMAGradientStrategy tenha método `step` ---
+try:
+    _cls = EMAGradientStrategy
+    if not hasattr(_cls, "step"):
+        def _shim_step(self, df: pd.DataFrame, usd_to_spend: float, rsi_df_hourly: Optional[pd.DataFrame] = None):
+            if hasattr(self, "run"):
+                return self.run(df, usd_to_spend, rsi_df_hourly)
+            if hasattr(self, "execute"):
+                return self.execute(df, usd_to_spend, rsi_df_hourly)
+            if hasattr(self, "tick"):
+                return self.tick(df, usd_to_spend, rsi_df_hourly)
+            raise AttributeError("EMAGradientStrategy não possui método step/aliases")
+        EMAGradientStrategy.step = _shim_step
+except Exception:
+    pass
