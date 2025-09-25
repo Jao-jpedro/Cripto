@@ -905,7 +905,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.05
-    take_pct: float = 0.10
+    take_pct: float = None
     usd_env: Optional[str] = None
 
 
