@@ -1,4 +1,4 @@
-
+print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 
 # ---- Compat helper to call strategy "step" safely ----
 def _safe_strategy_step(strategy_obj, *args, **kwargs):
@@ -30,9 +30,8 @@ def _safe_strategy_step(strategy_obj, *args, **kwargs):
         if callable(meth):
             return meth(*args, **kwargs)
 
-    raise AttributeError(f"{type(strategy_obj).__name__} does not expose a step/run/process method")
-
-
+    print(f"[ERROR] [STRATEGY] {type(strategy_obj).__name__} does not expose a step/run/process method", flush=True)
+    return None
 # ---- Instance-level compat: ensure the created strategy object has .step() ----
 def _ensure_strategy_step_instance(strategy_obj):
     """Attach a 'step' method to the instance if the class doesn't expose one."""
@@ -45,7 +44,8 @@ def _ensure_strategy_step_instance(strategy_obj):
             m = getattr(self, name, None)
             if callable(m):
                 return m(*args, **kwargs)
-        raise AttributeError(f"{type(self).__name__} does not expose a step/run/process method")
+        print(f"[ERROR] [STRATEGY] {type(self).__name__} does not expose a step/run/process method", flush=True)
+        return None
 
     try:
         import types
@@ -90,7 +90,6 @@ def _safe_strategy_step(strategy_obj, *args, **kwargs):
 # Fixed build: ensures EMAGradientStrategy.step exists and is invoked by the runner.
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
-print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 def _log_global(section: str, message: str, level: str = "INFO") -> None:
     """Formato padrão para logs fora das classes."""
     print(f"[{level}] [{section}] {message}", flush=True)
