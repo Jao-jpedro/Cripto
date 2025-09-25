@@ -1,49 +1,87 @@
 
-# ==== Compatibility helper: guarantee strategy.step exists ====
+# ==== Compatibility helper: robust guarantee of strategy.step ====
 def _ensure_step_method(strategy_obj):
-    """Return a strategy object that definitely has a .step(...) method.
-    If it's missing, attach a wrapper pointing to an equivalent method (run/tick/update/execute/executar_estrategia).
+    """Ensure `strategy_obj.step(df, usd_to_spend=None, rsi_df_hourly=None)` exists.
+    If missing, adapt from the best available callable and log what happened.
     """
-    # If .step already exists, nothing to do
-    if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
-        return strategy_obj
-
-    # Try known alternatives in preference order
-    alt_names = ["executar_estrategia", "run", "tick", "update", "execute"]
-    target = None
-    for name in alt_names:
-        if hasattr(strategy_obj, name) and callable(getattr(strategy_obj, name)):
-            target = name
-            break
-
-    if target is None:
-        # As a last resort, create a no-op to avoid crashes but log loudly
-        def _noop_step(self, df, usd_to_spend=None, rsi_df_hourly=None):
-            print("[ERROR] [ENGINE] Strategy has no step-like method. Skipping.", flush=True)
-            return None
-        try:
-            import types
-            strategy_obj.step = types.MethodType(_noop_step, strategy_obj)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        return strategy_obj
-
-    # Build a wrapper with compatible signature
-    def _compat_step(self, df, usd_to_spend=None, rsi_df_hourly=None):
-        try:
-            return getattr(self, target)(df, usd_to_spend=usd_to_spend, rsi_df_hourly=rsi_df_hourly)
-        except TypeError:
-            # Fallback: try positional only for legacy signatures
-            return getattr(self, target)(df)
-
     try:
+        # 1) Native step?
+        if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
+            return strategy_obj
+
+        # 2) Known common alternatives (ordered by likelihood)
+        candidates = [
+            "executar_estrategia", "execute_estrategia", "executa_estrategia",
+            "run", "tick", "update", "execute", "process", "apply", "__call__",
+            "loop", "work", "handle", "on_bar", "on_candle"
+        ]
+        available = [name for name in candidates if hasattr(strategy_obj, name) and callable(getattr(strategy_obj, name))]
+
+        # 3) If none of the known names, try fuzzy search over all callables
+        if not available:
+            def _is_callable_method(name):
+                if name.startswith("_"):
+                    return False
+                try:
+                    attr = getattr(strategy_obj, name)
+                except Exception:
+                    return False
+                return callable(attr)
+            all_methods = [n for n in dir(strategy_obj) if _is_callable_method(n)]
+            # prioritize methods containing these fragments
+            priorities = ["step", "estrateg", "strategy", "run", "tick", "exec", "update", "process", "apply", "bar", "candle"]
+            scored = sorted(all_methods, key=lambda n: min([n.find(p) if p in n else 999 for p in priorities]))
+            available = scored[:1] if scored else []
+
+        # 4) Choose the first viable target and adapt by signature
+        if available:
+            target = available[0]
+            fn = getattr(strategy_obj, target)
+
+            import inspect, types
+            try:
+                sig = inspect.signature(fn)
+            except Exception:
+                sig = None
+
+            def _compat_step(self, df, usd_to_spend=None, rsi_df_hourly=None):
+                try:
+                    if sig:
+                        params = list(sig.parameters.keys())
+                        # Try kwargs if they exist in target
+                        kwargs = {}
+                        if "usd_to_spend" in params:
+                            kwargs["usd_to_spend"] = usd_to_spend
+                        if "rsi_df_hourly" in params:
+                            kwargs["rsi_df_hourly"] = rsi_df_hourly
+                        if kwargs:
+                            return getattr(self, target)(df, **kwargs)
+                    # Positional fallback
+                    return getattr(self, target)(df)
+                except TypeError:
+                    # Last resort: call without df if target expects none
+                    return getattr(self, target)()
+
+            strategy_obj.step = types.MethodType(_compat_step, strategy_obj)  # type: ignore[attr-defined]
+            print(f"[INFO] [ENGINE] step adapted from '{target}' on {type(strategy_obj).__name__}.", flush=True)
+            return strategy_obj
+
+        # 5) Nothing to adapt — log methods to help debugging and install no-op to avoid crashes
+        try:
+            methods = [n for n in dir(strategy_obj) if callable(getattr(strategy_obj, n, None)) and not n.startswith("_")]
+        except Exception:
+            methods = []
+        print(f"[ERROR] [ENGINE] No step-like method found in {type(strategy_obj).__name__}. Public methods: {methods}", flush=True)
+
+        def _noop_step(self, df, usd_to_spend=None, rsi_df_hourly=None):
+            return None
         import types
-        strategy_obj.step = types.MethodType(_compat_step, strategy_obj)  # type: ignore[attr-defined]
-        print(f"[INFO] [ENGINE] Attached .step wrapper using '{target}' on {type(strategy_obj).__name__}.", flush=True)
+        strategy_obj.step = types.MethodType(_noop_step, strategy_obj)  # type: ignore[attr-defined]
+        return strategy_obj
     except Exception as e:
-        print(f"[WARN] [ENGINE] Failed to attach .step wrapper: {type(e).__name__}: {e}", flush=True)
-    return strategy_obj
-# ==== End compatibility helper ====
+        print(f"[ERROR] [ENGINE] _ensure_step_method failed: {type(e).__name__}: {e}", flush=True)
+        return strategy_obj
+# ==== End helper ====
 
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
