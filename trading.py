@@ -22,6 +22,7 @@ from typing import Optional, Dict, Any, List, Tuple
 import numpy as np
 import pandas as pd
 import ccxt  # type: ignore
+from ccxt.base import errors as ccxt_errors
 import requests  # para build_df de debug
 
 # Aliases/constantes globais exigidos pelo seu arquivo original
@@ -402,30 +403,85 @@ def build_df(symbol: str, interval: str = "15m", start: Optional[datetime] = Non
 # Main
 # ======================================================================
 
-MAIN_ACCOUNT_ADDRESS = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
 
-def main():
-    log("INFO", "WALLET", f"Operando SOMENTE na carteira principal: {MAIN_ACCOUNT_ADDRESS}")
-
-    ex_id = os.getenv("EXCHANGE_ID", "binance")
+def _create_exchange(ex_id: str) -> Any:
+    """Create ccxt exchange with sane defaults and binance-type options."""
     api_key = os.getenv("HL_API_KEY") or os.getenv("API_KEY") or ""
     secret  = os.getenv("HL_API_SECRET") or os.getenv("API_SECRET") or ""
     password = os.getenv("HL_API_PASSWORD") or os.getenv("API_PASSWORD") or None
-
-    # Init exchange
-    if not hasattr(ccxt, ex_id):
-        raise RuntimeError(f'Exchange id "{ex_id}" não encontrado no ccxt.')
-    dex = getattr(ccxt, ex_id)({
+    timeout_ms = _env_int("CCXT_TIMEOUT_MS", 10000)
+    opts = {}
+    if ex_id.lower().startswith("binance"):
+        # spot | future | delivery
+        btype = os.getenv("BINANCE_TYPE", "future")
+        opts["defaultType"] = btype
+    ex = getattr(ccxt, ex_id)({
         "apiKey": api_key,
         "secret": secret,
         "password": password,
         "enableRateLimit": True,
-        "timeout": _env_int("CCXT_TIMEOUT_MS", 10000),
-        "options": {},
+        "timeout": timeout_ms,
+        "options": opts,
     })
-    log("INFO", "BOOT", f"ccxt.{ex_id} criado. Carregando mercados...")
-    dex.load_markets()
-    log("INFO", "BOOT", f"Mercados carregados: {len(dex.markets)}")
+    # Optional HTTPS proxy for ban mitigation
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if proxy:
+        try:
+            ex.aiohttp_proxy = proxy  # some transports read this
+            ex.proxies = {"http": proxy, "https": proxy}
+        except Exception:
+            pass
+    return ex
+
+def _parse_ban_until_ms(msg: str) -> int | None:
+    try:
+        import re
+        m = re.search(r"banned until (\d{13})", msg)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+MAIN_ACCOUNT_ADDRESS = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
+
+
+def main():
+    log("INFO", "WALLET", f"Operando SOMENTE na carteira principal: {MAIN_ACCOUNT_ADDRESS}")
+
+    preferred = os.getenv("EXCHANGE_ID", "binance")
+    fallbacks = _get_env_list("EXCHANGE_FALLBACKS", "hyperliquid,binanceusdm,binance")
+    chain = [preferred] + [x for x in fallbacks if x != preferred]
+
+    dex = None
+    ex_id_ok = None
+    last_err = None
+
+    for ex_id in chain:
+        if not hasattr(ccxt, ex_id):
+            log("WARN", "BOOT", f"Exchange {ex_id} não disponível no ccxt, tentando próximo...")
+            continue
+        try:
+            dex = _create_exchange(ex_id)
+            log("INFO", "BOOT", f"ccxt.{ex_id} criado. Carregando mercados...")
+            dex.load_markets()
+            log("INFO", "BOOT", f"Mercados carregados: {len(dex.markets)}")
+            ex_id_ok = ex_id
+            break
+        except ccxt_errors.DDoSProtection as e:
+            msg = str(e)
+            ban_until_ms = _parse_ban_until_ms(msg) or 0
+            until = datetime.fromtimestamp(ban_until_ms/1000, tz=UTC).isoformat() if ban_until_ms else "desconhecido"
+            log("ERROR", "BOOT", f"{ex_id} bloqueou o IP (DDoSProtection). Ban até: {until}. Tentando fallback...")
+            last_err = e
+            continue
+        except Exception as e:
+            log("ERROR", "BOOT", f"Falha ao inicializar {ex_id}: {type(e).__name__}: {e}")
+            last_err = e
+            continue
+
+    if dex is None:
+        raise RuntimeError(f"Não foi possível inicializar exchanges {[chain]}: {last_err}")
+
+    cfg = Config()
 
     cfg = Config()
 
