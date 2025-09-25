@@ -44,12 +44,10 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, vault, threshold: float = -
 
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
-
 # ====== Wallet Config (main account only) ======
 MAIN_ACCOUNT_ADDRESS = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
 print(f"[WALLET] Operando SOMENTE na carteira principal: {MAIN_ACCOUNT_ADDRESS}", flush=True)
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
-
 
 def _log_global(section: str, message: str, level: str = "INFO") -> None:
     """Formato padrão para logs fora das classes."""
@@ -97,18 +95,6 @@ _warnings.filterwarnings(
     category=Warning,
     module=r"urllib3.*",
 )
-
-def compute_tp_sl(entry_px, side):
-    """Calcula TP=10% e SL=5% por preço (fixos).""" 
-    TAKE_PROFIT_PCT = 0.10
-    STOP_LOSS_PCT = 0.05
-    if side.upper() in ("LONG", "BUY"):
-        tp = entry_px * (1 + TAKE_PROFIT_PCT)
-        sl = entry_px * (1 - STOP_LOSS_PCT)
-    else:
-        tp = entry_px * (1 - TAKE_PROFIT_PCT)
-        sl = entry_px * (1 + STOP_LOSS_PCT)
-    return {"tp": float(tp), "sl": float(sl)}
 
 import math
 from datetime import datetime, timedelta, timezone
@@ -444,7 +430,6 @@ if isinstance(df, pd.DataFrame) and df.empty:
         _log_global("DATA", f"build_df falhou: {_e}", level="WARN")
         df = pd.DataFrame()
 
-
 # COMMAND ----------
 
 """ Bloco de métricas intradiárias (legado) removido. """
@@ -456,7 +441,6 @@ DEX (Hyperliquid via ccxt)
 """
 import ccxt  # type: ignore
 
-
 def guard_close_all(dex, symbol, current_px: float, *, vault) -> bool:
     try:
         if close_if_unrealized_pnl_breaches(dex, symbol, vault=vault, threshold=-0.10):
@@ -464,94 +448,8 @@ def guard_close_all(dex, symbol, current_px: float, *, vault) -> bool:
     except Exception:
         pass
     return False
-def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: float):
-    """
-    Calcula TP=+10% e SL=-5% de retorno, convertendo para PREÇO pela alavancagem.
-    Aplica CAP de perda absoluta de $0.05 => |entry - SL| * qty <= 0.05.
-    """
-    entry = float(entry_px)
-    L = max(float(leverage or 1.0), 1.0)
-    q = max(float(qty or 0.0), 1e-12)
-
-    s = (side or "").lower()
-    if s in ("long", "buy"):
-        # alvo +10% => delta_preço = 0.10 / L
-        p_tp = entry * (1.0 + 0.10 / L)
-        # alvo -5% => delta_preço = 0.05 / L
-        p_sl = entry * (1.0 - 0.05 / L)
-        # CAP $0.05
-        p_sl_cap = entry - (0.05 / q)
-        p_sl_final = max(p_sl, p_sl_cap)
-        return {"tp": float(p_tp), "sl": float(p_sl_final)}
-    else:
-        # SHORT
-        p_tp = entry / (1.0 + 0.10 / L)
-        p_sl = entry / (1.0 - 0.05 / L)
-        p_sl_cap = entry + (0.05 / q)
-        p_sl_final = min(p_sl, p_sl_cap)
-        return {"tp": float(p_tp), "sl": float(p_sl_final)}
 
 
-
-# ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
-# de ambiente em produção para evitar exposição acidental.
-dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
-# Lê credenciais da env (recomendado) com fallback seguro para dev local
-_wallet_env = os.getenv("WALLET_ADDRESS")
-_priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-dex = ccxt.hyperliquid({
-    "walletAddress": _wallet_env or "0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
-    "privateKey": _priv_env or "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
-    "enableRateLimit": True,
-    "timeout": dex_timeout,
-    "options": {"timeout": dex_timeout} })
-
-
-# === Force all HL calls to use subaccount vault ===
-try:
-    dex.options = dex.options or {}
-    
-except Exception:
-    pass
-
-def _with_vault(params):
-    p = dict(params or {})
-    
-    return p
-
-if hasattr(dex, "create_order"):
-    _orig_create_order = dex.create_order
-    def _create_order_vault(symbol, type, side, amount, price=None, params=None):
-        return _orig_create_order(symbol, type, side, amount, price, _with_vault(params))
-    dex.create_order = _create_order_vault
-
-def _patch_method(name):
-    if hasattr(dex, name):
-        orig = getattr(dex, name)
-        def _fn(*args, **kwargs):
-            if args and isinstance(args[-1], dict):
-                args = (*args[:-1], _with_vault(args[-1]))
-            else:
-                kwargs["params"] = _with_vault(kwargs.get("params"))
-            return orig(*args, **kwargs)
-        setattr(dex, name, _fn)
-
-for _meth in ("cancel_order", "cancel_orders", "fetch_open_orders", "fetch_orders", "fetch_positions",
-              "set_leverage", "set_margin_mode", "set_position_mode"):
-    _patch_method(_meth)
-# Segundo DEX (racional inverso) com credenciais distintas
-if dex:
-    _log_global("DEX", f"Inicializado | LIVE_TRADING={os.getenv('LIVE_TRADING','0')} | TIMEOUT_MS={dex_timeout}")
-    live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-    if live:
-        _log_global("DEX", "fetch_balance() iniciando…")
-        try:
-            dex.fetch_balance()
-            _log_global("DEX", "fetch_balance() OK")
-        except Exception as e:
-            _log_global("DEX", f"Falha ao buscar saldo: {type(e).__name__}: {e}", level="WARN")
-    else:
-        _log_global("DEX", "LIVE_TRADING=0 ⇒ ignorando fetch_balance()", level="DEBUG")
 
 # COMMAND ----------
 # =========================
@@ -771,9 +669,7 @@ def _hl_get_account_value(wallet: str) -> float:
 
 # COMMAND ----------
 
-
 # COMMAND ----------
-
 
 # COMMAND ----------
 
@@ -808,8 +704,8 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.05  # 10% da margem como stop
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.10  # 30% da margem como alvo
+    STOP_LOSS_CAPITAL_PCT: float = 0.0  # desativado  # 10% da margem como stop
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.0  # desativado  # 30% da margem como alvo
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -818,15 +714,14 @@ class GradientConfig:
     ANTI_SPAM_SECS: int     = 3
     MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
 
-    # Stops/TP
+    # Stops (apenas trailing ROI ativo; TP desativado)
     STOP_ATR_MULT: float    = 0.0         # desativado (uso por % da margem)
-    TAKEPROFIT_ATR_MULT: float = 0.0      # desativado
+    TAKEPROFIT_ATR_MULT: float = 0.0  # legacy desativado (sem efeito)
     TRAILING_ATR_MULT: float   = 0.0      # desativado
 
     # Breakeven trailing legado (mantido opcionalmente)
     BE_TRIGGER_PCT: float   = 0.0
     BE_OFFSET_PCT: float    = 0.0
-
 
 @dataclass
 class AssetSetup:
@@ -834,10 +729,7 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.05
-    take_pct: float = 0.10
     usd_env: Optional[str] = None
-
 
 ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("BTC-USD", "BTCUSDT", "BTC/USDC:USDC", 40, usd_env="USD_PER_TRADE_BTC"),
@@ -862,7 +754,6 @@ ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("LTC-USD", "LTCUSDT", "LTC/USDC:USDC", 10, usd_env="USD_PER_TRADE_LTC"),
     AssetSetup("NEAR-USD", "NEARUSDT", "NEAR/USDC:USDC", 10, usd_env="USD_PER_TRADE_NEAR"),
 ]
-
 
 class EMAGradientStrategy:
     def __init__(self, dex, symbol: str, cfg: GradientConfig = GradientConfig(), logger: "TradeLogger" = None, debug: bool = True):
@@ -901,27 +792,14 @@ class EMAGradientStrategy:
 
         # Controle das ordens de proteção
         self._last_stop_order_id: Optional[str] = None
-        self._last_take_order_id: Optional[str] = None
 
     def _log(self, message: str, level: str = "INFO") -> None:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
         print(f"[{level}] [{prefix}] {message}", flush=True)
 
     def _protection_prices(self, entry_price: float, side: str) -> Tuple[float, float]:
-        if entry_price <= 0:
-            raise ValueError("entry_price deve ser positivo")
-        norm_side = self._norm_side(side)
-        if norm_side not in ("buy", "sell"):
-            raise ValueError("side inválido para proteção")
-        risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
-        reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
-        if norm_side == "buy":
-            stop_px = entry_price * (1.0 - risk_ratio)
-            take_px = entry_price * (1.0 + reward_ratio)
-        else:
-            stop_px = entry_price * (1.0 + risk_ratio)
-            take_px = entry_price * (1.0 - reward_ratio)
-        return stop_px, take_px
+        """Legacy (TP/SL) desativado: mantenho stub para compatibilidade de chamada se sobrar algum uso interno."""
+        return 0.0, 0.0
 
 
     # ---------- config → params (reuso dos cálculos do backtest) ----------
@@ -941,7 +819,6 @@ class EMAGradientStrategy:
                 cooldown_bars=self.cfg.COOLDOWN_BARS,
                 post_cooldown_confirm_bars=self.cfg.POST_COOLDOWN_CONFIRM,
                 stop_atr_mult=self.cfg.STOP_ATR_MULT,
-                takeprofit_atr_mult=(self.cfg.TAKEPROFIT_ATR_MULT or None),
                 trailing_atr_mult=(self.cfg.TRAILING_ATR_MULT or None),
             )
         except Exception:
@@ -1279,7 +1156,6 @@ class EMAGradientStrategy:
             return []
         return self._local_events[-n:]
 
-
     def clear_local_log(self):
         """Zera o buffer local."""
         n = len(self._local_events)
@@ -1612,110 +1488,6 @@ class EMAGradientStrategy:
                 self._log(f"Falha ao cancelar ordens de proteção remanescentes: {e}", level="WARN")
 
     # ---------- stop reduceOnly ----------
-    def _place_stop(self, side: str, amount: float, stop_price: float,
-                    df_for_log: Optional[pd.DataFrame] = None,
-                    existing_orders: Optional[List[Dict[str, Any]]] = None):
-        amt = self._round_amount(amount)
-        px  = float(stop_price)
-        # Apenas ordem de gatilho (stop), nunca market
-        params = {
-            "reduceOnly": True,
-            "triggerPrice": px,
-            "stopLossPrice": px,
-            "trigger": "mark" }
-        if self.debug:
-            self._log(f"Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
-        if existing_orders is None:
-            existing = self._find_matching_protection("stop", side, px)
-        else:
-            existing = self._find_matching_protection_in_orders("stop", side, px, existing_orders)
-        if existing is not None:
-            self._last_stop_order_id = self._extract_order_id(existing)
-            if self.debug:
-                self._log(
-                    f"Stop existente reutilizado id={self._last_stop_order_id} price≈{px:.6f}",
-                    level="DEBUG",
-                )
-            return existing
-        try:
-            # Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)
-        except Exception as e:
-            msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
-            text = str(e).lower()
-            if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
-                self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
-                return None
-            self._log(msg, level="ERROR")
-            raise
-
-        # Diagnóstico do stop criado
-        try:
-            info = ret if isinstance(ret, dict) else {}
-            oid = info.get("id") or info.get("orderId") or (info.get("info") or {}).get("oid")
-            typ = info.get("type") or (info.get("info") or {}).get("type")
-            inf = info.get("info") or {}
-            ro = inf.get("reduceOnly") if isinstance(inf, dict) else None
-            sl = inf.get("stopLossPrice") if isinstance(inf, dict) else None
-            tp = inf.get("triggerPrice") if isinstance(inf, dict) else None
-            self._log(f"STOP criado id={oid} type={typ} reduceOnly={ro} stopLoss={sl} trigger={tp}", level="DEBUG")
-            self._last_stop_order_id = str(oid) if oid else None
-            # Logger opcional
-            try:
-                self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return ret
-
-    def _place_take_profit(self, side: str, amount: float, target_price: float,
-                           df_for_log: Optional[pd.DataFrame] = None,
-                           existing_orders: Optional[List[Dict[str, Any]]] = None):
-        amt = self._round_amount(amount)
-        px = float(target_price)
-        params = {"reduceOnly": True}
-        if self.debug:
-            self._log(f"Criando TAKE PROFIT {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
-        if existing_orders is None:
-            existing = self._find_matching_protection("take", side, px)
-        else:
-            existing = self._find_matching_protection_in_orders("take", side, px, existing_orders)
-        if existing is not None:
-            self._last_take_order_id = self._extract_order_id(existing)
-            if self.debug:
-                self._log(
-                    f"Take profit existente reutilizado id={self._last_take_order_id} price≈{px:.6f}",
-                    level="DEBUG",
-                )
-            return existing
-        try:
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
-        except Exception as e:
-            msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
-            text = str(e).lower()
-            if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
-                self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
-                return None
-            self._log(msg, level="ERROR")
-            raise
-
-        try:
-            info = ret if isinstance(ret, dict) else {}
-            oid = self._extract_order_id(info)
-            typ = info.get("type") or (info.get("info") or {}).get("type")
-            self._log(f"Take profit criado id={oid} price={px}", level="DEBUG")
-            self._last_take_order_id = oid
-            try:
-                self._safe_log("take_profit_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=oid)
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return ret
-
-    
-    
     def _upsert_trailing_stop(self, side: str, qty: float, stop_px: float) -> bool:
         """
         Coloca/atualiza UMA ordem de stop reduceOnly para trailing ROI, movendo apenas a favor:
@@ -1914,7 +1686,6 @@ class EMAGradientStrategy:
             return False
 
     def _ensure_position_protections(self, pos: Dict[str, Any], df_for_log: Optional[pd.DataFrame] = None):
-        """Gerencia apenas trailing ROI de 10% e hard stop de -$0.10. (TP/SL removidos)"""
         try:
             closed = self._manage_trailing_roi_10pct(pos)
             if closed:
@@ -1953,7 +1724,6 @@ class EMAGradientStrategy:
             level="INFO",
         )
         ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
-        _tpsl = ensure_tpsl_for_position(self.dex, self.symbol, vault=HL_SUBACCOUNT_VAULT)
         try:
             _px_now = self.dex.fetch_ticker(self.symbol).get("last")
             if _px_now:
@@ -1967,11 +1737,7 @@ class EMAGradientStrategy:
                     ((ordem_entrada.get("info") or {}).get("filled") or {}).get("avgPx")
                 )
             px_ref = float(avg_px) if avg_px else float(price)
-            tpsl = _place_tp_sl_orders_idempotent(self.dex, self.symbol, side, px_ref, vault=HL_SUBACCOUNT_VAULT)
-            self._log(f"TP/SL criados | TP={tpsl['tp']:.6f} SL={tpsl['sl']:.6f}", level="DEBUG");
-            guard_close_all(self.dex, self.symbol, float(self._preco_atual()), vault=HL_SUBACCOUNT_VAULT)
         except Exception as e:
-            self._log(f"Falha ao criar TP/SL: {type(e).__name__}: {e}", level="WARN")
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
 
         oid = None
@@ -2050,8 +1816,6 @@ class EMAGradientStrategy:
             )
         except Exception:
             pass
-
-        self._last_stop_order_id = None
         self._last_take_order_id = None
 
         norm_side = self._norm_side(side)
@@ -2061,16 +1825,11 @@ class EMAGradientStrategy:
 
         if self.debug:
             self._log(
-                f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) "
-                f"take={tp_price:.6f} (+{self.cfg.TAKE_PROFIT_CAPITAL_PCT*100:.1f}% margem)",
                 level="DEBUG",
             )
 
         ordem_stop = self._place_stop(sl_side, fill_amount, sl_price, df_for_log=df_for_log)
-        self._last_stop_order_id = self._extract_order_id(ordem_stop)
 
-        ordem_take = self._place_take_profit(tp_side, fill_amount, tp_price, df_for_log=df_for_log)
-        self._last_take_order_id = self._extract_order_id(ordem_take)
 
         self._safe_log(
             "stop_inicial", df_for_log,
@@ -2080,7 +1839,6 @@ class EMAGradientStrategy:
         )
 
         self._safe_log(
-            "take_profit_inicial", df_for_log,
             tipo=("long" if norm_side == "buy" else "short"),
             exec_price=tp_price,
             exec_amount=amount
@@ -2342,7 +2100,6 @@ class EMAGradientStrategy:
             # aplica cooldown por barras para evitar reversão imediata
             self._marcar_cooldown_barras(df)
             self._last_pos_side = None
-            self._last_stop_order_id = None
             self._last_take_order_id = None
 
             # Notificação de fechamento externo (provável stop)
@@ -2620,7 +2377,6 @@ class EMAGradientStrategy:
             self._last_pos_side = None
             return
 
-
 # COMMAND ----------
 
 # =========================
@@ -2649,9 +2405,8 @@ class BacktestParams:
 
     # Saídas
     stop_atr_mult: float = 1.5
-    takeprofit_atr_mult: Optional[float] = None  # ex.: 2.0; None desativa
+    takeprofit_atr_mult: Optional[float] = None  # (legacy-off, sem uso)
     trailing_atr_mult: Optional[float] = None    # ex.: 1.0; None desativa
-
 
 def _ensure_base_cols(df: pd.DataFrame) -> pd.DataFrame:
     if "data" in df.columns:
@@ -2674,7 +2429,6 @@ def _ensure_base_cols(df: pd.DataFrame) -> pd.DataFrame:
             df = df.copy()
             df["volume"] = pd.to_numeric(df.get("volume", 0), errors="coerce").fillna(0)
     return df
-
 
 def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
     df = _ensure_base_cols(df)
@@ -2722,7 +2476,6 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
     )
     return out
 
-
 def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     reasons = []
     conds = []
@@ -2744,7 +2497,6 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     ok = all(conds)
     return ok, "; ".join([r for r, c in zip(reasons, conds) if c]) if ok else "; ".join([r for r, c in zip(reasons, conds) if not c])
 
-
 def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     reasons = []
     conds = []
@@ -2761,11 +2513,9 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     ok = all(conds)
     return ok, "; ".join([r for r, c in zip(reasons, conds) if c]) if ok else "; ".join([r for r, c in zip(reasons, conds) if not c])
 
-
 def _no_trade_zone(row, p: BacktestParams) -> bool:
     return abs(row.ema_short - row.ema_long) < (p.no_trade_eps_k_atr * row.atr) or \
            (row.atr_pct < p.atr_pct_min) or (row.atr_pct > p.atr_pct_max)
-
 
 def run_state_machine(df: pd.DataFrame, p: BacktestParams) -> Dict[str, Any]:
     """
@@ -2944,7 +2694,6 @@ def run_state_machine(df: pd.DataFrame, p: BacktestParams) -> Dict[str, Any]:
 
     return {"decisions": decisions, "trades": trades, "dfi": dfi}
 
-
 def _apply_exits_and_equity(trades: list, dfi: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
     # Constrói DF de trades com SL/TP/Trailing e métricas por trade
     rows = []
@@ -2954,9 +2703,6 @@ def _apply_exits_and_equity(trades: list, dfi: pd.DataFrame, p: BacktestParams) 
         e_px = t["entry_px"]
         atr0 = t["atr_at_entry"]
         stop = e_px - p.stop_atr_mult * atr0 if side == "LONG" else e_px + p.stop_atr_mult * atr0
-        take = None
-        if p.takeprofit_atr_mult is not None:
-            take = e_px + p.takeprofit_atr_mult * atr0 if side == "LONG" else e_px - p.takeprofit_atr_mult * atr0
 
         # percorre barras até exit_idx se já setado (sinal inverso) ou até fim
         exit_idx = t.get("exit_idx", None)
@@ -2980,13 +2726,6 @@ def _apply_exits_and_equity(trades: list, dfi: pd.DataFrame, p: BacktestParams) 
             if side == "SHORT" and px >= stop:
                 exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "stop"
                 break
-            if take is not None:
-                if side == "LONG" and px >= take:
-                    exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "take"
-                    break
-                if side == "SHORT" and px <= take:
-                    exit_idx = j; reason_exit = (reason_exit + ", " if reason_exit else "") + "take"
-                    break
 
         if exit_idx is None:
             exit_idx = len(dfi) - 1
@@ -3011,7 +2750,6 @@ def _apply_exits_and_equity(trades: list, dfi: pd.DataFrame, p: BacktestParams) 
 
     return pd.DataFrame(rows)
 
-
 def _metrics(trades_df: pd.DataFrame) -> Dict[str, float]:
     if trades_df.empty:
         return {"trades": 0, "win_rate": 0.0, "profit_factor": 0.0, "max_dd": 0.0, "sharpe": 0.0}
@@ -3031,7 +2769,6 @@ def _metrics(trades_df: pd.DataFrame) -> Dict[str, float]:
         "profit_factor": float(pf),
         "max_dd": float(dd),
         "sharpe": float(sharpe) }
-
 
 def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = None,
                           audit_csv_path: Optional[str] = None) -> Dict[str, Any]:
@@ -3081,13 +2818,10 @@ def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = N
             "atr_outside": metrics_outside },
         "params": p }
 
-
 # DBTITLE 1,principal
 # =========================
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
-
-
 
 # ===== SAFETY UTILS (inseridos antes do __main__ para evitar NameError) =====
 
@@ -3136,7 +2870,6 @@ def _get_position_for_vault(dex, symbol, vault):
         pass
     return best
 
-
 def _get_pos_size_and_leverage(dex, symbol, *, vault):
     p = _get_position_for_vault(dex, symbol, vault)
     if not p:
@@ -3153,216 +2886,6 @@ def _get_pos_size_and_leverage(dex, symbol, *, vault):
     if lev is None:
         lev = 1.0
     return float(qty), float(lev), entry, side
-
-
-def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_pct: float = 0.001):
-    """
-    Garante TP/SL reduceOnly para a posição atual, sem cancelar ordens que já batem no preço-alvo.
-    price_tol_pct = 0.001 => 0,1% de tolerância na comparação de preço.
-    """
-    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
-    if qty <= 0 or not entry or not side:
-        print(f"[TPSL][{symbol}] Sem posição; nada a fazer.")
-        return {"ok": False, "reason": "no_position", "qty": qty, "lev": lev, "entry": entry}
-
-    targets = compute_tp_sl_leveraged(entry, side, lev, qty)
-    tp, sl = float(targets["tp"]), float(targets["sl"])
-    exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
-    print(f"[TPSL][{symbol}] entry={entry:.6f} side={side} lev={lev} qty={qty} -> TP={tp:.6f} SL={sl:.6f}")
-
-    def _approx_equal(a, b, tol):
-        a=float(a); b=float(b); ref=max(1e-12, abs(b)); return abs(a-b) <= ref*tol + 1e-9
-
-    def _is_reduce_only(o):
-        try:
-            p = o.get("params") or o.get("info") or {}
-            if isinstance(p, dict) and p.get("reduceOnly") is True: return True
-            if o.get("reduceOnly") is True: return True
-        except Exception:
-            pass
-        return False
-
-    try:
-        open_ords = dex.fetch_open_orders(symbol, None, None) or []
-    except Exception as e:
-        print(f"[TPSL][{symbol}] Falha ao ler open orders: {type(e).__name__}: {e}")
-        open_ords = []
-
-    has_stop = has_take = False
-    for o in open_ords:
-        try:
-            if not _is_reduce_only(o): continue
-            info = o.get("params") or o.get("info") or {}
-            trig = (info.get("triggerPrice") or info.get("stopLossPrice") or info.get("stopPrice")
-                    or info.get("takeProfitPrice") or info.get("tpPrice") or o.get("price"))
-            if trig is None: continue
-            trig = float(trig)
-            if _approx_equal(trig, sl, price_tol_pct): has_stop = True
-            if _approx_equal(trig, tp, price_tol_pct): has_take = True
-        except Exception:
-            continue
-    print(f"[TPSL][{symbol}] Já existem? stop={has_stop} take={has_take} (tol={price_tol_pct*100:.3f}%)")
-
-    def _create_stop_try():
-        base={"reduceOnly": True, "timeInForce": "GTC"}
-        for v in ({"type":"stop","triggerPrice":sl,"stopLossPrice":sl},
-                  {"triggerPrice":sl},
-                  {"stopPrice":sl}):
-            try:
-                print(f"[TPSL][{symbol}] Criando STOP {v}")
-                return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **v))
-            except Exception as e:
-                print(f"[TPSL][{symbol}] Falha STOP {v}: {type(e).__name__}: {e}")
-        return None
-
-    def _create_take_try():
-        base={"reduceOnly": True, "timeInForce": "GTC"}
-        for v in ({"type":"takeProfit","triggerPrice":tp,"takeProfitPrice":tp},
-                  {"triggerPrice":tp},
-                  {"tpPrice":tp}):
-            try:
-                print(f"[TPSL][{symbol}] Criando TAKE {v}")
-                return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **v))
-            except Exception as e:
-                print(f"[TPSL][{symbol}] Falha TAKE {v}: {type(e).__name__}: {e}")
-        return None
-
-    created_stop = created_take = None
-    for _ in range(max(1,int(retries))):
-        if not has_stop and created_stop is None: created_stop = _create_stop_try()
-        if not has_take and created_take is None: created_take = _create_take_try()
-
-        try:
-            cur = dex.fetch_open_orders(symbol, None, None) or []
-        except Exception as e:
-            print(f"[TPSL][{symbol}] Releitura open orders falhou: {type(e).__name__}: {e}")
-            cur = []
-        hs, ht = has_stop, has_take
-        for o in cur:
-            try:
-                if not _is_reduce_only(o): continue
-                info = o.get("params") or o.get("info") or {}
-                trig = (info.get("triggerPrice") or info.get("stopLossPrice") or info.get("stopPrice")
-                        or info.get("takeProfitPrice") or info.get("tpPrice") or o.get("price"))
-                if trig is None: continue
-                trig=float(trig)
-                if not hs and _approx_equal(trig, sl, price_tol_pct): hs=True
-                if not ht and _approx_equal(trig, tp, price_tol_pct): ht=True
-            except Exception:
-                continue
-        if hs and ht:
-            print(f"[TPSL][{symbol}] OK => ambos presentes.")
-            return {"ok": True, "created_stop": created_stop is not None, "created_take": created_take is not None, "tp": tp, "sl": sl}
-
-    print(f"[TPSL][{symbol}] Resultado final: stop={'OK' if has_stop else 'MISSING'} take={'OK' if has_take else 'MISSING'}")
-    return {"ok": has_stop or has_take, "created_stop": created_stop is not None, "created_take": created_take is not None, "tp": tp, "sl": sl}
-
-# ===== FIM SAFETY UTILS =====
-
-if __name__ == "__main__":
-    # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
-    EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
-
-    def executar_estrategia(
-        df_in: pd.DataFrame,
-        dex_in,
-        trade_logger_in: TradeLogger | None,
-        usd_to_spend: float = 1,
-        loop: bool = True,
-        sleep_seconds: int = 60,
-    ):
-        """Executa a estratégia sequencialmente para cada ativo configurado."""
-        _log_global(
-            "ENGINE",
-            f"LIVE_TRADING={os.getenv('LIVE_TRADING', '0')} | DEX_TIMEOUT_MS={os.getenv('DEX_TIMEOUT_MS', '5000')} | assets={len(ASSET_SETUPS)}",
-        )
-
-        if trade_logger_in is not None:
-            _log_global("ENGINE", "Logger externo fornecido será ignorado no modo multiativo.", level="DEBUG")
-
-        asset_state: Dict[str, Dict[str, Any]] = {}
-        default_cols = df_in.columns if isinstance(df_in, pd.DataFrame) else pd.Index([])
-
-        iter_count = 0
-        while True:
-            iter_count += 1
-            try:
-                live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-                _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)}")
-            except Exception:
-                pass
-
-            for asset in ASSET_SETUPS:
-                _log_global("ASSET", f"Processando {asset.name}")
-                try:
-                    df_asset = build_df(asset.data_symbol, INTERVAL, debug=True)
-                except Exception as e:
-                    _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
-                    continue
-
-                try:
-                    df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
-                except Exception as e:
-                    _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
-                    df_asset_hour = pd.DataFrame()
-
-                if not isinstance(df_asset, pd.DataFrame) or df_asset.empty:
-                    _log_global("ASSET", f"DataFrame vazio para {asset.name}; pulando.", level="WARN")
-                    continue
-
-                state = asset_state.get(asset.name)
-                if state is None:
-                    cfg = GradientConfig()
-                    cfg.LEVERAGE = asset.leverage
-                    cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
-                    cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
-                    safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
-                    csv_path = f"trade_log_{safe_suffix}.csv"
-                    xlsx_path = f"trade_log_{safe_suffix}.xlsx"
-                    cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
-                    logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
-                    strategy = EMAGradientStrategy(
-                        dex=dex_in,
-                        symbol=asset.hl_symbol,
-                        cfg=cfg,
-                        logger=logger,
-                        debug=True,
-                    )
-                    asset_state[asset.name] = {"strategy": strategy, "logger": logger}
-                strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
-
-                usd_asset = usd_to_spend
-                try:
-                    global_env = os.getenv("USD_PER_TRADE")
-                    if global_env:
-                        usd_asset = float(global_env)
-                    if asset.usd_env:
-                        specific_env = os.getenv(asset.usd_env)
-                        if specific_env:
-                            usd_asset = float(specific_env)
-                except Exception:
-                    pass
-
-                try:
-                    strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
-                except Exception as e:
-                    _log_global("ASSET", f"Erro executando {asset.name}: {type(e).__name__}: {e}", level="ERROR")
-                _time.sleep(0.25)
-
-            if not loop:
-                break
-
-            try:
-                env_sleep = os.getenv("SLEEP_SECONDS")
-                if env_sleep:
-                    sleep_seconds = int(env_sleep)
-            except Exception:
-                pass
-            _time.sleep(max(1, int(sleep_seconds)))
-
-    base_df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-    executar_estrategia(base_df, dex, None)
-
 
 def _approx_equal(a: float, b: float, tol_abs: float = None, tol_pct: float = 0.001) -> bool:
     if a is None or b is None:
@@ -3381,67 +2904,6 @@ def _get_current_contracts(dex, symbol, *, vault) -> float:
     except Exception:
         pass
     return 0.0
-
-def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount, *, vault):
-    levels = compute_tp_sl(entry_px, side)
-    tp, sl = float(levels["tp"]), float(levels["sl"])
-    exit_side = "sell" if side.lower() in ("long", "buy") else "buy"
-    contracts_now = _get_current_contracts(dex, symbol, vault=vault)
-    qty = contracts_now if contracts_now > 0 else float(amount)
-
-    try:
-        open_orders = dex.fetch_open_orders(symbol, None, None)
-    except Exception:
-        open_orders = []
-
-    has_stop = False
-    has_take = False
-
-    for o in open_orders or []:
-        try:
-            o_side = (o.get("side") or "").lower()
-            if o_side != exit_side:
-                continue
-            info = o.get("info") or {}
-            ro_flag = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
-            if not ro_flag:
-                continue
-            trig = o.get("triggerPrice") or (info.get("triggerPx") if isinstance(info, dict) else None)
-            sl_key = (info.get("stopLossPrice") if isinstance(info, dict) else None)
-            tp_key = (info.get("takeProfitPrice") if isinstance(info, dict) else None)
-            otype = (o.get("type") or info.get("type") or "").lower()
-            if (otype in ("stop", "") and (trig is not None or sl_key is not None)) and _approx_equal(float(trig or sl_key), sl):
-                has_stop = True
-                continue
-            if (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)) and _approx_equal(float(trig or tp_key), tp):
-                has_take = True
-                continue
-        except Exception:
-            continue
-
-    results = {"tp": tp, "sl": sl, "created_stop": None, "created_take": None, "qty_used": qty}
-
-    params_base = {"reduceOnly": True, "timeInForce": "GTC"}
-
-    if not has_stop and qty > 0:
-        stop_params = dict(params_base); stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
-        try:
-            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
-        except Exception:
-            stop_params_fb = dict(params_base); stop_params_fb.update({"triggerPrice": sl})
-            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
-
-    if not has_take and qty > 0:
-        take_params = dict(params_base); take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
-        try:
-            results["created_take"] = dex.create_order(symbol, "market", exit_side, qty, None, take_params)
-        except Exception:
-            take_params_fb = dict(params_base); take_params_fb.update({"triggerPrice": tp})
-            results["created_take"] = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
-
-    return results
-
-
 
 def _get_position_for_vault(dex, symbol, vault):
     try:
@@ -3479,75 +2941,6 @@ def _approx(a, b, tol=0.001):
     except Exception:
         return False
 
-
-
-def ensure_tpsl_for_position(dex, symbol, *, vault):
-    """
-    Garante TP (takeProfit gatilho a mercado) e SL (stop gatilho a mercado) reduceOnly
-    para a posição atual da subconta. Se já existir, não recria.
-    """
-    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
-    if qty <= 0 or not entry or not side:
-        return {"created_stop": None, "created_take": None, "qty": qty, "lev": lev, "entry": entry}
-
-    targets = compute_tp_sl_leveraged(entry, side, lev, qty)
-    tp, sl = targets["tp"], targets["sl"]
-    exit_side = "sell" if (side.lower() in ("long", "buy")) else "buy"
-
-    try:
-        open_ords = dex.fetch_open_orders(symbol, None, None) or []
-    except Exception:
-        open_ords = []
-
-    has_stop = False
-    has_take = False
-    for o in open_ords:
-        try:
-            if (o.get("side") or "").lower() != exit_side:
-                continue
-            info = o.get("info") or {}
-            reduce_only = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
-            if not reduce_only:
-                continue
-            trig = o.get("triggerPrice") or (info.get("triggerPx") if isinstance(info, dict) else None)
-            sl_key = (info.get("stopLossPrice") if isinstance(info, dict) else None)
-            tp_key = (info.get("takeProfitPrice") if isinstance(info, dict) else None)
-            otype = (o.get("type") or info.get("type") or "").lower()
-            if (otype in ("stop", "") and (trig is not None or sl_key is not None)) and _approx(trig or sl_key, sl):
-                has_stop = True
-            if (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)) and _approx(trig or tp_key, tp):
-                has_take = True
-        except Exception:
-            continue
-
-    params_base = {"reduceOnly": True, "timeInForce": "GTC"}
-    created_stop = created_take = None
-
-    if not has_stop and qty > 0:
-        stop_params = dict(params_base)
-        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
-        try:
-            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
-        except Exception:
-            stop_params_fb = dict(params_base)
-            stop_params_fb.update({"triggerPrice": sl})
-            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
-
-    if not has_take and qty > 0:
-        take_params = dict(params_base)
-        take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
-        try:
-            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params)
-        except Exception:
-            take_params_fb = dict(params_base)
-            take_params_fb.update({"triggerPrice": tp})
-            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
-
-    return {"tp": tp, "sl": sl, "created_stop": created_stop, "created_take": created_take,
-            "qty": qty, "lev": lev, "entry": entry, "side": side}
-
-
-
 def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
     """
     Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
@@ -3572,4 +2965,3 @@ def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) ->
         except Exception:
             return False
     return False
-
