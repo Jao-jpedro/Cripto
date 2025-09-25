@@ -3147,3 +3147,53 @@ try:
         EMAGradientStrategy.step = _shim_step
 except Exception:
     pass
+
+
+# ---- Final-guard: ensure EMAGradientStrategy exposes .step at class level ----
+try:
+    _EMAG_CLS = EMAGradientStrategy  # type: ignore[name-defined]
+    if not hasattr(_EMAG_CLS, "step"):
+        def _emag_step_compat(self, df, usd_to_spend, rsi_df_hourly=None):
+            # Try common method names if present
+            for name in ("run", "process", "iterate", "tick", "next", "__call__", "run_once", "run_bar", "on_bar", "execute", "handle", "update"):
+                m = getattr(self, name, None)
+                if callable(m):
+                    try:
+                        return m(df, usd_to_spend, rsi_df_hourly)
+                    except TypeError:
+                        # Try with fewer params
+                        try:
+                            return m(df, usd_to_spend)
+                        except Exception:
+                            try:
+                                return m(df)
+                            except Exception:
+                                pass
+            # Minimal no-op with price snapshot update
+            try:
+                col = "close" if "close" in df.columns else ("valor_fechamento" if "valor_fechamento" in df.columns else None)
+                if col:
+                    val = df[col].iloc[-1]
+                    try:
+                        val = float(val)
+                    except Exception:
+                        pass
+                    setattr(self, "_last_price_snapshot", val)
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "_log"):
+                    self._log("Compat: EMAGradientStrategy.step inexistente — executando no-op.", level="WARN")
+                else:
+                    print("[WARN] [COMPAT] EMAGradientStrategy.step inexistente — no-op.", flush=True)
+            except Exception:
+                pass
+            return None
+        setattr(_EMAG_CLS, "step", _emag_step_compat)
+        print("[WARN] [COMPAT] Added class-level EMAGradientStrategy.step compat method.", flush=True)
+except Exception as _e_compat:
+    try:
+        print(f"[WARN] [COMPAT] Could not attach class-level step to EMAGradientStrategy: {_e_compat}", flush=True)
+    except Exception:
+        pass
+
