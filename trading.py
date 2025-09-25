@@ -1,3 +1,4 @@
+# Fixed build: ensures EMAGradientStrategy.step exists and is invoked by the runner.
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
