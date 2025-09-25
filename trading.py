@@ -1,4 +1,68 @@
 
+
+# ---- Compat helper to call strategy "step" safely ----
+def _safe_strategy_step(strategy_obj, *args, **kwargs):
+    """Call the appropriate stepping method on a strategy instance.
+    Tries .step(), then .run(), then .process(); falls back to iterate/tick/next/__call__.
+    Adds a concise diagnostic log about the class origin.
+    """
+    try:
+        cls = type(strategy_obj)
+        mod = getattr(cls, "__module__", "?")
+        file_hint = None
+        try:
+            import sys, inspect
+            mod_obj = sys.modules.get(mod)
+            if mod_obj is not None:
+                try:
+                    file_hint = inspect.getsourcefile(mod_obj) or inspect.getfile(mod_obj)
+                except Exception:
+                    file_hint = getattr(mod_obj, "__file__", None)
+        except Exception:
+            pass
+        print(f"[DEBUG] [STRATEGY] Using {cls.__name__} from module={mod} file={file_hint}", flush=True)
+    except Exception:
+        pass
+
+    # Preferred names
+    for name in ("step", "run", "process", "iterate", "tick", "next", "__call__"):
+        meth = getattr(strategy_obj, name, None)
+        if callable(meth):
+            return meth(*args, **kwargs)
+
+    raise AttributeError(f"{type(strategy_obj).__name__} does not expose a step/run/process method")
+
+
+# ---- Instance-level compat: ensure the created strategy object has .step() ----
+def _ensure_strategy_step_instance(strategy_obj):
+    """Attach a 'step' method to the instance if the class doesn't expose one."""
+    for name in ("step", "run", "process"):
+        if callable(getattr(strategy_obj, name, None)):
+            return strategy_obj
+
+    def _inst_step(self, *args, **kwargs):  # pragma: no cover
+        for name in ("run", "process", "iterate", "tick", "next", "__call__"):
+            m = getattr(self, name, None)
+            if callable(m):
+                return m(*args, **kwargs)
+        raise AttributeError(f"{type(self).__name__} does not expose a step/run/process method")
+
+    try:
+        import types
+        strategy_obj.step = types.MethodType(_inst_step, strategy_obj)  # bind to instance
+    except Exception:
+        try:
+            strategy_obj.step = _inst_step.__get__(strategy_obj, type(strategy_obj))
+        except Exception:
+            pass
+
+    try:
+        print("[WARN] [COMPAT] Attached instance-level .step() to strategy", flush=True)
+    except Exception:
+        pass
+    return strategy_obj
+
+
 # ---- Compat helper to call strategy "step" safely ----
 def _safe_strategy_step(strategy_obj, *args, **kwargs):
     """Call the appropriate stepping method on a strategy instance.
@@ -26,7 +90,19 @@ def _safe_strategy_step(strategy_obj, *args, **kwargs):
 # Fixed build: ensures EMAGradientStrategy.step exists and is invoked by the runner.
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
-print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
+print("\n==========
+
+
+
+def _ensure_strategy_step_instance(strategy_obj):
+    import types
+    if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
+        return strategy_obj
+
+
+
+
+ INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 
 
 def _log_global(section: str, message: str, level: str = "INFO") -> None:
@@ -3150,28 +3226,4 @@ except Exception as _compat_err:
         pass
 
 
-# ---- Instance-level compat: ensure the created strategy object has .step() ----
-def _ensure_strategy_step_instance(strategy_obj):
-    import types
-    if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
-        return strategy_obj
-    def _inst_step(self, *args, **kwargs):  # pragma: no cover
-        if hasattr(self, "run") and callable(getattr(self, "run")):
-            return self.run(*args, **kwargs)
-        if hasattr(self, "process") and callable(getattr(self, "process")):
-            return self.process(*args, **kwargs)
-        raise AttributeError(f"{type(self).__name__} does not expose a step/run/process method")
-    try:
-        strategy_obj.step = types.MethodType(_inst_step, strategy_obj)  # bind
-    except Exception:
-        # Fallback binding
-        try:
-            strategy_obj.step = _inst_step.__get__(strategy_obj, type(strategy_obj))
-        except Exception:
-            pass
-    try:
-        print("[WARN] [COMPAT] Attached instance-level .step() to strategy", flush=True)
-    except Exception:
-        pass
-    return strategy_obj
 
