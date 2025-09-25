@@ -96,6 +96,19 @@ class StrategyAdapter:
         return _safe_strategy_step(self._inner, *args, **kwargs)
 
 # === END HEADER HELPERS ===
+# ---- Global exception hook (for Render) ----
+def _install_global_excepthook():
+    import sys, traceback
+    def _hook(exc_type, exc, tb):
+        try:
+            print(f"[FATAL] Uncaught: {exc_type.__name__}: {exc}", flush=True)
+            traceback.print_exception(exc_type, exc, tb)
+        except Exception:
+            pass
+    sys.excepthook = _hook
+
+_install_global_excepthook()
+
 
 def _ensure_strategy_step_instance(strategy_obj):
     """Top-level stub to avoid NameError; real helper later may override this."""
@@ -3117,109 +3130,20 @@ def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = N
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
 
+
 if __name__ == "__main__":
-    # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
-    EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
+    import time, traceback
+    try:
+        # (Re)build base DF and DEX as your original code expects
+        print("[INFO] [MAIN] Iniciando boot...", flush=True)
+        # As your original main likely did, we call build_df for a seed symbol (BTC) to warm caches
+        base_df = build_df(None, "BTCUSDT", tf="15m", alvo=20)
+        dex = DEX(timeout_ms=5000)
+        print(f"[INFO] [DEX] Inicializado | LIVE_TRADING={1 if (os.getenv('LIVE_TRADING','0') in ('1','true','True')) else 0} | TIMEOUT_MS=5000", flush=True)
+        _ = dex.fetch_balance(); print("[INFO] [DEX] fetch_balance() OK", flush=True)
+        executar_estrategia(base_df, dex, None)
+    except Exception as e:
+        print(f"[FATAL] [MAIN] {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        time.sleep(5)
 
-    
-def executar_estrategia(
-        df_in: pd.DataFrame,
-        dex_in,
-        trade_logger_in=None,
-        usd_to_spend = 1.0,
-        loop = True,
-        sleep_seconds = 60,
-    ):
-    """
-    Runner seguro: monta df por ativo, instancia logger/estratégia se ausentes,
-    evita KeyError com setdefault e garante step executável.
-    """
-    import math, time, os
-    assets: list[Asset] = ASSETS  # usa sua lista de ativos configurada no arquivo
-    asset_state: dict[str, dict] = {}
-    default_cols = list(df_in.columns) if isinstance(df_in, pd.DataFrame) else []
-
-    iter_count = 0
-    while True:
-        iter_count += 1
-        live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-        print(f"[INFO] [HEARTBEAT] iter={iter_count} live={1 if live else 0}", flush=True)
-
-        for asset in assets:
-            try:
-                print(f"[INFO] [ASSET] Processando {asset.name}", flush=True)
-
-                # Build DF do ativo (suporte a função já existente build_df / build_df_asset)
-                df_asset = build_df(df_in, asset.data_symbol, tf="15m", alvo=20)
-                print("[INFO] [DATA] Total candles retornados:", len(df_asset), flush=True)
-
-                if df_asset is None or len(df_asset) == 0:
-                    print(f"[WARN] [DATA] DataFrame vazio para {asset.name}; pulando.", flush=True)
-                    continue
-
-                # Garantir estado do ativo (logger + estratégia) SEMPRE
-                state = asset_state.setdefault(asset.name, {})
-
-                # (Re)cria logger/strategy se ausentes
-                if "logger" not in state or "strategy" not in state:
-                    safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
-                    csv_path = f"trade_log_{safe_suffix}.csv"
-                    xlsx_path = f"trade_log_{safe_suffix}.xlsx"
-                    cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
-                    logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
-
-                    cfg = GradientConfig()
-                    cfg.LEVERAGE = asset.leverage
-                    cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
-                    cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
-
-                    strat_inner = EMAGradientStrategy(
-                        dex=dex_in,
-                        symbol=asset.hl_symbol,
-                        cfg=cfg,
-                        logger=logger,
-                        debug=True,
-                    )
-                    strategy = StrategyAdapter(strat_inner)
-                    strategy = _ensure_strategy_step_instance(strategy)
-
-                    state["logger"] = logger
-                    state["strategy"] = strategy
-                    asset_state[asset.name] = state
-
-                strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]  # type: ignore
-
-                # Montante por ativo: base $1, com overrides por ambiente se existirem
-                usd_asset = float(usd_to_spend) if usd_to_spend else 1.0
-                try:
-                    global_env = os.getenv("USD_PER_TRADE")
-                    if global_env:
-                        usd_asset = float(global_env)
-                    if asset.usd_env:
-                        specific_env = os.getenv(asset.usd_env)
-                        if specific_env:
-                            usd_asset = float(specific_env)
-                except Exception:
-                    pass
-
-                # Executa a step concreta (assíncrono tolerante)
-                _safe_strategy_step(strategy, df_asset, usd_to_spend=usd_asset, rsi_df_hourly=None)
-
-                # Log do preço capturado pela estratégia (se disponível)
-                price_seen = getattr(strategy, "_last_price_snapshot", None)
-                if price_seen is not None and math.isfinite(float(price_seen)):
-                    try:
-                        strategy._log(f"Preço atual: {float(price_seen):.6f}", level="INFO")
-                    except Exception:
-                        print(f"[INFO] [{asset.name}] Preço atual: {float(price_seen):.6f}", flush=True)
-
-            except Exception as e:
-                print(f"[ERROR] [ASSET] Erro executando {asset.name}: {type(e).__name__}: {e}", flush=True)
-                continue
-
-        if not loop:
-            break
-        try:
-            time.sleep(sleep_seconds)
-        except KeyboardInterrupt:
-            break
