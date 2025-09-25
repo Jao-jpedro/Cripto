@@ -53,7 +53,7 @@ def _log_global(section: str, message: str, level: str = "INFO") -> None:
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Dict
 if TYPE_CHECKING:
     import requests  # type: ignore
     import pandas as pd  # type: ignore
