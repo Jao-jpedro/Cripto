@@ -58,11 +58,11 @@ class TrailingROIManager:
 
         params = {"reduceOnly": True, "type": "stop_market", "stopPrice": float(stop_px), "clientOrderId": f"TRAILROI-{symbol.replace('/', '-')}"}
         try:
-            o = self.dex.create_order(symbol, "market", exit_side, qty_abs, None, params)
+            o = self.dex.create_order(symbol, "market", exit_side, qty_abs, price_arg, params)
         except Exception:
             # fallback para variantes de DEX
             params = {"reduceOnly": True, "type": "stop", "triggerPrice": float(stop_px), "stopLossPrice": float(stop_px), "clientOrderId": f"TRAILROI-{symbol.replace('/', '-')}"}
-            o = self.dex.create_order(symbol, "market", exit_side, qty_abs, None, params)
+            o = self.dex.create_order(symbol, "market", exit_side, qty_abs, price_arg, params)
         oid = None
         if isinstance(o, dict):
             oid = o.get("id") or (o.get("info") or {}).get("oid")
