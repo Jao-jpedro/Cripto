@@ -7,3 +7,5 @@ PyJWT
 PyYAML
 python-dateutil
 tzdata
+urllib3
+openpyxl
