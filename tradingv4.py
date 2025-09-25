@@ -420,6 +420,9 @@ def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: fl
 
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
+
+# Mínimo de notional exigido pela Hyperliquid (pode variar por ativo; padrão $10)
+HL_MIN_NOTIONAL_USD = float(os.getenv("HL_MIN_NOTIONAL_USD", "10"))
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
 # Lê credenciais da env (recomendado) com fallback seguro para dev local
 _wallet_env = os.getenv("WALLET_ADDRESS")
@@ -766,8 +769,10 @@ class AssetSetup:
     stop_pct: float = 0.05
     take_pct: float = 0.10
     usd_env: Optional[str] = None
-
-
+    def __post_init__(self):
+        # Enforce canonical TP/SL defaults for this project
+        self.stop_pct = 0.05
+        self.take_pct = 0.10
 ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("BTC-USD", "BTCUSDT", "BTC/USDC:USDC", 40, usd_env="USD_PER_TRADE_BTC"),
     AssetSetup("SOL-USD", "SOLUSDT", "SOL/USDC:USDC", 20, usd_env="USD_PER_TRADE_SOL"),
@@ -791,8 +796,6 @@ ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("LTC-USD", "LTCUSDT", "LTC/USDC:USDC", 10, usd_env="USD_PER_TRADE_LTC"),
     AssetSetup("NEAR-USD", "NEARUSDT", "NEAR/USDC:USDC", 10, usd_env="USD_PER_TRADE_NEAR"),
 ]
-
-
 class EMAGradientStrategy:
     def __init__(self, dex, symbol: str, cfg: GradientConfig = GradientConfig(), logger: "TradeLogger" = None, debug: bool = True):
         self.dex = dex
@@ -1750,12 +1753,32 @@ class EMAGradientStrategy:
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
         )
-        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
-        _tpsl = ensure_tpsl_for_position(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), vault=HL_SUBACCOUNT_VAULT)
+        try:
+            ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
+        except Exception as e:
+            # Fallback: se erro de notional mínimo, tenta com notional mínimo
+            msg = str(e)
+            try:
+                last_px = self._preco_atual()
+            except Exception:
+                last_px = price
+            try:
+                min_notional = float(HL_MIN_NOTIONAL_USD)
+            except Exception:
+                min_notional = 10.0
+            if "minimum value" in msg.lower() or "min" in msg.lower():
+                amt_min = self._round_amount((min_notional / (last_px or price or 1.0)) if (last_px or price) else amount)
+                if self.debug:
+                    self._log(f"Retrying with min notional ${min_notional:.2f} -> amount={amt_min}", level="WARN")
+                ordem_entrada = self.dex.create_order(self.symbol, "market", side, amt_min, last_px or price, {})
+                amount = amt_min
+            else:
+                raise
+            _tpsl = ensure_tpsl_for_position(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), vault=HL_SUBACCOUNT_VAULT)
         try:
             _px_now = (dex if "dex" in locals() else self.dex).fetch_ticker(self.symbol if "self" in locals() else symbol).get("last")
             if _px_now:
-                safety_close_if_loss_exceeds_5c(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), float(_px_now), vault=HL_SUBACCOUNT_VAULT)
+                close_if_breached_leveraged(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), float(_px_now), vault=HL_SUBACCOUNT_VAULT)
         except Exception:
             pass
         try:
@@ -3109,32 +3132,6 @@ def _approx(a, b, tol=0.001):
 
 
 
-# --- Early helper defs to satisfy early ensure_tpsl_for_position ---
-def _get_pos_size_and_leverage(dex, symbol, *, vault):
-    p = _get_position_for_vault(dex, symbol, vault)
-    if not p:
-        return 0.0, 1.0, None, None
-    qty = float(p.get("contracts") or 0.0)
-    entry = float(p.get("entryPrice") or 0.0) or None
-    side = p.get("side") or None
-    lev = p.get("leverage")
-    if isinstance(lev, dict):
-        lev = lev.get("value")
-    if lev is None:
-        info = p.get("info") or {}
-        lev = ((info.get("position") or {}).get("leverage") or {}).get("value")
-    if lev is None:
-        lev = 1.0
-    return float(qty), float(lev), entry, side
-
-def _approx(a, b, tol=0.001):
-    try:
-        a, b = float(a), float(b)
-        return abs(a - b) <= max(1e-12, tol * max(abs(a), abs(b), 1.0))
-    except Exception:
-        return False
-# --- End early helper defs ---
-
 def ensure_tpsl_for_position(dex, symbol, *, vault):
     """
     Garante TP (takeProfit gatilho a mercado) e SL (stop gatilho a mercado) reduceOnly
@@ -3202,7 +3199,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault):
 
 
 
-def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
+def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool:
     """
     Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
     """
@@ -3226,4 +3223,3 @@ def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) ->
         except Exception:
             return False
     return False
-
