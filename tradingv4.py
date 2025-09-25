@@ -389,6 +389,34 @@ DEX (Hyperliquid via ccxt)
 """
 import ccxt  # type: ignore
 
+def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: float):
+    """
+    Calcula TP=+10% e SL=-5% de retorno, convertendo para PREÇO pela alavancagem.
+    Aplica CAP de perda absoluta de $0.05 => |entry - SL| * qty <= 0.05.
+    """
+    entry = float(entry_px)
+    L = max(float(leverage or 1.0), 1.0)
+    q = max(float(qty or 0.0), 1e-12)
+
+    s = (side or "").lower()
+    if s in ("long", "buy"):
+        # alvo +10% => delta_preço = 0.10 / L
+        p_tp = entry * (1.0 + 0.10 / L)
+        # alvo -5% => delta_preço = 0.05 / L
+        p_sl = entry * (1.0 - 0.05 / L)
+        # CAP $0.05
+        p_sl_cap = entry - (0.05 / q)
+        p_sl_final = max(p_sl, p_sl_cap)
+        return {"tp": float(p_tp), "sl": float(p_sl_final)}
+    else:
+        # SHORT
+        p_tp = entry / (1.0 + 0.10 / L)
+        p_sl = entry / (1.0 - 0.05 / L)
+        p_sl_cap = entry + (0.05 / q)
+        p_sl_final = min(p_sl, p_sl_cap)
+        return {"tp": float(p_tp), "sl": float(p_sl_final)}
+
+
 
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
@@ -1723,6 +1751,13 @@ class EMAGradientStrategy:
             level="INFO",
         )
         ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
+        _tpsl = ensure_tpsl_for_position(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), vault=HL_SUBACCOUNT_VAULT)
+        try:
+            _px_now = (dex if "dex" in locals() else self.dex).fetch_ticker(self.symbol if "self" in locals() else symbol).get("last")
+            if _px_now:
+                safety_close_if_loss_exceeds_5c(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), float(_px_now), vault=HL_SUBACCOUNT_VAULT)
+        except Exception:
+            pass
         try:
             avg_px = None
             if isinstance(ordem_entrada, dict):
@@ -2177,7 +2212,7 @@ class EMAGradientStrategy:
         if pos:
             lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
             self._ensure_position_protections(pos, df_for_log=df)
-            self._log("Posição aberta: aguardando execução de TP/SL.", level="DEBUG")
+            self._log("Posição aberta: aguardando execução de TP/SL. (safety-kill verificado)", level="DEBUG")
             self._safe_log("decisao", df_for_log=df, tipo="info")
             self._last_pos_side = lado if lado in ("buy", "sell") else None
             return
@@ -3033,4 +3068,136 @@ def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount, *, vault
             results["created_take"] = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
 
     return results
+
+
+
+def _get_position_for_vault(dex, symbol, vault):
+    try:
+        poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        for p in poss:
+            qty = float(p.get("contracts") or 0.0)
+            side = (p.get("side") or "").lower()
+            if qty > 0 and side in ("long", "short"):
+                return p
+    except Exception:
+        pass
+    return None
+
+def _get_pos_size_and_leverage(dex, symbol, *, vault):
+    p = _get_position_for_vault(dex, symbol, vault)
+    if not p:
+        return 0.0, 1.0, None, None
+    qty = float(p.get("contracts") or 0.0)
+    entry = float(p.get("entryPrice") or 0.0) or None
+    side = p.get("side") or None
+    lev = p.get("leverage")
+    if isinstance(lev, dict):
+        lev = lev.get("value")
+    if lev is None:
+        info = p.get("info") or {}
+        lev = ((info.get("position") or {}).get("leverage") or {}).get("value")
+    if lev is None:
+        lev = 1.0
+    return float(qty), float(lev), entry, side
+
+def _approx(a, b, tol=0.001):
+    try:
+        a, b = float(a), float(b)
+        return abs(a - b) <= max(1e-12, tol * max(abs(a), abs(b), 1.0))
+    except Exception:
+        return False
+
+
+
+def ensure_tpsl_for_position(dex, symbol, *, vault):
+    """
+    Garante TP (takeProfit gatilho a mercado) e SL (stop gatilho a mercado) reduceOnly
+    para a posição atual da subconta. Se já existir, não recria.
+    """
+    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+    if qty <= 0 or not entry or not side:
+        return {"created_stop": None, "created_take": None, "qty": qty, "lev": lev, "entry": entry}
+
+    targets = compute_tp_sl_leveraged(entry, side, lev, qty)
+    tp, sl = targets["tp"], targets["sl"]
+    exit_side = "sell" if (side.lower() in ("long", "buy")) else "buy"
+
+    try:
+        open_ords = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
+    except Exception:
+        open_ords = []
+
+    has_stop = False
+    has_take = False
+    for o in open_ords:
+        try:
+            if (o.get("side") or "").lower() != exit_side:
+                continue
+            info = o.get("info") or {}
+            reduce_only = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
+            if not reduce_only:
+                continue
+            trig = o.get("triggerPrice") or (info.get("triggerPx") if isinstance(info, dict) else None)
+            sl_key = (info.get("stopLossPrice") if isinstance(info, dict) else None)
+            tp_key = (info.get("takeProfitPrice") if isinstance(info, dict) else None)
+            otype = (o.get("type") or info.get("type") or "").lower()
+            if (otype in ("stop", "") and (trig is not None or sl_key is not None)) and _approx(trig or sl_key, sl):
+                has_stop = True
+            if (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)) and _approx(trig or tp_key, tp):
+                has_take = True
+        except Exception:
+            continue
+
+    params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
+    created_stop = created_take = None
+
+    if not has_stop and qty > 0:
+        stop_params = dict(params_base)
+        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
+        try:
+            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
+        except Exception:
+            stop_params_fb = dict(params_base)
+            stop_params_fb.update({"triggerPrice": sl})
+            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
+
+    if not has_take and qty > 0:
+        take_params = dict(params_base)
+        take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
+        try:
+            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params)
+        except Exception:
+            take_params_fb = dict(params_base)
+            take_params_fb.update({"triggerPrice": tp})
+            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
+
+    return {"tp": tp, "sl": sl, "created_stop": created_stop, "created_take": created_take,
+            "qty": qty, "lev": lev, "entry": entry, "side": side}
+
+
+
+def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
+    """
+    Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
+    """
+    qty, _, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+    if qty <= 0 or not entry or not side:
+        return False
+
+    s = side.lower()
+    if s in ("long", "buy"):
+        loss = max(0.0, (entry - float(current_px)) * qty)
+        exit_side = "sell"
+    else:
+        loss = max(0.0, (float(current_px) - entry) * qty)
+        exit_side = "buy"
+
+    if loss > 0.05:
+        try:
+            dex.create_order(symbol, "market", exit_side, qty, None,
+                             {"vaultAddress": vault, "reduceOnly": True})
+            return True
+        except Exception:
+            return False
+    return False
 
