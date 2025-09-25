@@ -737,8 +737,8 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.10  # 10% da margem como stop
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.30  # 30% da margem como alvo
+    STOP_LOSS_CAPITAL_PCT: float = 0.05  # 10% da margem como stop
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.10  # 30% da margem como alvo
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
