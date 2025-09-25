@@ -1755,7 +1755,7 @@ class EMAGradientStrategy:
         try:
             _px_now = (dex if "dex" in locals() else self.dex).fetch_ticker(self.symbol if "self" in locals() else symbol).get("last")
             if _px_now:
-                safety_close_if_loss_exceeds_5c(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), float(_px_now), vault=HL_SUBACCOUNT_VAULT)
+                close_if_breached_leveraged(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), float(_px_now), vault=HL_SUBACCOUNT_VAULT)
         except Exception:
             pass
         try:
@@ -3176,7 +3176,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault):
 
 
 
-def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
+def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool:
     """
     Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
     """
@@ -3201,3 +3201,37 @@ def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) ->
             return False
     return False
 
+
+
+def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool:
+    """
+    Fecha imediatamente a posição se o retorno (considerando alavancagem) já
+    tiver atingido >= +10% (TP) ou <= -5% (SL). Usa ordens MARKET reduceOnly.
+    """
+    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+    if qty <= 0 or not entry or not side or current_px in (None, 0):
+        return False
+
+    targets = compute_tp_sl_leveraged(entry, side, lev, qty)
+    tp, sl = targets["tp"], targets["sl"]
+    s = (side or "").lower()
+    exit_side = "sell" if s in ("long", "buy") else "buy"
+
+    breach = False
+    try:
+        if s in ("long", "buy"):
+            if float(current_px) >= tp or float(current_px) <= sl:
+                breach = True
+        else:  # short
+            if float(current_px) <= tp or float(current_px) >= sl:
+                breach = True
+    except Exception:
+        breach = False
+
+    if breach:
+        try:
+            dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True, "vaultAddress": vault})
+            return True
+        except Exception:
+            return False
+    return False
