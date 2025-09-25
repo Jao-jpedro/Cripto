@@ -3206,95 +3206,160 @@ def _approx(a, b, tol=0.001):
 
 
 
-def ensure_tpsl_for_position(dex, symbol, *, vault):
+
+def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 3):
     """
-    Garante TP (takeProfit gatilho a mercado) e SL (stop gatilho a mercado) reduceOnly
-    para a posição atual da subconta. Se já existir, não recria.
+    Garante *sempre* a existência de TP e SL (reduceOnly) para a posição atual.
+    Estratégia:
+      1) Ler posição (qty, entry, side, leverage). Se não houver posição, retorna.
+      2) Calcular TP/SL em PREÇO com base no retorno alvo (TP=+10%, SL=-5%) ajustado pela alavancagem.
+      3) Cancelar ordens antigas de TP/SL conflitantes (somente reduceOnly/vault atual).
+      4) Criar ambas as ordens (STOP e TAKE) com múltiplos fallbacks de parâmetros.
+      5) Revalidar abrindo ordens e, se necessário, tentar novamente até `retries` vezes.
+    Retorna dict com flags e preços.
     """
     qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
     if qty <= 0 or not entry or not side:
-        return {"created_stop": None, "created_take": None, "qty": qty, "lev": lev, "entry": entry}
+        return {"ok": False, "reason": "no_position", "qty": qty, "lev": lev, "entry": entry}
 
     targets = compute_tp_sl_leveraged(entry, side, lev, qty)
-    tp, sl = targets["tp"], targets["sl"]
-    exit_side = "sell" if (side.lower() in ("long", "buy")) else "buy"
+    tp, sl = float(targets["tp"]), float(targets["sl"])
+    exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
 
+    def _is_our_reduce_only(ord_):
+        try:
+            if ord_.get("symbol") and ord_.get("symbol") != symbol:
+                return False
+            p = ord_.get("params") or ord_.get("info") or {}
+            ro = p.get("reduceOnly") if isinstance(p, dict) else None
+            if ro is True:
+                return True
+            # Alguns conectores colocam reduceOnly diretamente no root
+            if ord_.get("reduceOnly") is True:
+                return True
+        except Exception:
+            pass
+        return False
+
+    # 3) Cancelar reduceOnly antigos para o vault atual (quando possível identificar)
     try:
         open_ords = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
     except Exception:
         open_ords = []
-
-    has_stop = False
-    has_take = False
     for o in open_ords:
         try:
-            if (o.get("side") or "").lower() != exit_side:
-                continue
-            info = o.get("info") or {}
-            reduce_only = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
-            if not reduce_only:
-                continue
-            trig = o.get("triggerPrice") or (info.get("triggerPx") if isinstance(info, dict) else None)
-            sl_key = (info.get("stopLossPrice") if isinstance(info, dict) else None)
-            tp_key = (info.get("takeProfitPrice") if isinstance(info, dict) else None)
-            otype = (o.get("type") or info.get("type") or "").lower()
-            if (otype in ("stop", "") and (trig is not None or sl_key is not None)) and _approx(trig or sl_key, sl):
-                has_stop = True
-            if (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)) and _approx(trig or tp_key, tp):
-                has_take = True
+            if _is_our_reduce_only(o):
+                oid = o.get("id") or (o.get("info", {}).get("oid"))
+                if oid:
+                    try:
+                        dex.cancel_order(oid, symbol, {"vaultAddress": vault})
+                    except Exception:
+                        pass
         except Exception:
-            continue
+            pass
 
-    params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
+    # 4) Criação com fallbacks e verificação por tentativas
+    def _create_stop_try():
+        params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
+        # Tentativa A: tipo explícito + stopLossPrice + triggerPrice
+        try:
+            p = dict(params_base, **{"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
+            return dex.create_order(symbol, "market", exit_side, qty, None, p)
+        except Exception:
+            pass
+        # Tentativa B: apenas triggerPrice
+        try:
+            p = dict(params_base, **{"triggerPrice": sl})
+            return dex.create_order(symbol, "market", exit_side, qty, None, p)
+        except Exception:
+            pass
+        # Tentativa C: stopPrice (alguns conectores usam esta chave)
+        try:
+            p = dict(params_base, **{"stopPrice": sl})
+            return dex.create_order(symbol, "market", exit_side, qty, None, p)
+        except Exception:
+            pass
+        return None
+
+    def _create_take_try():
+        params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
+        # Tentativa A: tipo explícito + takeProfitPrice + triggerPrice
+        try:
+            p = dict(params_base, **{"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
+            return dex.create_order(symbol, "market", exit_side, qty, None, p)
+        except Exception:
+            pass
+        # Tentativa B: apenas triggerPrice
+        try:
+            p = dict(params_base, **{"triggerPrice": tp})
+            return dex.create_order(symbol, "market", exit_side, qty, None, p)
+        except Exception:
+            pass
+        # Tentativa C: tpPrice (fallback alternativo)
+        try:
+            p = dict(params_base, **{"tpPrice": tp})
+            return dex.create_order(symbol, "market", exit_side, qty, None, p)
+        except Exception:
+            pass
+        return None
+
+    def _has_stop_take_now():
+        try:
+            cur = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
+        except Exception:
+            cur = []
+        has_stop = has_take = False
+        for o in cur:
+            try:
+                if not _is_our_reduce_only(o):
+                    continue
+                info = o.get("params") or o.get("info") or {}
+                trig = info.get("triggerPrice") or info.get("stopLossPrice") or info.get("stopPrice") or info.get("tpPrice") or info.get("takeProfitPrice")
+                if trig is None:
+                    # alguns conectores retornam preço alvo no campo "price"
+                    trig = o.get("price")
+                if trig is None:
+                    continue
+                trig = float(trig)
+                # classificamos por proximidade do alvo
+                if abs(trig - sl) <= abs(sl * 0.002) + 1e-9:
+                    has_stop = True
+                if abs(trig - tp) <= abs(tp * 0.002) + 1e-9:
+                    has_take = True
+            except Exception:
+                continue
+        return has_stop, has_take
+
     created_stop = created_take = None
+    for _ in range(max(1, int(retries))):
+        # criar os dois (ordem não importa; se exchange não aceitar, tentaremos fallback)
+        if created_stop is None:
+            created_stop = _create_stop_try()
+        if created_take is None:
+            created_take = _create_take_try()
 
-    if not has_stop and qty > 0:
-        stop_params = dict(params_base)
-        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
-        try:
-            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
-        except Exception:
-            stop_params_fb = dict(params_base)
-            stop_params_fb.update({"triggerPrice": sl})
-            created_stop = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
+        ok_stop, ok_take = _has_stop_take_now()
+        if ok_stop and ok_take:
+            return {
+                "ok": True,
+                "created_stop": True if created_stop is not None else "preexistente",
+                "created_take": True if created_take is not None else "preexistente",
+                "qty": qty, "lev": lev, "entry": entry, "tp": tp, "sl": sl
+            }
 
-    if not has_take and qty > 0:
-        take_params = dict(params_base)
-        take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
-        try:
-            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params)
-        except Exception:
-            take_params_fb = dict(params_base)
-            take_params_fb.update({"triggerPrice": tp})
-            created_take = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
+    # Última verificação; se ainda não constam, insistimos mais uma vez
+    ok_stop, ok_take = _has_stop_take_now()
+    if ok_stop and ok_take:
+        return {
+            "ok": True,
+            "created_stop": created_stop is not None,
+            "created_take": created_take is not None,
+            "qty": qty, "lev": lev, "entry": entry, "tp": tp, "sl": sl
+        }
 
-    return {"tp": tp, "sl": sl, "created_stop": created_stop, "created_take": created_take,
-            "qty": qty, "lev": lev, "entry": entry, "side": side}
-
-
-
-def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
-    """
-    Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
-    """
-    qty, _, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
-    if qty <= 0 or not entry or not side:
-        return False
-
-    s = side.lower()
-    if s in ("long", "buy"):
-        loss = max(0.0, (entry - float(current_px)) * qty)
-        exit_side = "sell"
-    else:
-        loss = max(0.0, (float(current_px) - entry) * qty)
-        exit_side = "buy"
-
-    if loss > 0.05:
-        try:
-            dex.create_order(symbol, "market", exit_side, qty, None,
-                             {"vaultAddress": vault, "reduceOnly": True})
-            return True
-        except Exception:
-            return False
-    return False
-
+    # Se chegou aqui, ainda assim retornamos negativo, permitindo o chamador decidir (ex.: fechar posição)
+    return {
+        "ok": False,
+        "reason": "create_failed",
+        "qty": qty, "lev": lev, "entry": entry, "tp": tp, "sl": sl
+    }
