@@ -1759,8 +1759,8 @@ class EMAGradientStrategy:
             remaining_orders: List[Dict[str, Any]] = []
             stop_match = None
             take_match = None
-            tol_stop = max(1e-8, abs(stop_px) * 1e-5)
-            tol_take = max(1e-8, abs(take_px) * 1e-5)
+            tol_stop = max(1e-8, abs(stop_px) * 1e-3)  # 0.10% tolerância p/ matching de STOP
+            tol_take = max(1e-8, abs(take_px) * 1e-3)  # 0.10% tolerância p/ matching de TP
 
             for order in orders or []:
                 oid = self._extract_order_id(order)
