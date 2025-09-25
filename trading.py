@@ -3125,10 +3125,10 @@ if __name__ == "__main__":
 def executar_estrategia(
         df_in: pd.DataFrame,
         dex_in,
-        trade_logger_in: "TradeLogger" | None = None,
-        usd_to_spend: float = 1.0,
-        loop: bool = True,
-        sleep_seconds: int = 60,
+        trade_logger_in=None,
+        usd_to_spend = 1.0,
+        loop = True,
+        sleep_seconds = 60,
     ):
     """
     Runner seguro: monta df por ativo, instancia logger/estratégia se ausentes,
