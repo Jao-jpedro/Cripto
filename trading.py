@@ -774,6 +774,26 @@ class EMAGradientStrategy:
         self._cooldown_recent_release: bool = False
         self._last_cooldown_active: bool = False
 
+        def _enforce_max_loss(self, pos: Dict[str, Any], df_for_log: pd.DataFrame = None) -> None:
+            """Força saída market se perda > max(10%, $0.10) do preço de entrada."""
+            try:
+                entry = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
+                if entry <= 0:
+                    return
+                side = self._norm_side(pos.get("side") or pos.get("positionSide"))
+                px_now = float(self._preco_atual() or 0.0)
+                if px_now <= 0:
+                    return
+                loss_abs = (entry - px_now) if side == "LONG" else (px_now - entry)
+                loss_abs = max(0.0, loss_abs)
+                loss_pct = (loss_abs / entry) if entry > 0 else 0.0
+                threshold_abs = max(0.10, 0.10 * entry)
+                if (loss_abs >= threshold_abs) or (loss_pct >= 0.10):
+                    self._log(f"MaxLoss atingido: loss_abs={loss_abs:.6f} loss_pct={loss_pct:.3%} => FORÇAR SAÍDA MARKET", level="WARN")
+                    self._fechar_posicao_market(df_for_log=df_for_log, reason="max_loss")
+            except Exception:
+                pass
+
     def _log(self, message: str, level: str = "INFO") -> None:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
         print(f"[{level}] [{prefix}] {message}", flush=True)
@@ -1304,130 +1324,119 @@ class EMAGradientStrategy:
             except Exception:
                 rsi_val = float('nan')
         return rsi_val
+def _assess_entry(self,
+                  metrics: Dict[str, Any],
+                  side: str,
+                  last_idx: int,
+                  rsi_val: float,
+                  just_released_cooldown: bool) -> Dict[str, Any]:
+    """
+    Avalia entrada usando APENAS os racionais do tradingv4_ajustado (L1..L5 / S1..S5):
+      LONG:  EMA7>EMA21, grad>0 persistente, ATR% saudável, close>EMA7+k*ATR, volume>média
+      SHORT: EMA7<EMA21, grad<0 persistente, ATR% saudável, close<EMA7-k*ATR, volume>média
+    Demais controles (debounce, cooldown, pendências, saídas etc.) permanecem como no trading.py.
+    """
+    ema7 = float(metrics["ema7"])
+    ema21 = float(metrics["ema21"])
+    spread = float(metrics["spread"])
+    atr = float(metrics["atr"])
+    atr_pct = float(metrics["atr_pct"])
+    price = float(metrics["price"])
+    vol_flag = bool(metrics.get("vol_flag", True))  # proxy para (volume > vol_ma)
+    grad_persist_flag = bool(metrics["grad_persist_flags"][side])
+    grad_count = int(metrics["grad_counts"][side])
+    k_used = float(metrics.get("k_used", self.cfg.BREAKOUT_K_ATR))
 
-    def _assess_entry(self,
-                      metrics: Dict[str, Any],
-                      side: str,
-                      last_idx: int,
-                      rsi_val: float,
-                      just_released_cooldown: bool) -> Dict[str, Any]:
-        label = side
-        ema7 = metrics["ema7"]
-        ema21 = metrics["ema21"]
-        spread = metrics["spread"]
-        atr = metrics["atr"]
-        atr_pct = metrics["atr_pct"]
-        price = metrics["price"]
-        vol_flag = metrics["vol_flag"]
-        grad_persist_flag = metrics["grad_persist_flags"][label]
-        grad_count = metrics["grad_counts"][label]
-        k_used = metrics["k_values"][label]
-        alpha = float(self.cfg.ENTRY_ALPHA_ATR or 0.0)
-        eps_hard = float(self.cfg.ENTRY_EPS_HARD or 0.0)
-        atr_min = float(self.cfg.ATR_PCT_MIN)
-        atr_max = float(self.cfg.ATR_PCT_MAX)
-        reasons = []
-        telemetry: Dict[str, Any] = {
-            "ema_spread_in_atr": round(spread / atr, 4) if atr else None,
-            "grad_persist": grad_count,
-            "atr_pct": round(atr_pct, 4) if math.isfinite(atr_pct) else None,
-            "k_used": round(k_used, 4),
-            "rsi": round(rsi_val, 2) if math.isfinite(rsi_val) else None,
-            "vol_flag": vol_flag,
-        }
+    atr_min = float(self.cfg.ATR_PCT_MIN)
+    atr_max = float(self.cfg.ATR_PCT_MAX)
+    eps = float(self.cfg.NO_TRADE_EPS_K_ATR) * atr  # zona neutra
 
-        # Global filters
-        if not (atr_min <= atr_pct <= atr_max):
-            reasons.append("atr_range")
-        if atr <= 0 or abs(spread) < eps_hard * atr:
-            reasons.append("zona_neutra")
-        if not vol_flag:
-            reasons.append("volume_fraco")
-        if not self._entry_hysteresis.get(label, False):
-            reasons.append("histerese_off")
-        if self._entry_one_shot_blocked(label, last_idx):
-            reasons.append("retry_block")
+    # Telemetria
+    telemetry = {
+        "ema7": round(ema7, 6),
+        "ema21": round(ema21, 6),
+        "spread": round(spread, 6),
+        "atr": round(atr, 6),
+        "atr_pct": round(atr_pct, 4),
+        "price": round(price, 6),
+        "ema_spread_in_atr": round(spread / atr, 4) if atr else None,
+        "grad_persist": grad_count,
+        "k_used": round(k_used, 4),
+        "rsi": round(rsi_val, 2) if math.isfinite(rsi_val) else None,
+        "vol_flag": vol_flag,
+    }
 
-        # Context checks
-        tendency = (ema7 > ema21) if label == "LONG" else (ema7 < ema21)
-        grad_ok = grad_persist_flag
-        force_ok = (spread > alpha * atr) if label == "LONG" else (-spread > alpha * atr)
-        rsi_ok = False
-        if label == "LONG":
-            rsi_ok = 30.0 <= rsi_val <= 60.0 if math.isfinite(rsi_val) else False
-        else:
-            rsi_ok = 40.0 <= rsi_val <= 70.0 if math.isfinite(rsi_val) else False
-        if not tendency:
-            reasons.append("tendencia")
-        if not grad_ok:
-            reasons.append("grad")
-        if not force_ok:
-            reasons.append("forca")
-        if not rsi_ok:
-            reasons.append("rsi_ctx")
+    # Zona neutra (não operar)
+    zona_neutra = abs(ema7 - ema21) < eps
 
-        # Trigger
-        trigger = False
-        if label == "LONG":
-            trigger = price > (ema7 + k_used * atr)
-        else:
-            trigger = price < (ema7 - k_used * atr)
-        if not trigger:
-            reasons.append("gatilho")
+    # Breakout triggers
+    thr_long = ema7 + k_used * atr
+    thr_short = ema7 - k_used * atr
+    trigger_long = price > thr_long
+    trigger_short = price < thr_short
 
-        # Score
-        score = 0
-        if tendency:
-            score += 1
-        if force_ok:
-            score += 1
-        if vol_flag:
-            score += 1
-        if trigger:
-            score += 1
-        if grad_ok:
-            score += 1
-        if label == "LONG" and math.isfinite(rsi_val) and rsi_val < 25.0:
-            score -= 1
-        if label == "SHORT" and math.isfinite(rsi_val) and rsi_val > 75.0:
-            score -= 1
-        atr_span = max(1e-6, atr_max - atr_min)
-        if atr_pct - atr_min <= 0.05 * atr_span or atr_max - atr_pct <= 0.05 * atr_span:
-            score -= 1
-        telemetry["score"] = score
+    reasons: List[str] = []
+    if side == "LONG":
+        L1 = ema7 > ema21
+        L2 = grad_persist_flag
+        L3 = atr_min <= atr_pct <= atr_max
+        L4 = trigger_long
+        L5 = vol_flag
+        if not L1: reasons.append("EMA7<=EMA21")
+        if not L2: reasons.append(f"gradiente não >0 por {int(self.cfg.ENTRY_GRAD_PERSIST)} velas")
+        if not L3: reasons.append(f"ATR% fora [{atr_min},{atr_max}]")
+        if not L4: reasons.append(f"close<=EMA7+{k_used}*ATR")
+        if not L5: reasons.append("volume<=média")
+        tendency = L1
+        grad_ok = L2
+        force_ok = L3  # mapeado p/ filtro de ATR%
+        trigger = trigger_long
+        satisfied = int(L1) + int(L2) + int(L3) + int(L4) + int(L5)
+    else:
+        S1 = ema7 < ema21
+        S2 = grad_persist_flag
+        S3 = atr_min <= atr_pct <= atr_max
+        S4 = trigger_short
+        S5 = vol_flag
+        if not S1: reasons.append("EMA7>=EMA21")
+        if not S2: reasons.append(f"gradiente não <0 por {int(self.cfg.ENTRY_GRAD_PERSIST)} velas")
+        if not S3: reasons.append(f"ATR% fora [{atr_min},{atr_max}]")
+        if not S4: reasons.append(f"close>=EMA7-{k_used}*ATR")
+        if not S5: reasons.append("volume<=média")
+        tendency = S1
+        grad_ok = S2
+        force_ok = S3
+        trigger = trigger_short
+        satisfied = int(S1) + int(S2) + int(S3) + int(S4) + int(S5)
 
-        if just_released_cooldown:
-            if not (tendency and grad_ok):
-                reasons.append("cooldown_ctx")
-            if not (vol_flag or grad_ok):
-                reasons.append("cooldown_conf")
+    if zona_neutra:
+        reasons.append("zona_neutra(|EMA7-EMA21|<eps)")
 
-        if score < int(self.cfg.ENTRY_SCORE_MIN or 0):
-            reasons.append("score")
+    score = satisfied  # 0..5, compatível com uso corrente
+    approved = (len(reasons) == 0)
 
-        approved = len(reasons) == 0
-        reason_text = None if approved else ",".join(reasons)
-        telemetry["reason"] = reason_text
-        self._log_entry_telemetry(label, telemetry)
+    reason_text = None if approved else ",".join(reasons)
+    telemetry["reason"] = reason_text
 
-        decision = {
-            "side": label,
-            "approved": approved,
-            "score": score,
-            "telemetry": telemetry,
-            "reason": reason_text,
-            "k_used": k_used,
-            "tendency": tendency,
-            "grad_ok": grad_ok,
-            "force_ok": force_ok,
-            "rsi_ok": rsi_ok,
-            "trigger": trigger,
-            "vol_flag": vol_flag,
-        }
-        candidate_ready = trigger or (tendency and grad_ok and force_ok)
-        if not approved and candidate_ready:
-            self._entry_last_block_idx[label] = last_idx
-        return decision
+    decision = {
+        "side": side,
+        "approved": approved,
+        "score": score,
+        "telemetry": telemetry,
+        "reason": reason_text,
+        "k_used": k_used,
+        "tendency": tendency,
+        "grad_ok": grad_ok,
+        "force_ok": force_ok,
+        "rsi_ok": True,   # v4 base não exige RSI
+        "trigger": trigger,
+        "vol_flag": vol_flag,
+    }
+    candidate_ready = trigger or (tendency and grad_ok and force_ok)
+    if not approved and candidate_ready:
+        self._entry_last_block_idx[side] = last_idx
+    return decision
+
 
     def _ensure_emas_and_slopes(self, df: pd.DataFrame) -> pd.DataFrame:
         if "valor_fechamento" not in df.columns:
@@ -1810,34 +1819,8 @@ class EMAGradientStrategy:
     def _place_take_profit(self, side: str, amount: float, target_price: float,
                            df_for_log: Optional[pd.DataFrame] = None,
                            existing_orders: Optional[List[Dict[str, Any]]] = None):
-        amt = self._round_amount(amount)
-        px = float(target_price)
-        params = {"reduceOnly": True}
-        if self.debug:
-            self._log(f"Criando TAKE PROFIT {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
-        if existing_orders is None:
-            existing = self._find_matching_protection("take", side, px)
-        else:
-            existing = self._find_matching_protection_in_orders("take", side, px, existing_orders)
-        if existing is not None:
-            self._last_take_order_id = self._extract_order_id(existing)
-            self._last_take_order_px = px
-            if self.debug:
-                self._log(
-                    f"Take profit existente reutilizado id={self._last_take_order_id} price≈{px:.6f}",
-                    level="DEBUG",
-                )
-            return existing
-        try:
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
-        except Exception as e:
-            msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
-            text = str(e).lower()
-            if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
-                self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
-                return None
-            self._log(msg, level="ERROR")
-            raise
+    # TP desativado
+    return None
 
         try:
             info = ret if isinstance(ret, dict) else {}
@@ -2466,6 +2449,7 @@ class EMAGradientStrategy:
         if pos:
             lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
             self._ensure_position_protections(pos, df_for_log=df)
+            self._enforce_max_loss(pos, df_for_log=df)
             self._maybe_trailing_breakeven_plus(pos, df_for_log=df)
             # Contenção adicional: fecha se perda > limite configurado
         try:
