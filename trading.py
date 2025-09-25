@@ -1,3 +1,106 @@
+# === HEADER HELPERS (do not move) ===
+print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
+
+# Helper must be defined BEFORE any class that uses it
+def _ensure_strategy_step_instance(strategy_obj):
+    """Ensure the given strategy instance has a .step() callable.
+    If missing, attach a bound method that delegates to common names (run/process/etc.).
+    """
+    # If already ok, return as is
+    for name in ("step", "run", "process"):
+        if callable(getattr(strategy_obj, name, None)):
+            return strategy_obj
+
+    # Attach a bound 'step' that delegates to alternatives
+    def _inst_step(self, *args, **kwargs):
+        for alt in ("run", "process", "iterate", "tick", "next", "__call__", "execute", "on_bar", "update"):
+            m = getattr(self, alt, None)
+            if callable(m):
+                try:
+                    return m(*args, **kwargs)
+                except TypeError:
+                    try:
+                        return m(*args)
+                    except Exception:
+                        pass
+        # graceful no-op
+        try:
+            print(f"[ERROR] [STRATEGY] {type(self).__name__} does not expose a step/run/process method", flush=True)
+        except Exception:
+            pass
+        return None
+
+    try:
+        import types
+        strategy_obj.step = types.MethodType(_inst_step, strategy_obj)  # bind to instance
+    except Exception:
+        try:
+            strategy_obj.step = _inst_step.__get__(strategy_obj, type(strategy_obj))
+        except Exception:
+            pass
+    try:
+        print("[WARN] [COMPAT] Attached instance-level .step() to strategy", flush=True)
+    except Exception:
+        pass
+    return strategy_obj
+
+def _safe_strategy_step(strategy_obj, *args, **kwargs):
+    """Call strategy .step or fallbacks. Never raises; logs and returns None on failure."""
+    try:
+        cls = type(strategy_obj)
+        mod = getattr(cls, "__module__", "?")
+        file_hint = None
+        try:
+            import sys, inspect
+            mod_obj = sys.modules.get(mod)
+            if mod_obj is not None:
+                try:
+                    file_hint = inspect.getsourcefile(mod_obj) or inspect.getfile(mod_obj)
+                except Exception:
+                    file_hint = getattr(mod_obj, "__file__", None)
+        except Exception:
+            pass
+        print(f"[DEBUG] [STRATEGY] Using {cls.__name__} from module={mod} file={file_hint}", flush=True)
+    except Exception:
+        pass
+
+    for name in ("step", "run", "process", "iterate", "tick", "next", "__call__", "execute", "on_bar", "update"):
+        meth = getattr(strategy_obj, name, None)
+        if callable(meth):
+            try:
+                return meth(*args, **kwargs)
+            except (TypeError, AttributeError):
+                try:
+                    return meth(*args)
+                except Exception:
+                    continue
+    print(f"[ERROR] [STRATEGY] {type(strategy_obj).__name__} does not expose a step/run/process method", flush=True)
+    return None
+
+# Adapter that ALWAYS exposes .step(); safe to use anywhere in code
+class StrategyAdapter:
+    def __init__(self, inner):
+        # Ensure the wrapped instance has a .step if possible
+        try:
+            inner = _ensure_strategy_step_instance(inner)
+        except Exception:
+            pass
+        self._inner = inner
+
+    def __getattr__(self, name):
+        # Proxy any unknown attribute to the wrapped strategy
+        return getattr(self._inner, name)
+
+    def step(self, *args, **kwargs):
+        # delegate to inner using safe helper
+        return _safe_strategy_step(self._inner, *args, **kwargs)
+
+# === END HEADER HELPERS ===
+
+def _ensure_strategy_step_instance(strategy_obj):
+    """Top-level stub to avoid NameError; real helper later may override this."""
+    return strategy_obj
+
 
 
 # ---- StrategyAdapter: guarantees .step() exists and delegates safely ----
