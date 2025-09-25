@@ -2179,6 +2179,19 @@ class EMAGradientStrategy:
         # indicadores e gradiente em %/barra
         df = self._compute_indicators_live(df)
         last = df.iloc[-1]
+        # === PANIC-CUT PRIORITÁRIO ===
+        # Fechar imediatamente se o unrealizedPnl da posição estiver <= -0,05 (ou outro limiar configurado).
+        # Isso tem prioridade sobre qualquer outra lógica.
+        try:
+            _px_now = float(self._preco_atual())
+            _closed = guard_close_all(self.dex, self.symbol, _px_now, vault=HL_SUBACCOUNT_VAULT)
+            if _closed:
+                self._log("Panic-cut acionado (unrealizedPnl <= -0,05). Encerrado e encerrando ciclo.", level="WARN")
+                return
+        except Exception as _e:
+            # Não deixa o ciclo quebrar; se der erro aqui, segue o fluxo normal.
+            pass
+
         last_idx = len(df) - 1
         self._last_seen_bar_idx = last_idx
 
