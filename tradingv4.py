@@ -1548,7 +1548,7 @@ class EMAGradientStrategy:
         target_side = self._norm_side(side)
         if not orders:
             return None
-        tol = max(1e-8, abs(price) * 1e-5)
+        tol = max(1e-8, abs(price) * 1e-3)  # 0.1% tolerância para matching do preço
         for order in orders:
             order_kind, order_price = self._parse_reduce_only_kind_price(order)
             if order_kind != kind:
@@ -2153,6 +2153,12 @@ class EMAGradientStrategy:
                 self._log("Ajuste bloqueado pelo anti-spam.", level="DEBUG")
             return
 
+        existing = self._find_matching_protection('stop', stop_side, target_stop)
+        if existing is not None:
+            # Já existe um STOP equivalente; não cancelar nem recriar
+            if self.debug:
+                self._log(f"Trailing BE±: stop existente @ {target_stop:.6f}; nada a fazer", level="DEBUG")
+            return
         if oid:
             self._cancel_order_silent(oid)
         ret = self._place_stop(stop_side, amt, target_stop, df_for_log=df_for_log)
