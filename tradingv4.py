@@ -2924,44 +2924,30 @@ if __name__ == "__main__":
     executar_estrategia(base_df, dex, None)
 
 
-def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, *, vault):
-    levels = compute_tp_sl(entry_px, side)
-    tp, sl = levels["tp"], levels["sl"]
-    exit_side = "sell" if side.lower() in ("long", "buy") else "buy"
-    params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
-    # STOP
-    stop_params = dict(params_base); stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
-    try:
-        stop_order = dex.create_order(symbol, "market", exit_side, 0, None, stop_params)
-    except Exception:
-        stop_order = dex.create_order(symbol, "market", exit_side, 0, None, {"vaultAddress": vault, "reduceOnly": True, "triggerPrice": sl})
-    # TAKE
-    take_params = dict(params_base); take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
-    try:
-        take_order = dex.create_order(symbol, "limit", exit_side, 0, tp, take_params)
-    except Exception:
-        take_order = dex.create_order(symbol, "limit", exit_side, 0, tp, {"vaultAddress": vault, "reduceOnly": True})
-    return {"tp": tp, "sl": sl, "stop_order": stop_order, "take_order": take_order}
-
-
 def _approx_equal(a: float, b: float, tol_abs: float = None, tol_pct: float = 0.001) -> bool:
-    """True if |a-b| <= max(tol_abs, tol_pct*ref) with ref=max(|a|,|b|)."""
     if a is None or b is None:
         return False
     ref = max(abs(a), abs(b), 1e-12)
     bound = max((tol_abs or 0.0), ref * tol_pct)
     return abs(a - b) <= bound
 
+def _get_current_contracts(dex, symbol, *, vault) -> float:
+    try:
+        poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        for p in poss:
+            contracts = p.get("contracts") or p.get("amount") or 0
+            if contracts and float(contracts) > 0:
+                return float(contracts)
+    except Exception:
+        pass
+    return 0.0
+
 def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount, *, vault):
-    """
-    Garante TP (10%) e SL (5%) ativos (reduceOnly) na subconta.
-    - Checa ordens abertas com fetch_open_orders(symbol, {"vaultAddress": vault})
-    - Se já existir STOP/TAKE compatíveis, não recria.
-    - Caso falte, cria somente a(s) que estiver(em) faltando.
-    """
     levels = compute_tp_sl(entry_px, side)
     tp, sl = float(levels["tp"]), float(levels["sl"])
     exit_side = "sell" if side.lower() in ("long", "buy") else "buy"
+    contracts_now = _get_current_contracts(dex, symbol, vault=vault)
+    qty = contracts_now if contracts_now > 0 else float(amount)
 
     try:
         open_orders = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault})
@@ -2976,58 +2962,42 @@ def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount, *, vault
             o_side = (o.get("side") or "").lower()
             if o_side != exit_side:
                 continue
-            ro_flag = False
             info = o.get("info") or {}
-            # reduceOnly pode aparecer em nível raiz ou dentro de info
             ro_flag = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
             if not ro_flag:
                 continue
-
-            price = o.get("price")
-            avg = o.get("average")
             trig = o.get("triggerPrice") or (info.get("triggerPx") if isinstance(info, dict) else None)
             sl_key = (info.get("stopLossPrice") if isinstance(info, dict) else None)
             tp_key = (info.get("takeProfitPrice") if isinstance(info, dict) else None)
-
-            # Heurística: STOP tem trigger ~ sl; TAKE tem price/trigger ~ tp
-            if trig is not None or sl_key is not None:
-                if _approx_equal(float(trig or sl_key), sl, tol_pct=0.001):
-                    has_stop = True
-                    continue
-
-            # TAKE: price ou takeProfitPrice ~ tp
-            if (price is not None and _approx_equal(float(price), tp, tol_pct=0.001)) \
-               or (tp_key is not None and _approx_equal(float(tp_key), tp, tol_pct=0.001)):
+            otype = (o.get("type") or info.get("type") or "").lower()
+            if (otype in ("stop", "") and (trig is not None or sl_key is not None)) and _approx_equal(float(trig or sl_key), sl):
+                has_stop = True
+                continue
+            if (otype in ("takeprofit", "") and (trig is not None or tp_key is not None)) and _approx_equal(float(trig or tp_key), tp):
                 has_take = True
                 continue
-
         except Exception:
-            # ignora ordem malformada
             continue
 
-    results = {"tp": tp, "sl": sl, "created_stop": None, "created_take": None}
+    results = {"tp": tp, "sl": sl, "created_stop": None, "created_take": None, "qty_used": qty}
 
     params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
 
-    # Criar STOP se faltando
-    if not has_stop:
-        stop_params = dict(params_base)
-        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
+    if not has_stop and qty > 0:
+        stop_params = dict(params_base); stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
         try:
-            results["created_stop"] = dex.create_order(symbol, "market", exit_side, amount, None, stop_params)
+            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
         except Exception:
-            # fallback com apenas triggerPrice
-            stop_params_fb = dict(params_base)
-            stop_params_fb.update({"triggerPrice": sl})
-            results["created_stop"] = dex.create_order(symbol, "market", exit_side, amount, None, stop_params_fb)
+            stop_params_fb = dict(params_base); stop_params_fb.update({"triggerPrice": sl})
+            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
 
-    # Criar TAKE se faltando
-    if not has_take:
-        take_params = dict(params_base)
-        take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
+    if not has_take and qty > 0:
+        take_params = dict(params_base); take_params.update({"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp})
         try:
-            results["created_take"] = dex.create_order(symbol, "limit", exit_side, amount, tp, take_params)
+            results["created_take"] = dex.create_order(symbol, "market", exit_side, qty, None, take_params)
         except Exception:
-            results["created_take"] = dex.create_order(symbol, "limit", exit_side, amount, tp, params_base)
+            take_params_fb = dict(params_base); take_params_fb.update({"triggerPrice": tp})
+            results["created_take"] = dex.create_order(symbol, "market", exit_side, qty, None, take_params_fb)
 
     return results
+
