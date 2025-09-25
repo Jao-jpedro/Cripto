@@ -56,17 +56,19 @@ class TrailingROIManager:
             except Exception:
                 pass
 
-        params = {"reduceOnly": True, "type": "stop", "triggerPrice": float(stop_px), "stopLossPrice": float(stop_px), "clientOrderId": f"TRAILROI-{symbol.replace('/', '-')}"}
+        params = {"reduceOnly": True, "type": "stop_market", "stopPrice": float(stop_px), "clientOrderId": f"TRAILROI-{symbol.replace('/', '-')}"}
         try:
             o = self.dex.create_order(symbol, "market", exit_side, qty_abs, None, params)
-            oid = None
-            if isinstance(o, dict):
-                oid = o.get("id") or (o.get("info") or {}).get("oid")
-            _TRAIL_STATE["order_id"][key] = oid
-            _TRAIL_STATE["stop_px"][key] = float(stop_px)
-            return float(stop_px)
         except Exception:
-            return None
+            # fallback para variantes de DEX
+            params = {"reduceOnly": True, "type": "stop", "triggerPrice": float(stop_px), "stopLossPrice": float(stop_px), "clientOrderId": f"TRAILROI-{symbol.replace('/', '-')}"}
+            o = self.dex.create_order(symbol, "market", exit_side, qty_abs, None, params)
+        oid = None
+        if isinstance(o, dict):
+            oid = o.get("id") or (o.get("info") or {}).get("oid")
+        _TRAIL_STATE["order_id"][key] = oid
+        _TRAIL_STATE["stop_px"][key] = float(stop_px)
+        return float(stop_px)
 
 def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool: ...
 def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool: ...
@@ -905,7 +907,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.05
-    take_pct: float = None
+    take_pct: float = 0.10
     usd_env: Optional[str] = None
 
 
@@ -3231,19 +3233,40 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
     """
     # 1) Hard stop por unrealizedPnl <= -0.10
     try:
-        _ = close_if_unrealized_pnl_breaches(dex, symbol, vault=vault, threshold=-0.10)
-        if _:
-            print(f"[TRAIL][{symbol}] Hard stop acionado (-$0.10).")
-            return {"ok": True, "reason": "hard_stop"}
+        positions = dex.fetch_positions([symbol])
+        for p in positions:
+            info = p.get("info") or {}
+            unreal = float(p.get("unrealizedPnl") or info.get("unrealizedPnl") or 0.0)
+            szi = float((info.get("position") or {}).get("szi") or p.get("contracts") or 0.0)
+            if unreal <= -0.10 and abs(szi) > 0:
+                side = "sell" if szi > 0 else "buy"
+                dex.create_order(symbol, "market", side, float(abs(szi)), None, {"reduceOnly": True})
+                return {"ok": True, "reason": "hard_stop"}
     except Exception:
         pass
 
-    # 2) Coleta estado da posição
+    # 2) Coleta estado da posição (qty, lev, entry, side)
+    qty = lev = entry = side = None
     try:
-        qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+        # Se existir função auxiliar no seu código, mantenha
+        if "_get_pos_size_and_leverage" in globals():
+            qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)  # type: ignore
+        else:
+            positions = dex.fetch_positions([symbol])
+            for p in positions:
+                info = p.get("info") or {}
+                posi = info.get("position") or {}
+                szi = float(posi.get("szi") or p.get("contracts") or 0.0)
+                if abs(szi) <= 0:
+                    continue
+                side = "buy" if szi > 0 else "sell"
+                lev = float(posi.get("leverage") or p.get("leverage") or 10.0)
+                entry = float(posi.get("entryPx") or p.get("entryPrice") or 0.0)
+                qty = abs(szi)
+                break
     except Exception:
-        qty, lev, entry, side = 0.0, 1.0, None, None
-    if qty <= 0 or not entry or not side:
+        pass
+    if not qty or not entry or not side:
         return {"ok": False, "reason": "no_position", "qty": qty, "lev": lev, "entry": entry}
 
     # 3) Preço atual
