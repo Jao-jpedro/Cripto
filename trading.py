@@ -3,6 +3,11 @@
 # ---- StrategyAdapter: guarantees .step() exists and delegates safely ----
 class StrategyAdapter:
     def __init__(self, inner):
+        # Ensure the wrapped instance has a .step if possible
+        try:
+            inner = _ensure_strategy_step_instance(inner)
+        except Exception:
+            pass
         self._inner = inner
 
     def __getattr__(self, name):
@@ -16,7 +21,7 @@ class StrategyAdapter:
             if callable(meth):
                 try:
                     return meth(*args, **kwargs)
-                except TypeError:
+                except (TypeError, AttributeError):
                     # If signature mismatch, try calling with fewer kwargs (common for legacy)
                     try:
                         return meth(*args)
@@ -3091,7 +3096,8 @@ if __name__ == "__main__":
                         logger=logger,
                         debug=True,
                     ))
-                    asset_state[asset.name] = {"strategy": strategy, "logger": logger}
+                    strategy = _strategy_tmp = strategy
+                    strategy = _ensure_strategy_step_instance(_strategy_tmp)
                 strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
 
                 usd_asset = usd_to_spend
@@ -3194,6 +3200,89 @@ try:
 except Exception as _e_compat:
     try:
         print(f"[WARN] [COMPAT] Could not attach class-level step to EMAGradientStrategy: {_e_compat}", flush=True)
+    except Exception:
+        pass
+
+
+# ---- Concrete step for EMAGradientStrategy (df + usd_to_spend aware) ----
+try:
+    _EMAG = EMAGradientStrategy  # type: ignore[name-defined]
+    def _emag_step_concrete(self, df, usd_to_spend, rsi_df_hourly=None):
+        # Persist last price snapshot from df
+        try:
+            _col_close = "close" if "close" in df.columns else ("valor_fechamento" if "valor_fechamento" in df.columns else None)
+            if _col_close:
+                self._last_price_snapshot = float(df[_col_close].iloc[-1])
+        except Exception:
+            pass
+
+        # Resolve EMAs
+        def _col(*names):
+            for n in names:
+                if n in df.columns:
+                    return n
+            return None
+        c_short = _col("ema_short", "ema7")
+        c_long  = _col("ema_long", "ema21")
+        c_atr   = _col("atr", "atr14", "atr_14")
+
+        ema_s = float(df[c_short].iloc[-1]) if c_short else None
+        ema_l = float(df[c_long].iloc[-1]) if c_long else None
+        atr_v = float(df[c_atr].iloc[-1]) if c_atr else None
+
+        # Effective notional by leverage: amount sizing is handled inside _abrir_posicao_com_stop
+        # but we ensure the base usd_to_spend is at least 1 (your requirement).
+        try:
+            base_usd = float(usd_to_spend)
+        except Exception:
+            base_usd = 1.0
+        if base_usd <= 0:
+            base_usd = 1.0
+
+        # If there is an open position, consider exit on cross
+        pos = None
+        try:
+            pos = self._posicao_aberta()
+        except Exception:
+            pos = None
+
+        try:
+            if pos and float(pos.get("contracts", 0)) > 0 and (ema_s is not None and ema_l is not None):
+                side_now = "LONG" if float(pos.get("side", "long")).upper().startswith("LONG") or str(pos.get("side","")).lower()=="long" else "SHORT"
+                # Exit if cross to the opposite
+                if side_now == "LONG" and ema_s < ema_l:
+                    self._fechar_posicao(df_for_log=df)
+                elif side_now == "SHORT" and ema_s > ema_l:
+                    self._fechar_posicao(df_for_log=df)
+        except Exception:
+            pass
+
+        # Entry logic: only if no position
+        try:
+            pos = self._posicao_aberta()
+            has_open = bool(pos and float(pos.get("contracts", 0)) > 0)
+        except Exception:
+            has_open = False
+
+        if not has_open and (ema_s is not None and ema_l is not None):
+            if ema_s > ema_l:
+                # Go LONG
+                self._abrir_posicao_com_stop("buy", base_usd, df_for_log=df, atr_last=atr_v)
+            elif ema_s < ema_l:
+                # Go SHORT
+                self._abrir_posicao_com_stop("sell", base_usd, df_for_log=df, atr_last=atr_v)
+        # trailing protections / BE+ if any
+        try:
+            self._maybe_trailing_breakeven_plus(df_for_log=df)
+        except Exception:
+            pass
+        return None
+    # Attach/override class step
+    setattr(_EMAG, "step", _emag_step_concrete)
+    print("[INFO] [COMPAT] Concrete EMAGradientStrategy.step attached (df + usd_to_spend).", flush=True)
+except Exception as _e_final:
+    try:
+        print(f"[WARN] [COMPAT] Could not attach concrete step: {_e_final}", flush=True)
     except Exception:
         pass
 
