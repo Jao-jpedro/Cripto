@@ -1,51 +1,78 @@
 def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool: ...
 def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool: ...
 
+
 def close_if_unrealized_pnl_breaches(dex, symbol, *, vault, threshold: float = -0.05) -> bool:
     """
-    Fecha imediatamente se unrealizedPnl <= threshold (ex.: threshold=-0.05 para -5 cents).
-    Se unrealizedPnl não estiver disponível, não faz nada (fallbacks separados cuidam do resto).
+    Fecha imediatamente se PnL não realizado (USD) <= threshold (default -$0.05).
+    Se unrealizedPnl não vier na posição, calcula fallback via (px_now - entry) * qty (com sinal).
     """
     try:
         pos = _get_position_for_vault(dex, symbol, vault)
-    except Exception:
+    except Exception as e:
+        print(f"[PANIC][{symbol}] Falha ao obter posição: {type(e).__name__}: {e}")
         pos = None
     if not pos:
         return False
-    # Tenta extrair unrealizedPnl em vários formatos
+
+    # -- Tenta Unrealized diretamente
     pnl = None
     try:
         pnl = pos.get("unrealizedPnl")
         if pnl is None:
-            pnl = (pos.get("info", {}) or {}).get("unrealizedPnl")
+            pnl = (pos.get("info") or {}).get("unrealizedPnl")
         if pnl is None:
-            pnl = ((pos.get("info", {}) or {}).get("position", {}) or {}).get("unrealizedPnl")
+            pnl = ((pos.get("info") or {}).get("position") or {}).get("unrealizedPnl")
     except Exception:
         pnl = None
+
+    # -- Se não houver unrealized, calcular pelo preço atual
     if pnl is None:
+        try:
+            qty = float(pos.get("contracts") or pos.get("amount") or 0.0)
+            entry = float(pos.get("entryPrice") or 0.0)
+            side  = (pos.get("side") or "").lower()
+            last  = None
+            try:
+                last = dex.fetch_ticker(symbol).get("last")
+            except Exception as e:
+                print(f"[PANIC][{symbol}] Falha ao buscar last: {type(e).__name__}: {e}")
+            px_now = float(last) if last is not None else None
+            if qty and entry and px_now is not None and side in ("long","buy","short","sell"):
+                if side in ("long","buy"):
+                    pnl = (px_now - entry) * qty
+                else:
+                    pnl = (entry - px_now) * qty
+        except Exception as e:
+            print(f"[PANIC][{symbol}] Fallback PnL falhou: {type(e).__name__}: {e}")
+            pnl = None
+
+    if pnl is None:
+        # Sem como decidir
+        print(f"[PANIC][{symbol}] PnL indisponível; ignorando corte.")
         return False
+
     try:
         pnl_f = float(pnl)
-    except Exception:
+    except Exception as e:
+        print(f"[PANIC][{symbol}] Conversão PnL falhou: {type(e).__name__}: {e} | pnl={pnl}")
         return False
 
     if pnl_f <= float(threshold):
-        # Fecha a posição inteira no lado de saída
         try:
-            qty, _, _, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
-            if not side or qty <= 0: 
-                return False
-            exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
-            dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True, "vaultAddress": vault})
+            qty, _, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+            side = (side or "").lower()
+            exit_side = "sell" if side in ("long","buy") else "buy"
+            dex.create_order(symbol, "market", exit_side, float(qty), None, {"vaultAddress": vault, "reduceOnly": True})
+            print(f"[PANIC][{symbol}] PnL={pnl_f:.6f} <= {threshold} => FECHADO via market reduceOnly ({exit_side}).")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"[PANIC][{symbol}] Falha ao FECHAR por unrealizedPnl: {type(e).__name__}: {e}")
             return False
+    else:
+        # opcional: log de debug
+        pass
     return False
-
-#codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
-
-print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
-
 
 def _log_global(section: str, message: str, level: str = "INFO") -> None:
     """Formato padrão para logs fora das classes."""
@@ -2180,17 +2207,23 @@ class EMAGradientStrategy:
         df = self._compute_indicators_live(df)
         last = df.iloc[-1]
         # === PANIC-CUT PRIORITÁRIO ===
-        # Fechar imediatamente se o unrealizedPnl da posição estiver <= -0,05 (ou outro limiar configurado).
-        # Isso tem prioridade sobre qualquer outra lógica.
         try:
-            _px_now = float(self._preco_atual())
-            _closed = guard_close_all(self.dex, self.symbol, _px_now, vault=HL_SUBACCOUNT_VAULT)
-            if _closed:
-                self._log("Panic-cut acionado (unrealizedPnl <= -0,05). Encerrado e encerrando ciclo.", level="WARN")
-                return
+            _px_now = None
+            try:
+                _px_now = float(self._preco_atual())
+            except Exception:
+                try:
+                    _px_now = float(self.dex.fetch_ticker(self.symbol).get("last"))
+                except Exception:
+                    _px_now = None
+            if _px_now is not None:
+                if guard_close_all(self.dex, self.symbol, _px_now, vault=HL_SUBACCOUNT_VAULT):
+                    self._log("Panic-cut acionado (PnL<=-0,05 ou perda abs>0,05). Encerrando ciclo.", level="WARN")
+                    print(f"[PANIC][{self.symbol}] AÇÃO: guard_close_all executou e encerrou ciclo.")
+                    return
         except Exception as _e:
-            # Não deixa o ciclo quebrar; se der erro aqui, segue o fluxo normal.
-            pass
+            print(f"[PANIC][{self.symbol}] Erro no panic-cut inicial: {type(_e).__name__}: {_e}")
+            # segue o fluxo normal
 
         last_idx = len(df) - 1
         self._last_seen_bar_idx = last_idx
@@ -3080,15 +3113,13 @@ if __name__ == "__main__":
                             except Exception:
                                 _px_now = None
                         if _px_now is not None:
-                            # Nunca deixar a perda passar de -0,05
                             guard_close_all(strategy.dex, strategy.symbol, _px_now, vault=HL_SUBACCOUNT_VAULT)
-                        # Sempre garantir TP e SL para qualquer posição aberta
                         try:
                             ensure_tpsl_for_position(strategy.dex, strategy.symbol, vault=HL_SUBACCOUNT_VAULT)
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                        except Exception as e:
+                            print(f"[TPSL][{asset.name}] Erro pre-step: {type(e).__name__}: {e}")
+                    except Exception as e:
+                        print(f"[SAFETY][{asset.name}] Erro bloco pre-step: {type(e).__name__}: {e}")
                     strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
                 except Exception as e:
                     _log_global("ASSET", f"Erro executando {asset.name}: {type(e).__name__}: {e}", level="ERROR")
@@ -3106,10 +3137,10 @@ if __name__ == "__main__":
                         guard_close_all(strategy.dex, strategy.symbol, _px_now2, vault=HL_SUBACCOUNT_VAULT)
                     try:
                         ensure_tpsl_for_position(strategy.dex, strategy.symbol, vault=HL_SUBACCOUNT_VAULT)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+                    except Exception as e:
+                        print(f"[TPSL][{asset.name}] Erro pos-step: {type(e).__name__}: {e}")
+                except Exception as e:
+                    print(f"[SAFETY][{asset.name}] Erro bloco pos-step: {type(e).__name__}: {e}")
 
                 _time.sleep(0.25)
 
@@ -3246,25 +3277,20 @@ def _approx(a, b, tol=0.001):
 
 
 
-
 def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_pct: float = 0.001):
     """
-    Garante *sempre* que a posição atual possua TP e SL reduceOnly.
-    **NÃO CANCELA** ordens existentes se o preço já estiver igual (dentro da tolerância).
-    Lógica:
-      1) Ler posição. Se não houver, retorna.
-      2) Calcular preços alvo (TP/SL) com leverage.
-      3) Buscar ordens abertas reduceOnly do símbolo/vault e verificar se já existem
-         ordens com preço ~igual ao alvo (tolerância `price_tol_pct`; default 0.1%).
-      4) Criar apenas o que estiver faltando. Não cancelar o que já corresponde.
+    Garante TP e SL reduceOnly para a posição atual SEM cancelar ordens já corretas.
+    Apenas cria o que estiver faltando (dentro da tolerância de preço).
     """
     qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
     if qty <= 0 or not entry or not side:
+        print(f"[TPSL][{symbol}] Sem posição; nothing to ensure.")
         return {"ok": False, "reason": "no_position", "qty": qty, "lev": lev, "entry": entry}
 
     targets = compute_tp_sl_leveraged(entry, side, lev, qty)
     tp, sl = float(targets["tp"]), float(targets["sl"])
     exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
+    print(f"[TPSL][{symbol}] entry={entry:.6f} side={side} lev={lev} qty={qty} -> TP={tp:.6f} SL={sl:.6f}")
 
     def _approx_equal(a, b, tol_pct):
         a = float(a); b = float(b)
@@ -3282,10 +3308,10 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
             pass
         return False
 
-    # 3) Verificar existentes (sem cancelar)
     try:
         open_ords = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
-    except Exception:
+    except Exception as e:
+        print(f"[TPSL][{symbol}] Falha ao ler open orders: {type(e).__name__}: {e}")
         open_ords = []
 
     has_stop = False
@@ -3294,7 +3320,6 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
         try:
             if not _is_reduce_only(o):
                 continue
-            # extrair trigger/price
             info = o.get("params") or o.get("info") or {}
             trig = (info.get("triggerPrice")
                     or info.get("stopLossPrice")
@@ -3311,61 +3336,50 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
                 has_take = True
         except Exception:
             continue
+    print(f"[TPSL][{symbol}] Existentes => stop={has_stop} take={has_take} (tol={price_tol_pct*100:.3f}%)")
 
-    # 4) Criar apenas o que faltar, com fallbacks. Sem cancelar nada.
     def _create_stop_try():
         base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
-        # A
-        try:
-            return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **{"type": "stop", "triggerPrice": sl, "stopLossPrice": sl}))
-        except Exception:
-            pass
-        # B
-        try:
-            return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **{"triggerPrice": sl}))
-        except Exception:
-            pass
-        # C
-        try:
-            return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **{"stopPrice": sl}))
-        except Exception:
-            pass
+        for variant in (
+            {"type": "stop", "triggerPrice": sl, "stopLossPrice": sl},
+            {"triggerPrice": sl},
+            {"stopPrice": sl},
+        ):
+            try:
+                print(f"[TPSL][{symbol}] Criando STOP com {variant}")
+                return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **variant))
+            except Exception as e:
+                print(f"[TPSL][{symbol}] Falha criar STOP {variant}: {type(e).__name__}: {e}")
         return None
 
     def _create_take_try():
         base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
-        # A
-        try:
-            return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **{"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp}))
-        except Exception:
-            pass
-        # B
-        try:
-            return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **{"triggerPrice": tp}))
-        except Exception:
-            pass
-        # C
-        try:
-            return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **{"tpPrice": tp}))
-        except Exception:
-            pass
+        for variant in (
+            {"type": "takeProfit", "triggerPrice": tp, "takeProfitPrice": tp},
+            {"triggerPrice": tp},
+            {"tpPrice": tp},
+        ):
+            try:
+                print(f"[TPSL][{symbol}] Criando TAKE com {variant}")
+                return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **variant))
+            except Exception as e:
+                print(f"[TPSL][{symbol}] Falha criar TAKE {variant}: {type(e).__name__}: {e}")
         return None
 
     created_stop = created_take = None
-
     for _ in range(max(1, int(retries))):
-        if not has_stop:
-            created_stop = _create_stop_try() if created_stop is None else created_stop
-        if not has_take:
-            created_take = _create_take_try() if created_take is None else created_take
+        if not has_stop and created_stop is None:
+            created_stop = _create_stop_try()
+        if not has_take and created_take is None:
+            created_take = _create_take_try()
 
-        # revalidar existência
+        # Revalida
         try:
             cur = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
-        except Exception:
+        except Exception as e:
+            print(f"[TPSL][{symbol}] Releitura open orders falhou: {type(e).__name__}: {e}")
             cur = []
-        has_stop_now = has_stop
-        has_take_now = has_take
+        hs = has_stop; ht = has_take
         for o in cur:
             try:
                 if not _is_reduce_only(o):
@@ -3380,25 +3394,39 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
                 if trig is None:
                     continue
                 trig = float(trig)
-                if not has_stop_now and _approx_equal(trig, sl, price_tol_pct):
-                    has_stop_now = True
-                if not has_take_now and _approx_equal(trig, tp, price_tol_pct):
-                    has_take_now = True
+                if not hs and _approx_equal(trig, sl, price_tol_pct): hs = True
+                if not ht and _approx_equal(trig, tp, price_tol_pct): ht = True
             except Exception:
                 continue
+        if hs and ht:
+            print(f"[TPSL][{symbol}] OK => ambos presentes.")
+            return {"ok": True, "created_stop": created_stop is not None, "created_take": created_take is not None, "tp": tp, "sl": sl}
 
-        if has_stop_now and has_take_now:
-            return {
-                "ok": True,
-                "created_stop": (created_stop is not None) and not has_stop,
-                "created_take": (created_take is not None) and not has_take,
-                "qty": qty, "lev": lev, "entry": entry, "tp": tp, "sl": sl
-            }
+    print(f"[TPSL][{symbol}] Resultado: stop={'OK' if has_stop else 'MISSING'} take={'OK' if has_take else 'MISSING'}")
+    return {"ok": has_stop or has_take, "created_stop": created_stop is not None, "created_take": created_take is not None, "tp": tp, "sl": sl}
 
-    # Retorno final (pode ter criado parcialmente, mas nunca cancelamos nada)
-    return {
-        "ok": has_stop or has_take,
-        "created_stop": created_stop is not None,
-        "created_take": created_take is not None,
-        "qty": qty, "lev": lev, "entry": entry, "tp": tp, "sl": sl
-    }
+def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
+    """
+    Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
+    """
+    qty, _, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+    if qty <= 0 or not entry or not side:
+        return False
+
+    s = side.lower()
+    if s in ("long", "buy"):
+        loss = max(0.0, (entry - float(current_px)) * qty)
+        exit_side = "sell"
+    else:
+        loss = max(0.0, (float(current_px) - entry) * qty)
+        exit_side = "buy"
+
+    if loss > 0.05:
+        try:
+            dex.create_order(symbol, "market", exit_side, qty, None,
+                             {"vaultAddress": vault, "reduceOnly": True})
+            return True
+        except Exception:
+            return False
+    return False
+
