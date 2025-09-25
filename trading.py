@@ -3073,6 +3073,7 @@ if __name__ == "__main__":
                         logger=logger,
                         debug=True,
                     )
+                    strategy = _ensure_strategy_step_instance(strategy)
                     asset_state[asset.name] = {"strategy": strategy, "logger": logger}
                 strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
 
@@ -3147,3 +3148,30 @@ except Exception as _compat_err:
         print(f"[WARN] [COMPAT] Could not ensure .step on EMAGradientStrategy: {_compat_err}", flush=True)
     except Exception:
         pass
+
+
+# ---- Instance-level compat: ensure the created strategy object has .step() ----
+def _ensure_strategy_step_instance(strategy_obj):
+    import types
+    if hasattr(strategy_obj, "step") and callable(getattr(strategy_obj, "step")):
+        return strategy_obj
+    def _inst_step(self, *args, **kwargs):  # pragma: no cover
+        if hasattr(self, "run") and callable(getattr(self, "run")):
+            return self.run(*args, **kwargs)
+        if hasattr(self, "process") and callable(getattr(self, "process")):
+            return self.process(*args, **kwargs)
+        raise AttributeError(f"{type(self).__name__} does not expose a step/run/process method")
+    try:
+        strategy_obj.step = types.MethodType(_inst_step, strategy_obj)  # bind
+    except Exception:
+        # Fallback binding
+        try:
+            strategy_obj.step = _inst_step.__get__(strategy_obj, type(strategy_obj))
+        except Exception:
+            pass
+    try:
+        print("[WARN] [COMPAT] Attached instance-level .step() to strategy", flush=True)
+    except Exception:
+        pass
+    return strategy_obj
+
