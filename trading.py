@@ -1,3 +1,28 @@
+
+# ---- Compat helper to call strategy "step" safely ----
+def _safe_strategy_step(strategy_obj, *args, **kwargs):
+    """Call the appropriate stepping method on a strategy instance.
+    Tries .step(), then .run(), then .process(). Adds rich diagnostics to logs.
+    """
+    try:
+        cls = type(strategy_obj)
+        mod = getattr(cls, "__module__", "?")
+        file_hint = getattr(__import__(mod), "__file__", None) if isinstance(mod, str) and mod in globals() or mod in locals() else None
+        print(f"[DEBUG] [STRATEGY] Using {cls.__name__} from module={mod} file={file_hint}", flush=True)
+    except Exception:
+        pass
+
+    if hasattr(strategy_obj, "step"):
+        return strategy_obj.step(*args, **kwargs)
+    if hasattr(strategy_obj, "run"):
+        return strategy_obj.run(*args, **kwargs)
+    if hasattr(strategy_obj, "process"):
+        return strategy_obj.process(*args, **kwargs)
+    # As last resort, look for a single-callable method
+    for alt in ["iterate", "tick", "next", "__call__"]:
+        if hasattr(strategy_obj, alt) and callable(getattr(strategy_obj, alt)):
+            return getattr(strategy_obj, alt)(*args, **kwargs)
+    raise AttributeError(f"{type(strategy_obj).__name__} does not expose a step/run/process method")
 # Fixed build: ensures EMAGradientStrategy.step exists and is invoked by the runner.
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
@@ -2499,6 +2524,9 @@ def _assess_entry(self,
 # 📊 BACKTEST: EMA Gradiente com Máquina de Estados
 # =========================
 @dataclass
+
+
+
 class BacktestParams:
     # Indicadores
     ema_short: int = 7
@@ -3061,7 +3089,7 @@ if __name__ == "__main__":
                     pass
 
                 try:
-                    strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
+                    _safe_strategy_step(strategy, df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
                     price_seen = getattr(strategy, "_last_price_snapshot", None)
                     if price_seen is not None and math.isfinite(price_seen):
                         try:
@@ -3101,3 +3129,21 @@ try:
         EMAGradientStrategy.step = _shim_step
 except Exception:
     pass
+
+# ---- Ensure EMAGradientStrategy exposes .step even if an older build is imported ----
+try:
+    _EMAG = EMAGradientStrategy  # type: ignore[name-defined]
+    if not hasattr(_EMAG, "step"):
+        def _emag_step(self, *args, **kwargs):  # pragma: no cover
+            if hasattr(self, "run"):
+                return self.run(*args, **kwargs)
+            if hasattr(self, "process"):
+                return self.process(*args, **kwargs)
+            raise AttributeError("EMAGradientStrategy does not expose step/run/process")
+        setattr(_EMAG, "step", _emag_step)
+        print("[WARN] [COMPAT] Injected .step() into EMAGradientStrategy at runtime for compatibility.", flush=True)
+except Exception as _compat_err:
+    try:
+        print(f"[WARN] [COMPAT] Could not ensure .step on EMAGradientStrategy: {_compat_err}", flush=True)
+    except Exception:
+        pass
