@@ -420,9 +420,6 @@ def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: fl
 
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
-
-# Mínimo de notional exigido pela Hyperliquid (pode variar por ativo; padrão $10)
-HL_MIN_NOTIONAL_USD = float(os.getenv("HL_MIN_NOTIONAL_USD", "10"))
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
 # Lê credenciais da env (recomendado) com fallback seguro para dev local
 _wallet_env = os.getenv("WALLET_ADDRESS")
@@ -769,8 +766,9 @@ class AssetSetup:
     stop_pct: float = 0.05
     take_pct: float = 0.10
     usd_env: Optional[str] = None
+
+
     def __post_init__(self):
-        # Enforce canonical TP/SL defaults for this project
         self.stop_pct = 0.05
         self.take_pct = 0.10
 ASSET_SETUPS: List[AssetSetup] = [
@@ -796,6 +794,8 @@ ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("LTC-USD", "LTCUSDT", "LTC/USDC:USDC", 10, usd_env="USD_PER_TRADE_LTC"),
     AssetSetup("NEAR-USD", "NEARUSDT", "NEAR/USDC:USDC", 10, usd_env="USD_PER_TRADE_NEAR"),
 ]
+
+
 class EMAGradientStrategy:
     def __init__(self, dex, symbol: str, cfg: GradientConfig = GradientConfig(), logger: "TradeLogger" = None, debug: bool = True):
         self.dex = dex
@@ -1753,32 +1753,12 @@ class EMAGradientStrategy:
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
         )
-        try:
-            ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
-        except Exception as e:
-            # Fallback: se erro de notional mínimo, tenta com notional mínimo
-            msg = str(e)
-            try:
-                last_px = self._preco_atual()
-            except Exception:
-                last_px = price
-            try:
-                min_notional = float(HL_MIN_NOTIONAL_USD)
-            except Exception:
-                min_notional = 10.0
-            if "minimum value" in msg.lower() or "min" in msg.lower():
-                amt_min = self._round_amount((min_notional / (last_px or price or 1.0)) if (last_px or price) else amount)
-                if self.debug:
-                    self._log(f"Retrying with min notional ${min_notional:.2f} -> amount={amt_min}", level="WARN")
-                ordem_entrada = self.dex.create_order(self.symbol, "market", side, amt_min, last_px or price, {})
-                amount = amt_min
-            else:
-                raise
-            _tpsl = ensure_tpsl_for_position(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), vault=HL_SUBACCOUNT_VAULT)
+        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
+        _tpsl = ensure_tpsl_for_position(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), vault=HL_SUBACCOUNT_VAULT)
         try:
             _px_now = (dex if "dex" in locals() else self.dex).fetch_ticker(self.symbol if "self" in locals() else symbol).get("last")
             if _px_now:
-                close_if_breached_leveraged(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), float(_px_now), vault=HL_SUBACCOUNT_VAULT)
+                safety_close_if_loss_exceeds_5c(dex if "dex" in locals() else self.dex, (self.symbol if "self" in locals() else symbol), float(_px_now), vault=HL_SUBACCOUNT_VAULT)
         except Exception:
             pass
         try:
@@ -3132,6 +3112,63 @@ def _approx(a, b, tol=0.001):
 
 
 
+def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
+    """
+    Fecha a posição imediatamente se a PERDA NÃO REALIZADA absoluta (USD) for > $0.05.
+    Considera: loss = |entry - current_px| * qty, ajustado pelo lado.
+    """
+    qty, _, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+    if qty <= 0 or not entry or not side or current_px in (None, 0):
+        return False
+    try:
+        s = (side or "").lower()
+        if s in ("long", "buy"):
+            loss = max(0.0, (float(entry) - float(current_px)) * float(qty))
+        else:
+            loss = max(0.0, (float(current_px) - float(entry)) * float(qty))
+    except Exception:
+        return False
+    if loss > 0.05:
+        try:
+            exit_side = "sell" if (s in ("long", "buy")) else "buy"
+            dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True, "vaultAddress": vault})
+            return True
+        except Exception:
+            return False
+    return False
+
+def _place_tp_sl_orders_idempotent(dex, symbol, side: str, entry_px: float, *, vault):
+    """
+    Cria (ou garante) TP/SL reduceOnly para a POSIÇÃO ATUAL.
+    Idempotente: se já existem com os gatilhos corretos, não duplica.
+    Retorna dict com {"tp","sl","created_stop","created_take","qty","lev","entry","side"}.
+    """
+    try:
+        res = ensure_tpsl_for_position(dex, symbol, vault=vault)
+        return res if isinstance(res, dict) else {"tp": None, "sl": None}
+    except Exception:
+        return {"tp": None, "sl": None}
+
+def guard_close_all(dex, symbol, current_px: float, *, vault) -> bool:
+    """
+    Executa as duas proteções:
+    (a) Fechamento por TP/SL de +10% / -5% (retorno alavancado)
+    (b) Fechamento por perda absoluta > $0.05
+    Retorna True se fechou, False caso contrário.
+    """
+    closed = False
+    try:
+        if guard_close_all(dex, symbol, current_px, vault=vault):
+            closed = True
+    except Exception:
+        pass
+    try:
+        if close_if_abs_loss_exceeds_5c(dex, symbol, current_px, vault=vault):
+            closed = True
+    except Exception:
+        pass
+    return closed
+
 def ensure_tpsl_for_position(dex, symbol, *, vault):
     """
     Garante TP (takeProfit gatilho a mercado) e SL (stop gatilho a mercado) reduceOnly
@@ -3199,7 +3236,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault):
 
 
 
-def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool:
+def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
     """
     Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
     """
@@ -3223,3 +3260,4 @@ def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> boo
         except Exception:
             return False
     return False
+
