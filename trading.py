@@ -4062,7 +4062,7 @@ if __name__ == "__main__":
         last_full_analysis = 0
         last_trailing_check = 0
         
-        _log_global("ENGINE", f"Iniciando triple-loop: FAST_SAFETY={fast_sleep}s TRAILING={trailing_sleep}s FULL_ANALYSIS={slow_sleep}s")
+        _log_global("ENGINE", f"Iniciando per-asset loop: FAST_SAFETY=após_cada_ativo TRAILING={trailing_sleep}s FULL_ANALYSIS={slow_sleep}s")
 
         while True:
             iter_count += 1
@@ -4071,22 +4071,10 @@ if __name__ == "__main__":
             try:
                 live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
                 # Heartbeat menos frequente
-                if iter_count % 6 == 1:  # A cada 30s no fast loop
-                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} triple_loop=True")
+                if iter_count % 12 == 1:  # A cada ~1min considerando que cada ativo demora ~5s
+                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} per_asset_loop=True")
             except Exception:
                 pass
-
-            # SEMPRE executa fast safety check
-            fast_safety_check(dex_in, asset_state)
-
-            # Decide se executa trailing stop check (a cada ~15s)
-            time_since_trailing = current_time - last_trailing_check
-            should_run_trailing = (time_since_trailing >= trailing_sleep) or (iter_count == 1)
-
-            if should_run_trailing:
-                _log_global("ENGINE", f"Executando trailing check (último há {time_since_trailing:.1f}s)", level="DEBUG")
-                last_trailing_check = current_time
-                trailing_stop_check(dex_in, asset_state)
 
             # Decide se executa análise completa (a cada ~60s)
             time_since_analysis = current_time - last_full_analysis
@@ -4096,9 +4084,11 @@ if __name__ == "__main__":
                 _log_global("ENGINE", f"Executando análise completa (última há {time_since_analysis:.1f}s)")
                 last_full_analysis = current_time
 
-                # FULL ANALYSIS LOOP - processar todos os assets
+                # PROCESSAR CADA ASSET COM SAFETY CHECKS APÓS CADA UM
                 for asset in ASSET_SETUPS:
-                    _log_global("ASSET", f"Análise completa: {asset.name}")
+                    _log_global("ASSET", f"Processando {asset.name}")
+                    
+                    # 1. ANÁLISE TÉCNICA DO ASSET
                     try:
                         df_asset = build_df(asset.data_symbol, INTERVAL, debug=True)
                     except Exception as e:
@@ -4118,6 +4108,15 @@ if __name__ == "__main__":
                     # Inicialização do asset (se necessário)
                     state = asset_state.get(asset.name)
                     if state is None:
+                        cfg = GradientConfig()
+                        cfg.LEVERAGE = asset.leverage
+                        cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
+                        cfg.TRAILING_ROI_MARGIN = asset.trailing_margin
+                        safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
+                        csv_path = f"trade_log_{safe_suffix}.csv"
+                        xlsx_path = f"trade_log_{safe_suffix}.xlsx"
+                        cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
+                        logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
                         cfg = GradientConfig()
                         cfg.LEVERAGE = asset.leverage
                         cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
@@ -4156,7 +4155,35 @@ if __name__ == "__main__":
                         strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
                     except Exception as e:
                         _log_global("ASSET", f"Erro na análise completa {asset.name}: {type(e).__name__}: {e}", level="ERROR")
+                    
+                    # 2. FAST SAFETY CHECK IMEDIATAMENTE APÓS O ASSET
+                    _log_global("ASSET", f"Fast safety check pós-{asset.name}")
+                    fast_safety_check(dex_in, asset_state)
+                    
+                    # 3. TRAILING STOP CHECK (SE NECESSÁRIO)
+                    current_time_post_asset = _time.time()
+                    time_since_trailing = current_time_post_asset - last_trailing_check
+                    should_run_trailing = (time_since_trailing >= trailing_sleep) or (iter_count == 1)
+                    
+                    if should_run_trailing:
+                        _log_global("ASSET", f"Trailing check pós-{asset.name} (último há {time_since_trailing:.1f}s)")
+                        last_trailing_check = current_time_post_asset
+                        trailing_stop_check(dex_in, asset_state)
+                    
                     _time.sleep(0.25)
+
+            else:
+                # Se não é hora de análise completa, só executa fast safety e trailing periodicamente
+                fast_safety_check(dex_in, asset_state)
+                
+                current_time_safety = _time.time()
+                time_since_trailing = current_time_safety - last_trailing_check
+                should_run_trailing = (time_since_trailing >= trailing_sleep)
+                
+                if should_run_trailing:
+                    _log_global("ENGINE", f"Trailing check standalone (último há {time_since_trailing:.1f}s)")
+                    last_trailing_check = current_time_safety
+                    trailing_stop_check(dex_in, asset_state)
 
             if not loop:
                 break

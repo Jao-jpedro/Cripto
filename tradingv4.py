@@ -3263,7 +3263,7 @@ if __name__ == "__main__":
         iter_count = 0
         last_full_analysis = 0
         
-        _log_global("ENGINE", f"Iniciando dual-loop V4: FAST_SAFETY={fast_sleep}s FULL_ANALYSIS={slow_sleep}s")
+        _log_global("ENGINE", f"Iniciando per-asset safety V4: FAST_SAFETY=após_cada_ativo FULL_ANALYSIS={slow_sleep}s")
 
         while True:
             iter_count += 1
@@ -3272,13 +3272,10 @@ if __name__ == "__main__":
             try:
                 live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
                 # Heartbeat menos frequente
-                if iter_count % 6 == 1:  # A cada 30s no fast loop
-                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} dual_loop_v4=True")
+                if iter_count % 12 == 1:  # A cada ~1min considerando que cada ativo demora ~5s
+                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} per_asset_v4=True")
             except Exception:
                 pass
-
-            # SEMPRE executa fast safety check
-            fast_safety_check_v4(dex_in, asset_state, VAULT_ADDRESS)
 
             # Decide se executa análise completa (a cada ~60s)
             time_since_analysis = current_time - last_full_analysis
@@ -3368,6 +3365,11 @@ if __name__ == "__main__":
                                 pass
                     except Exception as e:
                         _log_global("ASSET", f"Erro na análise completa {asset.name}: {type(e).__name__}: {e}", level="ERROR")
+                    
+                    # FAST SAFETY CHECK IMEDIATAMENTE APÓS O ASSET
+                    _log_global("ASSET", f"Fast safety check pós-{asset.name}")
+                    fast_safety_check_v4(dex_in, asset_state, VAULT_ADDRESS)
+                    
                     _time.sleep(0.25)
 
             if not loop:
