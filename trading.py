@@ -2185,7 +2185,7 @@ class EMAGradientStrategy:
             "trigger": "mark",
         }
         if self.debug:
-            self._log(f"Criando TRAILING STOP {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+            self._log(f"Criando TRAILING LIMIT {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
         if existing_orders is None:
             existing = self._find_matching_protection("trail", side, px)
         else:
@@ -2199,9 +2199,12 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)
+            # Para trailing stop usar ordem LIMIT (não stop_market)
+            # LONG: SELL abaixo do preço atual 
+            # SHORT: BUY acima do preço atual
+            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, {"reduceOnly": True})
         except Exception as e:
-            msg = f"Falha ao criar TRAILING STOP: {type(e).__name__}: {e}"
+            msg = f"Falha ao criar TRAILING LIMIT: {type(e).__name__}: {e}"
             text = str(e).lower()
             if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
                 self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
@@ -2213,7 +2216,7 @@ class EMAGradientStrategy:
             info = ret if isinstance(ret, dict) else {}
             oid = self._extract_order_id(info)
             typ = info.get("type") or (info.get("info", {}) or {}).get("type")
-            self._log(f"Trailing stop criado id={oid} price={px}", level="DEBUG")
+            self._log(f"Trailing limit criado id={oid} price={px}", level="DEBUG")
             self._last_trailing_order_id = oid
             try:
                 self._safe_log("trailing_stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=oid)
@@ -3957,15 +3960,12 @@ def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount):
             results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
 
     if trail is not None and qty > 0 and best_trail_price is None:
-        trail_params = dict(params_base)
-        trail_params.update({"triggerPrice": trail, "stopLossPrice": trail})
+        # Para trailing stop usar ordem LIMIT simples (não market com trigger)
         try:
-            results["created_trailing"] = dex.create_order(symbol, "market", exit_side, qty, None, trail_params)
+            results["created_trailing"] = dex.create_order(symbol, "limit", exit_side, qty, trail, {"reduceOnly": True})
         except Exception:
-            trail_params_fb = dict(params_base)
-            trail_params_fb.update({"triggerPrice": trail})
             try:
-                results["created_trailing"] = dex.create_order(symbol, "market", exit_side, qty, None, trail_params_fb)
+                results["created_trailing"] = dex.create_order(symbol, "limit", exit_side, qty, trail, {"reduceOnly": True})
             except Exception:
                 results["created_trailing"] = None
 
