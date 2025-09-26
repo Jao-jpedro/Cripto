@@ -2405,7 +2405,7 @@ class EMAGradientStrategy:
                     ((ordem_entrada.get("info", {}) or {}).get("filled", {}) or {}).get("avgPx")
                 )
             px_ref = float(avg_px) if avg_px else float(price)
-            tpsl = _place_tp_sl_orders_idempotent(self.dex, self.symbol, side, px_ref)
+            tpsl = _place_tp_sl_orders_idempotent(self.dex, self.symbol, side, px_ref, amount)
             self._log(f"TP/SL criados | TP={tpsl['tp']:.6f} SL={tpsl['sl']:.6f}", level="DEBUG");
             guard_close_all(self.dex, self.symbol, float(self._preco_atual()))
         except Exception as e:
