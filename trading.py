@@ -201,11 +201,14 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -
     Fecha imediatamente se unrealizedPnl <= threshold (ex.: threshold=-0.05 para -5 cents).
     Se unrealizedPnl não estiver disponível, não faz nada (fallbacks separados cuidam do resto).
     """
+    print(f"[PNL_CHECK] Verificando {symbol} - threshold={threshold}")
     try:
         pos = _get_position_for_vault(dex, symbol, None)
-    except Exception:
+    except Exception as e:
+        print(f"[PNL_CHECK] Erro obtendo posição {symbol}: {type(e).__name__}: {e}")
         pos = None
     if not pos:
+        print(f"[PNL_CHECK] {symbol}: Sem posição")
         return False
     # Tenta extrair unrealizedPnl em vários formatos
     pnl = None
@@ -217,11 +220,15 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -
             pnl = ((pos.get("info", {}) or {}).get("position", {}) or {}).get("unrealizedPnl")
     except Exception:
         pnl = None
+    
     if pnl is None:
+        print(f"[PNL_CHECK] {symbol}: unrealizedPnl não encontrado")
         return False
+        
     try:
         pnl_f = float(str(pnl).replace(",", "."))
-    except Exception:
+    except Exception as e:
+        print(f"[PNL_CHECK] {symbol}: Erro convertendo PnL {pnl}: {type(e).__name__}: {e}")
         return False
 
     try:
@@ -230,26 +237,38 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -
         thresh_f = -0.05
     effective_threshold = min(thresh_f, -0.05)  # Garante que nunca seja mais permissivo que -0.05
 
+    print(f"[PNL_CHECK] {symbol}: PnL={pnl_f:.4f} vs threshold={effective_threshold:.4f}")
+
     if pnl_f <= effective_threshold:
+        print(f"[PNL_CHECK] {symbol}: PnL BREACH! {pnl_f:.4f} <= {effective_threshold:.4f} - tentando fechar...")
         # Fecha a posição inteira no lado de saída
         try:
             qty, _, _, side = _get_pos_size_and_leverage(dex, symbol)
-            if not side or qty <= 0: 
+            if not side or qty <= 0:
+                print(f"[PNL_CHECK] {symbol}: Não pode fechar - side={side} qty={qty}")
                 return False
             exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
+            print(f"[PNL_CHECK] {symbol}: Executando market {exit_side} qty={qty}")
             dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+            print(f"[PNL_CHECK] {symbol}: Posição fechada com sucesso por PnL!")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"[PNL_CHECK] {symbol}: Erro ao fechar posição: {type(e).__name__}: {e}")
             return False
+    else:
+        print(f"[PNL_CHECK] {symbol}: PnL OK ({pnl_f:.4f} > {effective_threshold:.4f})")
     return False
 
 
 def close_if_roi_breaches(dex, symbol, current_px: float, *, threshold: float = ROI_HARD_STOP) -> bool:
+    print(f"[ROI_CHECK] Verificando {symbol} - threshold={threshold}")
     try:
         pos = _get_position_for_vault(dex, symbol, None)
-    except Exception:
+    except Exception as e:
+        print(f"[ROI_CHECK] Erro obtendo posição {symbol}: {type(e).__name__}: {e}")
         pos = None
     if not pos:
+        print(f"[ROI_CHECK] {symbol}: Sem posição")
         return False
 
     # tenta ROI direto da posição
@@ -284,7 +303,9 @@ def close_if_roi_breaches(dex, symbol, current_px: float, *, threshold: float = 
         qty, lev, entry, side = 0.0, 1.0, None, None
 
     if roi_f is None:
+        print(f"[ROI_CHECK] {symbol}: ROI não encontrado na posição, calculando...")
         if not side or qty <= 0 or not entry:
+            print(f"[ROI_CHECK] {symbol}: Dados insuficientes - side={side} qty={qty} entry={entry}")
             return False
         px_now = current_px
         if px_now is None:
@@ -293,10 +314,13 @@ def close_if_roi_breaches(dex, symbol, current_px: float, *, threshold: float = 
             except Exception:
                 px_now = None
         if px_now is None:
+            print(f"[ROI_CHECK] {symbol}: Não conseguiu obter preço atual")
             return False
         roi_f = _compute_roi_from_price(entry, side, px_now, leverage=lev)
+        print(f"[ROI_CHECK] {symbol}: ROI calculado={roi_f:.4f} (entry={entry} current={px_now} side={side} lev={lev})")
 
     if roi_f is None:
+        print(f"[ROI_CHECK] {symbol}: ROI ainda None após cálculo")
         return False
 
     try:
@@ -305,16 +329,24 @@ def close_if_roi_breaches(dex, symbol, current_px: float, *, threshold: float = 
         thresh_f = ROI_HARD_STOP
     effective_threshold = max(thresh_f, ROI_HARD_STOP)
 
+    print(f"[ROI_CHECK] {symbol}: ROI={roi_f:.4f} vs threshold={effective_threshold:.4f}")
+    
     if roi_f > effective_threshold:
+        print(f"[ROI_CHECK] {symbol}: ROI OK ({roi_f:.4f} > {effective_threshold:.4f})")
         return False
 
+    print(f"[ROI_CHECK] {symbol}: ROI BREACH! {roi_f:.4f} <= {effective_threshold:.4f} - tentando fechar...")
     try:
         if not side or qty <= 0:
+            print(f"[ROI_CHECK] {symbol}: Não pode fechar - side={side} qty={qty}")
             return False
         exit_side = "sell" if str(side).lower() in ("long", "buy") else "buy"
+        print(f"[ROI_CHECK] {symbol}: Executando market {exit_side} qty={qty}")
         dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+        print(f"[ROI_CHECK] {symbol}: Posição fechada com sucesso!")
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[ROI_CHECK] {symbol}: Erro ao fechar posição: {type(e).__name__}: {e}")
         return False
 
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
@@ -759,25 +791,34 @@ def guard_close_all(dex, symbol, current_px: float) -> bool:
     # PRIORITÁRIO: verificar unrealized PnL primeiro
     try:
         if close_if_unrealized_pnl_breaches(dex, symbol, threshold=UNREALIZED_PNL_HARD_STOP):
+            print(f"[GUARD] Posição {symbol} fechada por unrealized PnL <= {UNREALIZED_PNL_HARD_STOP}")
             return True
-    except Exception:
+    except Exception as e:
+        print(f"[GUARD] Erro verificando unrealized PnL para {symbol}: {type(e).__name__}: {e}")
         pass
     # Verificar ROI após unrealized PnL
     try:
         if close_if_roi_breaches(dex, symbol, current_px, threshold=ROI_HARD_STOP):
+            print(f"[GUARD] Posição {symbol} fechada por ROI <= {ROI_HARD_STOP}")
             return True
-    except Exception:
+    except Exception as e:
+        print(f"[GUARD] Erro verificando ROI para {symbol}: {type(e).__name__}: {e}")
         pass
     try:
         if close_if_breached_leveraged(dex, symbol, current_px):
+            print(f"[GUARD] Posição {symbol} fechada por breached leveraged")
             return True
-    except Exception:
+    except Exception as e:
+        print(f"[GUARD] Erro verificando breached leveraged para {symbol}: {type(e).__name__}: {e}")
         pass
     try:
         if close_if_abs_loss_exceeds_5c(dex, symbol, current_px):
+            print(f"[GUARD] Posição {symbol} fechada por abs loss > 5c")
             return True
-    except Exception:
+    except Exception as e:
+        print(f"[GUARD] Erro verificando abs loss para {symbol}: {type(e).__name__}: {e}")
         pass
+    print(f"[GUARD] {symbol}: Nenhum critério de fechamento atingido")
     return False
 def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: float,
                             current_px: Optional[float] = None,
