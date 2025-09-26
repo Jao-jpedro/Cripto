@@ -85,7 +85,7 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
         orders_cancelled = 0
         
         # Buscar ordens abertas
-        open_orders = dex.fetch_open_orders(symbol)
+        open_orders = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault})
         
         for order in open_orders:
             # Verificar se a ordem tem status 'Triggered'
@@ -96,7 +96,7 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
             if order_status == 'triggered' or 'trigger' in order_type.lower():
                 try:
                     # Cancelar a ordem triggered
-                    dex.cancel_order(order['id'], symbol)
+                    dex.cancel_order(order['id'], symbol, {"vaultAddress": vault})
                     orders_cancelled += 1
                     print(f"[INFO] Ordem Triggered cancelada (vault): {order['id']}", flush=True)
                 except Exception as e:
@@ -106,7 +106,7 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
         if orders_cancelled > 0:
             try:
                 # Verificar se há posição aberta para determinar o lado
-                positions = dex.fetch_positions([symbol])
+                positions = dex.fetch_positions([symbol], {"vaultAddress": vault})
                 if positions and float(positions[0].get("contracts", 0)) > 0:
                     pos = positions[0]
                     side = pos.get('side', '').lower()
@@ -717,6 +717,9 @@ from datetime import datetime, timezone
 now = datetime.now(timezone.utc)
 import numpy as np
 import pandas as pd
+
+# Vault Address para operações na subconta
+VAULT_ADDRESS = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
 
 @dataclass
 class GradientConfig:
@@ -1333,7 +1336,7 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
         try:
-            pos = self.dex.fetch_positions([self.symbol])
+            pos = self.dex.fetch_positions([self.symbol], {"vaultAddress": VAULT_ADDRESS})
             if pos and float(pos[0].get("contracts", 0)) > 0:
                 return pos[0]
         except Exception as e:
@@ -1345,7 +1348,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return False
-            for o in self.dex.fetch_open_orders(self.symbol):
+            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -1472,7 +1475,7 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return []
         try:
-            orders = self.dex.fetch_open_orders(self.symbol)
+            orders = self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS})
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao obter open_orders para verificação de proteções: {type(e).__name__}: {e}", level="WARN")
@@ -1561,7 +1564,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return
-            for o in self.dex.fetch_open_orders(self.symbol):
+            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -1612,7 +1615,7 @@ class EMAGradientStrategy:
             return existing
         try:
             # Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)
+            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
         except Exception as e:
             msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -1665,7 +1668,7 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
+            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
         except Exception as e:
             msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -1710,7 +1713,7 @@ class EMAGradientStrategy:
                 lev_type = str(leverage_info.get("type") or "").lower()
                 target_lev = int(self.cfg.LEVERAGE)
                 if lev_type != "isolated" and target_lev > 0:
-                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated"})
+                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated", "vaultAddress": VAULT_ADDRESS})
                     self._log("Leverage ajustada para isolated em posição existente.", level="INFO")
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
@@ -1802,7 +1805,7 @@ class EMAGradientStrategy:
             lev_int = None
         if lev_int and lev_int > 0:
             try:
-                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})
+                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated", "vaultAddress": VAULT_ADDRESS})
                 if self.debug:
                     self._log(f"Leverage ajustada para {lev_int}x (isolated)", level="DEBUG")
             except Exception as e:
@@ -1819,7 +1822,7 @@ class EMAGradientStrategy:
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
         )
-        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
+        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price, {"vaultAddress": VAULT_ADDRESS})
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
 
         oid = None
@@ -1952,7 +1955,7 @@ class EMAGradientStrategy:
         # Diagnóstico: listar ordens abertas reduceOnly
         try:
             if os.getenv("LIVE_TRADING", "0") in ("1", "true", "True"):
-                open_orders = self.dex.fetch_open_orders(self.symbol)
+                open_orders = self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS})
                 if open_orders:
                     self._log("Ordens reduceOnly ativas:", level="DEBUG")
                     for o in open_orders:
@@ -1976,7 +1979,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return None, None, None
-            for o in self.dex.fetch_open_orders(self.symbol):
+            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -2000,7 +2003,7 @@ class EMAGradientStrategy:
             if order_id:
                 if self.debug:
                     self._log(f"Cancelando ordem reduceOnly id={order_id}", level="DEBUG")
-                self.dex.cancel_order(order_id, self.symbol)
+                self.dex.cancel_order(order_id, self.symbol, {"vaultAddress": VAULT_ADDRESS})
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao cancelar ordem {order_id}: {e}", level="WARN")
@@ -2012,7 +2015,7 @@ class EMAGradientStrategy:
         params = {"reduceOnly": True}
         if self.debug:
             self._log(f"Fechando posição via MARKET reduceOnly {side.upper()} qty={amt} px_ref={px:.6f}", level="DEBUG")
-        return self.dex.create_order(self.symbol, "market", side, amt, px, params)
+        return self.dex.create_order(self.symbol, "market", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()
@@ -2229,7 +2232,7 @@ class EMAGradientStrategy:
         # Verificar e cancelar ordens triggered, criar price below se necessário
         try:
             current_price = self._preco_atual()
-            vault_address = self._wallet_address()  # Usar o mesmo wallet como vault
+            vault_address = VAULT_ADDRESS  # Usar a subconta configurada
             cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price, vault=vault_address)
         except Exception as e:
             self._log(f"Erro ao processar ordens triggered (vault): {type(e).__name__}: {e}", level="WARN")
@@ -2247,6 +2250,7 @@ class EMAGradientStrategy:
                             qty = abs(float(pos.get("contracts", 0)))
                             side = self._norm_side(pos.get("side") or pos.get("positionSide"))
                             exit_side = "sell" if side in ("buy", "long") else "buy"
+                            vault_address = VAULT_ADDRESS
                             self.dex.create_order(self.symbol, "market", exit_side, qty, None, {"reduceOnly": True, "vaultAddress": vault_address})
                             emergency_closed = True
                             self._log(f"Emergência acionada (vault): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
@@ -2272,6 +2276,7 @@ class EMAGradientStrategy:
                                 qty = abs(float(pos.get("contracts", 0)))
                                 side = self._norm_side(pos.get("side") or pos.get("positionSide"))
                                 exit_side = "sell" if side in ("buy", "long") else "buy"
+                                vault_address = VAULT_ADDRESS
                                 self.dex.create_order(self.symbol, "market", exit_side, qty, None, {"reduceOnly": True, "vaultAddress": vault_address})
                                 emergency_closed = True
                                 self._log(f"Emergência acionada (vault): ROI <= {ROI_HARD_STOP*100}%, posição fechada imediatamente.", level="ERROR")
