@@ -1282,8 +1282,8 @@ class EMAGradientStrategy:
                 level="DEBUG"
             )
         
-        # Trailing stop fica 10% abaixo do ROI alavancado
-        # Ex: ROI alavancado 6% → trailing stop em -4% (6% - 10%)
+        # Trailing stop sempre ativo - melhora proteção mesmo com ROI negativo
+        # Ex: ROI alavancado 9% → trailing stop em -1% (melhor que perda fixa de -5%)
         target_roi = levered_roi - margin
         
         # Converter ROI target de volta para preço
