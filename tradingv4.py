@@ -2215,7 +2215,8 @@ class EMAGradientStrategy:
         # Verificar e cancelar ordens triggered, criar price below se necessário
         try:
             current_price = self._preco_atual()
-            cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price, vault=self.vault)
+            vault_address = self._wallet_address()  # Usar o mesmo wallet como vault
+            cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price, vault=vault_address)
         except Exception as e:
             self._log(f"Erro ao processar ordens triggered (vault): {type(e).__name__}: {e}", level="WARN")
 
