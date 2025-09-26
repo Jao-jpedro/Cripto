@@ -1,0 +1,13 @@
+# Virtual environment
+venv/
+*.pyc
+__pycache__/
+
+# Trade logs
+trade_log_*.csv
+
+# Test files
+test_*.py
+demo_*.py
+check_positions.py
+create_test_position.py
