@@ -1,9 +1,10 @@
+
 from typing import Optional
 
 ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
-UNREALIZED_PNL_HARD_STOP = -0.5  # trava dura para unrealizedPnL em USDC
+ROI_HARD_STOP = -0.03  # ROI mínimo aceitável (-3%) - mais restritivo
+UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC
 
 
 def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: float) -> bool:
@@ -2059,11 +2060,11 @@ class EMAGradientStrategy:
         return ret
 
     def _ensure_position_protections(self, pos: Dict[str, Any], df_for_log: Optional[pd.DataFrame] = None):
-        # Primeira verificação: guard_close_all para fechar imediatamente se PnL <= -5%
+        # Primeira verificação: guard_close_all para fechar imediatamente se PnL <= -3%
         try:
             current_px = self._preco_atual()
             if guard_close_all(self.dex, self.symbol, float(current_px)):
-                self._log("Posição fechada imediatamente por PnL <= -5% (price below)", level="INFO")
+                self._log("Posição fechada imediatamente por PnL <= -3% (price below)", level="INFO")
                 return
         except Exception as e:
             if self.debug:
