@@ -1024,6 +1024,12 @@ class EMAGradientStrategy:
             pass
         return fixed
 
+    def _position_quantity(self, pos: Dict[str, Any]) -> float:
+        """Extrai a quantidade (contracts) de uma posição."""
+        if not pos:
+            return 0.0
+        return abs(float(pos.get("contracts", 0)))
+
     def _notify_trade(self, kind: str, side: Optional[str], price: Optional[float], amount: Optional[float], note: str = "", include_hl: bool = False):
         base = self.symbol.split("/")[0] if "/" in self.symbol else self.symbol
         side_map = {"buy": "LONG", "sell": "SHORT"}
