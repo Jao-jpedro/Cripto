@@ -101,7 +101,17 @@ def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float) -> bool:
         return False
 
     try:
-        dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+        # Buscar preço atual para ordem market
+        ticker = dex.fetch_ticker(symbol)
+        current_price = float(ticker.get("last", 0) or px_now)
+        
+        # Ajustar preço para garantir execução
+        if exit_side == "sell":
+            order_price = current_price * 0.995  # Ligeiramente abaixo para long
+        else:
+            order_price = current_price * 1.005  # Ligeiramente acima para short
+            
+        dex.create_order(symbol, "market", exit_side, float(qty), order_price, {"reduceOnly": True})
         return True
     except Exception:
         return False
@@ -175,7 +185,17 @@ def close_if_breached_leveraged(dex, symbol, current_px: float, *, buffer_pct: f
         return False
 
     try:
-        dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+        # Buscar preço atual para ordem market
+        ticker = dex.fetch_ticker(symbol)
+        current_price = float(ticker.get("last", 0) or price_now)
+        
+        # Ajustar preço para garantir execução
+        if exit_side == "sell":
+            order_price = current_price * 0.995  # Ligeiramente abaixo para long
+        else:
+            order_price = current_price * 1.005  # Ligeiramente acima para short
+            
+        dex.create_order(symbol, "market", exit_side, float(qty), order_price, {"reduceOnly": True})
         return True
     except Exception:
         return False
@@ -249,7 +269,21 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -
                 return False
             exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
             print(f"[PNL_CHECK] {symbol}: Executando market {exit_side} qty={qty}")
-            dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+            
+            # Buscar preço atual para ordem market
+            ticker = dex.fetch_ticker(symbol)
+            current_price = float(ticker.get("last", 0) or 0)
+            if current_price <= 0:
+                print(f"[PNL_CHECK] {symbol}: Erro - preço atual inválido")
+                return False
+                
+            # Ajustar preço para garantir execução
+            if exit_side == "sell":
+                order_price = current_price * 0.995  # Ligeiramente abaixo para long
+            else:
+                order_price = current_price * 1.005  # Ligeiramente acima para short
+            
+            dex.create_order(symbol, "market", exit_side, float(qty), order_price, {"reduceOnly": True})
             print(f"[PNL_CHECK] {symbol}: Posição fechada com sucesso por PnL!")
             return True
         except Exception as e:
@@ -342,7 +376,23 @@ def close_if_roi_breaches(dex, symbol, current_px: float, *, threshold: float = 
             return False
         exit_side = "sell" if str(side).lower() in ("long", "buy") else "buy"
         print(f"[ROI_CHECK] {symbol}: Executando market {exit_side} qty={qty}")
-        dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+        
+        # Buscar preço atual para ordem market (usar px_now se disponível)
+        current_price = px_now
+        if current_price is None or current_price <= 0:
+            ticker = dex.fetch_ticker(symbol)
+            current_price = float(ticker.get("last", 0) or 0)
+        if current_price <= 0:
+            print(f"[ROI_CHECK] {symbol}: Erro - preço atual inválido")
+            return False
+            
+        # Ajustar preço para garantir execução
+        if exit_side == "sell":
+            order_price = current_price * 0.995  # Ligeiramente abaixo para long
+        else:
+            order_price = current_price * 1.005  # Ligeiramente acima para short
+        
+        dex.create_order(symbol, "market", exit_side, float(qty), order_price, {"reduceOnly": True})
         print(f"[ROI_CHECK] {symbol}: Posição fechada com sucesso!")
         return True
     except Exception as e:
@@ -2174,6 +2224,18 @@ class EMAGradientStrategy:
         return ret
 
     def _ensure_position_protections(self, pos: Dict[str, Any], df_for_log: Optional[pd.DataFrame] = None):
+        # FORÇA FECHAMENTO IMEDIATO PARA AVAX/PUMP COM PREJUÍZO (debug temporário)
+        symbol_check = str(self.symbol).upper()
+        if any(x in symbol_check for x in ['AVAX', 'PUMP']):
+            try:
+                unrealized = float(pos.get("unrealizedPnl", 0) or 0)
+                if unrealized < -0.05:  # Menos que -$0.05
+                    self._log(f"[FORÇA_FECHAMENTO] {self.symbol}: unrealizedPnl={unrealized:.4f} < -0.05 - FORÇANDO FECHAMENTO!", level="ERROR")
+                    self._fechar_posicao(df_for_log or pd.DataFrame())
+                    return
+            except Exception as e:
+                self._log(f"[FORÇA_FECHAMENTO] Erro: {type(e).__name__}: {e}", level="ERROR")
+        
         # Primeira verificação: guard_close_all para fechar imediatamente se PnL <= -0.05 (prioritário) ou ROI <= -5%
         try:
             current_px = self._preco_atual()
