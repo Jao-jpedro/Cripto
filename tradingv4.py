@@ -3348,7 +3348,16 @@ except Exception:
                         or info.get("takeProfitPrice") or info.get("tpPrice") or o.get("price"))
                 if trig is None: continue
                 trig = float(trig)
-                if _approx_equal(trig, sl, price_tol_pct): has_stop = True
+                
+                # Verificação de stop loss com range de -4% a -6%
+                if _approx_equal(trig, sl, price_tol_pct): 
+                    has_stop = True
+                else:
+                    # Se não for exatamente -5%, verificar se está no range de -4% a -6%
+                    roi_existing = _compute_roi_from_price(entry, side, trig)
+                    if roi_existing is not None and -0.06 <= roi_existing <= -0.04:
+                        has_stop = True  # Considera como válido se estiver no range
+                
                 if _approx_equal(trig, tp, price_tol_pct): has_take = True
             except Exception:
                 continue
