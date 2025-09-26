@@ -1254,14 +1254,26 @@ class EMAGradientStrategy:
             return None
 
         levered_roi = roi * leverage
-        adjusted = levered_roi - margin
-        normalized = adjusted / leverage
-        factor = normalized + 1.0
-
-        price = current_price * factor
+        # Trailing stop fica 10% abaixo do ROI alavancado
+        # Ex: ROI alavancado 6% → trailing stop em -4% (6% - 10%)
+        target_roi = levered_roi - margin
+        
+        # Converter ROI target de volta para preço
         if norm_side == "buy":
-            return max(0.0, min(price, current_price))
-        return max(current_price, price)
+            # target_roi = (trailing_price / entry_price) - 1
+            # trailing_price = entry_price * (target_roi + 1)
+            trailing_price = entry_price * (target_roi + 1.0)
+            # Para LONG: trailing stop deve estar abaixo do preço atual
+            return max(0.0, min(trailing_price, current_price))
+        else:
+            # Para SHORT: target_roi = (entry_price / trailing_price) - 1
+            # entry_price / trailing_price = target_roi + 1
+            # trailing_price = entry_price / (target_roi + 1)
+            if target_roi + 1.0 <= 0:
+                return None
+            trailing_price = entry_price / (target_roi + 1.0)
+            # Para SHORT: trailing stop deve estar acima do preço atual
+            return max(current_price, trailing_price)
 
 
     # ---------- config → params (reuso dos cálculos do backtest) ----------
