@@ -1,6 +1,9 @@
 def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool: ...
 def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool: ...
 
+UNREALIZED_PNL_HARD_STOP = -0.5  # trava de segurança: não deixar passar de -0.5
+
+
 def close_if_unrealized_pnl_breaches(dex, symbol, *, vault, threshold: float = -0.05) -> bool:
     """
     Fecha imediatamente se unrealizedPnl <= threshold (ex.: threshold=-0.05 para -5 cents).
@@ -25,11 +28,18 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, vault, threshold: float = -
     if pnl is None:
         return False
     try:
-        pnl_f = float(pnl)
+        pnl_f = float(str(pnl).replace(",", "."))
     except Exception:
         return False
 
-    if pnl_f <= float(threshold):
+    try:
+        thresh_f = float(threshold)
+    except Exception:
+        thresh_f = -0.05
+    # garante que nunca deixaremos a perda passar de -0.5
+    effective_threshold = max(thresh_f, UNREALIZED_PNL_HARD_STOP)
+
+    if pnl_f <= effective_threshold:
         # Fecha a posição inteira no lado de saída
         try:
             qty, _, _, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
@@ -3462,4 +3472,3 @@ def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) ->
         except Exception:
             return False
     return False
-
