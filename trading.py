@@ -1,6 +1,136 @@
-def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float) -> bool: ...
-def close_if_breached_leveraged(dex, symbol, current_px: float) -> bool: ...
+ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
+LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
+ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
+UNREALIZED_PNL_HARD_STOP = -0.5  # trava dura para unrealizedPnL em USDC
 
+
+def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float) -> bool:
+    try:
+        qty, _, entry_px, side = _get_pos_size_and_leverage(dex, symbol)
+    except Exception:
+        qty, entry_px, side = 0.0, None, None
+    if not side or qty <= 0 or not entry_px:
+        return False
+
+    try:
+        px_now = float(current_px)
+    except Exception:
+        return False
+
+    try:
+        entry_f = float(entry_px)
+    except Exception:
+        return False
+
+    s = str(side).lower()
+    if s in ("long", "buy"):
+        loss = max(0.0, (entry_f - px_now) * qty)
+        exit_side = "sell"
+    elif s in ("short", "sell"):
+        loss = max(0.0, (px_now - entry_f) * qty)
+        exit_side = "buy"
+    else:
+        return False
+
+    if loss < ABS_LOSS_HARD_STOP:
+        return False
+
+    try:
+        dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+        return True
+    except Exception:
+        return False
+
+
+def _extract_liquidation_price(position):
+    candidates = []
+    try:
+        candidates.append(position.get("liquidationPrice"))
+    except Exception:
+        pass
+    try:
+        info = position.get("info", {}) or {}
+        if isinstance(info, dict):
+            candidates.append(info.get("liquidationPrice"))
+            pos_info = info.get("position") or {}
+            if isinstance(pos_info, dict):
+                candidates.append(pos_info.get("liquidationPrice"))
+                candidates.append(pos_info.get("liquidationPx"))
+    except Exception:
+        pass
+
+    for raw in candidates:
+        if raw in (None, ""):
+            continue
+        try:
+            return float(str(raw).replace(",", "."))
+        except Exception:
+            continue
+    return None
+
+
+def close_if_breached_leveraged(dex, symbol, current_px: float, *, buffer_pct: float = LIQUIDATION_BUFFER_PCT) -> bool:
+    try:
+        pos = _get_position_for_vault(dex, symbol, None)
+    except Exception:
+        pos = None
+    if not pos:
+        return False
+
+    liq_px = _extract_liquidation_price(pos)
+    if liq_px is None or liq_px <= 0:
+        return False
+
+    try:
+        price_now = float(current_px)
+    except Exception:
+        return False
+
+    side = str(pos.get("side") or pos.get("positionSide") or "").lower()
+    if side not in ("long", "buy", "short", "sell"):
+        return False
+
+    if side in ("long", "buy"):
+        if price_now <= 0:
+            return False
+        breached = price_now <= liq_px * (1 + buffer_pct)
+        exit_side = "sell"
+    else:
+        breached = price_now >= liq_px * (1 - buffer_pct)
+        exit_side = "buy"
+
+    if not breached:
+        return False
+
+    try:
+        qty, _, _, side_confirm = _get_pos_size_and_leverage(dex, symbol)
+    except Exception:
+        qty, side_confirm = 0.0, None
+    if not side_confirm or qty <= 0:
+        return False
+
+    try:
+        dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+        return True
+    except Exception:
+        return False
+
+
+def _compute_roi_from_price(entry: float, side: str, price: float, leverage: float = 1.0):
+    try:
+        entry_f = float(entry)
+        price_f = float(price)
+        lev_f = float(leverage)
+    except Exception:
+        return None
+    if entry_f <= 0 or price_f <= 0 or lev_f <= 0:
+        return None
+    s = (side or "").lower()
+    if s in ("long", "buy"):
+        return ((price_f - entry_f) / entry_f) * lev_f
+    if s in ("short", "sell"):
+        return ((entry_f - price_f) / entry_f) * lev_f
+    return None
 def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -> bool:
     """
     Fecha imediatamente se unrealizedPnl <= threshold (ex.: threshold=-0.05 para -5 cents).
@@ -25,11 +155,17 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -
     if pnl is None:
         return False
     try:
-        pnl_f = float(pnl)
+        pnl_f = float(str(pnl).replace(",", "."))
     except Exception:
         return False
 
-    if pnl_f <= float(threshold):
+    try:
+        thresh_f = float(threshold)
+    except Exception:
+        thresh_f = -0.05
+    effective_threshold = max(thresh_f, UNREALIZED_PNL_HARD_STOP)
+
+    if pnl_f <= effective_threshold:
         # Fecha a posição inteira no lado de saída
         try:
             qty, _, _, side = _get_pos_size_and_leverage(dex, symbol)
@@ -41,6 +177,80 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -
         except Exception:
             return False
     return False
+
+
+def close_if_roi_breaches(dex, symbol, current_px: float, *, threshold: float = ROI_HARD_STOP) -> bool:
+    try:
+        pos = _get_position_for_vault(dex, symbol, None)
+    except Exception:
+        pos = None
+    if not pos:
+        return False
+
+    # tenta ROI direto da posição
+    roi_value = None
+    try:
+        roi_value = pos.get("returnOnInvestment")
+        if roi_value is None:
+            roi_value = pos.get("roi")
+        if roi_value is None:
+            roi_value = (pos.get("info", {}) or {}).get("returnOnInvestment")
+        if roi_value is None:
+            roi_value = ((pos.get("info", {}) or {}).get("position", {}) or {}).get("returnOnInvestment")
+    except Exception:
+        roi_value = None
+
+    roi_f = None
+    if roi_value is not None:
+        try:
+            roi_str = str(roi_value).strip()
+            has_pct = roi_str.endswith("%")
+            if has_pct:
+                roi_str = roi_str[:-1]
+            roi_f = float(roi_str.replace(",", "."))
+            if has_pct:
+                roi_f /= 100.0
+        except Exception:
+            roi_f = None
+
+    try:
+        qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol)
+    except Exception:
+        qty, lev, entry, side = 0.0, 1.0, None, None
+
+    if roi_f is None:
+        if not side or qty <= 0 or not entry:
+            return False
+        px_now = current_px
+        if px_now is None:
+            try:
+                px_now = float(dex.fetch_ticker(symbol).get("last"))
+            except Exception:
+                px_now = None
+        if px_now is None:
+            return False
+        roi_f = _compute_roi_from_price(entry, side, px_now, leverage=lev)
+
+    if roi_f is None:
+        return False
+
+    try:
+        thresh_f = float(threshold)
+    except Exception:
+        thresh_f = ROI_HARD_STOP
+    effective_threshold = max(thresh_f, ROI_HARD_STOP)
+
+    if roi_f > effective_threshold:
+        return False
+
+    try:
+        if not side or qty <= 0:
+            return False
+        exit_side = "sell" if str(side).lower() in ("long", "buy") else "buy"
+        dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
+        return True
+    except Exception:
+        return False
 
 #codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
 
@@ -481,6 +691,11 @@ import ccxt  # type: ignore
 
 
 def guard_close_all(dex, symbol, current_px: float) -> bool:
+    try:
+        if close_if_roi_breaches(dex, symbol, current_px, threshold=ROI_HARD_STOP):
+            return True
+    except Exception:
+        pass
     try:
         if close_if_unrealized_pnl_breaches(dex, symbol, threshold=-0.05):
             return True
@@ -1782,6 +1997,16 @@ class EMAGradientStrategy:
         return ret
 
     def _ensure_position_protections(self, pos: Dict[str, Any], df_for_log: Optional[pd.DataFrame] = None):
+        # Primeira verificação: guard_close_all para fechar imediatamente se PnL <= -5%
+        try:
+            current_px = self._preco_atual()
+            if guard_close_all(self.dex, self.symbol, float(current_px)):
+                self._log("Posição fechada imediatamente por PnL <= -5% (price below)", level="INFO")
+                return
+        except Exception as e:
+            if self.debug:
+                self._log(f"Falha na verificação de PnL crítico: {type(e).__name__}: {e}", level="WARN")
+        
         try:
             qty = float(pos.get("contracts") or 0.0)
             if qty <= 0:
