@@ -1240,22 +1240,13 @@ class EMAGradientStrategy:
             )
 
         if trailing_px is not None:
-            if norm_side == "buy" and trailing_px <= stop_px:
-                if self.debug:
-                    self._log(
-                        f"DEBUG trailing CANCELADO: trailing_px={trailing_px:.6f} <= stop_px={stop_px:.6f} "
-                        f"(LONG)", 
-                        level="DEBUG"
-                    )
-                trailing_px = None
-            if norm_side == "sell" and trailing_px >= stop_px:
-                if self.debug:
-                    self._log(
-                        f"DEBUG trailing CANCELADO: trailing_px={trailing_px:.6f} >= stop_px={stop_px:.6f} "
-                        f"(SHORT)", 
-                        level="DEBUG"
-                    )
-                trailing_px = None
+            # Trailing já foi validado em _compute_trailing_stop para ser melhor que stop normal
+            if self.debug:
+                self._log(
+                    f"DEBUG trailing ATIVADO: trailing_px={trailing_px:.6f} vs stop_px={stop_px:.6f} "
+                    f"({'LONG' if norm_side == 'buy' else 'SHORT'})", 
+                    level="DEBUG"
+                )
         return stop_px, trailing_px
 
     def _compute_trailing_stop(self, entry_price: float, current_price: float, norm_side: str, leverage: float) -> Optional[float]:
@@ -1282,9 +1273,33 @@ class EMAGradientStrategy:
                 level="DEBUG"
             )
         
-        # Trailing stop sempre ativo - melhora proteção mesmo com ROI negativo
-        # Ex: ROI alavancado 9% → trailing stop em -1% (melhor que perda fixa de -5%)
+        # Trailing stop só ativo se for MELHOR que stop loss normal (-5%)
+        # Ex: ROI alavancado 15% → trailing em 5% (melhor que -5%) ✓
+        # Ex: ROI alavancado 3% → trailing em -7% (pior que -5%) ✗
         target_roi = levered_roi - margin
+        
+        # Para LONG: trailing deve ser maior que stop normal (-5%)
+        # Para SHORT: trailing deve ser menor que stop normal (+5%)
+        stop_loss_roi = -0.05  # Stop loss normal em -5%
+        
+        if norm_side == "buy":
+            if target_roi <= stop_loss_roi:  # Se trailing for pior que -5%, não usar
+                if self.debug:
+                    self._log(
+                        f"DEBUG trailing DESATIVADO LONG: target_ROI={target_roi:.4f} <= {stop_loss_roi:.2f} (usar stop normal)", 
+                        level="DEBUG"
+                    )
+                return None
+        else:  # SHORT
+            # Para SHORT, stop normal seria em +5%, trailing deve ser melhor (menor)
+            stop_normal_short = 0.05
+            if target_roi >= stop_normal_short:
+                if self.debug:
+                    self._log(
+                        f"DEBUG trailing DESATIVADO SHORT: target_ROI={target_roi:.4f} >= {stop_normal_short:.2f} (usar stop normal)", 
+                        level="DEBUG"
+                    )
+                return None
         
         # Converter ROI target de volta para preço
         if norm_side == "buy":
@@ -3486,14 +3501,12 @@ def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = N
 
 def _get_position_for_vault(dex, symbol, vault=None):
     """
-    Tenta obter a posição atual (da subconta/vault) para o símbolo.
+    Tenta obter a posição atual (conta principal) para o símbolo.
     Retorna dict com chaves padrão: contracts, entryPrice, side, leverage, info
     """
     try:
-        if vault:
-            poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
-        else:
-            poss = dex.fetch_positions([symbol]) or []
+        # Sempre opera na conta mãe (sem vault)
+        poss = dex.fetch_positions([symbol]) or []
     except Exception as e:
         print(f"[POS][{symbol}] fetch_positions falhou: {type(e).__name__}: {e}")
         poss = []
@@ -3534,7 +3547,8 @@ def _get_position_for_vault(dex, symbol, vault=None):
 
 
 def _get_pos_size_and_leverage(dex, symbol, *, vault=None):
-    p = _get_position_for_vault(dex, symbol, vault)
+    # Sempre opera na conta mãe (ignora parâmetro vault)
+    p = _get_position_for_vault(dex, symbol, None)
     if not p:
         return 0.0, 1.0, None, None
     qty = float(p.get("contracts") or 0.0)
@@ -3755,11 +3769,9 @@ def _approx_equal(a: float, b: float, tol_abs: float = None, tol_pct: float = 0.
 
 
 def _get_current_contracts(dex, symbol, *, vault=None) -> float:
+    # Sempre opera na conta mãe (ignora parâmetro vault)
     try:
-        if vault:
-            poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
-        else:
-            poss = dex.fetch_positions([symbol]) or []
+        poss = dex.fetch_positions([symbol]) or []
         for p in poss:
             contracts = p.get("contracts") or p.get("amount") or 0
             if contracts and float(contracts) > 0:
