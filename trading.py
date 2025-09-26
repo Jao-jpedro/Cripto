@@ -2065,7 +2065,11 @@ class EMAGradientStrategy:
                         self._last_stop_order_id = oid
                         remaining_orders.append(order)
                     else:
-                        self._cancel_order_silent(oid)
+                        roi_existing = _compute_roi_from_price(entry, norm_side, price)
+                        if roi_existing is not None and -0.06 <= roi_existing <= -0.04:
+                            remaining_orders.append(order)
+                        else:
+                            self._cancel_order_silent(oid)
                 elif kind_guess == "trail":
                     trailing_candidates.append((order, price, oid))
                 else:
@@ -3481,6 +3485,14 @@ def ensure_tpsl_for_position(dex, symbol, *, retries: int = 2, price_tol_pct: fl
             if _approx_equal(trig, sl, price_tol_pct):
                 has_stop = True
                 continue
+            
+            # Verificar se o stop loss existente está no range de -4% a -6%
+            # Se estiver, manter; se não estiver, será cancelado e recriado
+            roi_existing = _compute_roi_from_price(entry, side, trig)
+            if roi_existing is not None and -0.06 <= roi_existing <= -0.04:
+                has_stop = True  # Considera como válido se estiver no range
+                continue
+            
             if trail is None:
                 continue
             if _approx_equal(trig, trail, price_tol_pct):
