@@ -6,6 +6,68 @@ ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
 UNREALIZED_PNL_HARD_STOP = -0.5  # trava dura para unrealizedPnL em USDC
 
 
+def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: float) -> bool:
+    """
+    Cancela ordens com status 'Triggered' e cria uma nova ordem 'price below' se necessário.
+    """
+    try:
+        orders_cancelled = 0
+        
+        # Buscar ordens abertas
+        open_orders = dex.fetch_open_orders(symbol)
+        
+        for order in open_orders:
+            # Verificar se a ordem tem status 'Triggered'
+            order_status = order.get('status', '').lower()
+            order_info = order.get('info', {})
+            order_type = order_info.get('orderType', '')
+            
+            if order_status == 'triggered' or 'trigger' in order_type.lower():
+                try:
+                    # Cancelar a ordem triggered
+                    dex.cancel_order(order['id'], symbol)
+                    orders_cancelled += 1
+                    print(f"[INFO] Ordem Triggered cancelada: {order['id']}", flush=True)
+                except Exception as e:
+                    print(f"[WARN] Erro ao cancelar ordem {order['id']}: {e}", flush=True)
+        
+        # Se cancelou alguma ordem triggered, criar uma ordem price below
+        if orders_cancelled > 0:
+            try:
+                # Verificar se há posição aberta para determinar o lado
+                positions = dex.fetch_positions([symbol])
+                if positions and float(positions[0].get("contracts", 0)) > 0:
+                    pos = positions[0]
+                    side = pos.get('side', '').lower()
+                    qty = abs(float(pos.get('contracts', 0)))
+                    
+                    if side and qty > 0:
+                        # Criar ordem price below (5% abaixo do preço atual)
+                        price_below = current_px * 0.95  # 5% abaixo
+                        exit_side = "sell" if side in ("long", "buy") else "buy"
+                        
+                        # Criar ordem limit para saída
+                        order = dex.create_order(
+                            symbol, 
+                            "limit", 
+                            exit_side, 
+                            qty, 
+                            price_below,
+                            {"reduceOnly": True}
+                        )
+                        print(f"[INFO] Ordem price below criada: {order.get('id')} - Preço: {price_below:.4f}", flush=True)
+                        return True
+                        
+            except Exception as e:
+                print(f"[WARN] Erro ao criar ordem price below: {e}", flush=True)
+        
+        return orders_cancelled > 0
+        
+    except Exception as e:
+        print(f"[ERROR] Erro na função cancel_triggered_orders_and_create_price_below: {e}", flush=True)
+        return False
+
+
 def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float) -> bool:
     try:
         qty, _, entry_px, side = _get_pos_size_and_leverage(dex, symbol)
@@ -2536,6 +2598,13 @@ class EMAGradientStrategy:
 
         prev_side = self._last_pos_side
         pos = self._posicao_aberta()
+
+        # Verificar e cancelar ordens triggered, criar price below se necessário
+        try:
+            current_price = self._preco_atual()
+            cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price)
+        except Exception as e:
+            self._log(f"Erro ao processar ordens triggered: {type(e).__name__}: {e}", level="WARN")
 
         if pos:
             emergency_closed = False
