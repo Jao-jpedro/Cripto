@@ -1,13 +1,13 @@
-def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool: ...
-def close_if_breached_leveraged(dex, symbol, current_px: float, *, vault) -> bool: ...
+def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float) -> bool: ...
+def close_if_breached_leveraged(dex, symbol, current_px: float) -> bool: ...
 
-def close_if_unrealized_pnl_breaches(dex, symbol, *, vault, threshold: float = -0.05) -> bool:
+def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -> bool:
     """
     Fecha imediatamente se unrealizedPnl <= threshold (ex.: threshold=-0.05 para -5 cents).
     Se unrealizedPnl não estiver disponível, não faz nada (fallbacks separados cuidam do resto).
     """
     try:
-        pos = _get_position_for_vault(dex, symbol, vault)
+        pos = _get_position_for_vault(dex, symbol, None)
     except Exception:
         pos = None
     if not pos:
@@ -32,11 +32,11 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, vault, threshold: float = -
     if pnl_f <= float(threshold):
         # Fecha a posição inteira no lado de saída
         try:
-            qty, _, _, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+            qty, _, _, side = _get_pos_size_and_leverage(dex, symbol)
             if not side or qty <= 0: 
                 return False
             exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
-            dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True, "vaultAddress": vault})
+            dex.create_order(symbol, "market", exit_side, float(qty), None, {"reduceOnly": True})
             return True
         except Exception:
             return False
@@ -84,7 +84,6 @@ else:
 import warnings as _warnings
 # ===== Hyperliquid accounts / vault / signer =====
 HL_MAIN_ACCOUNT = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
-HL_SUBACCOUNT_VAULT = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
 HL_API_WALLET = "0x95cf910f947a5be26bc7c18f8b8048185126b4e9"
 
 _warnings.filterwarnings(
@@ -481,19 +480,19 @@ DEX (Hyperliquid via ccxt)
 import ccxt  # type: ignore
 
 
-def guard_close_all(dex, symbol, current_px: float, *, vault) -> bool:
+def guard_close_all(dex, symbol, current_px: float) -> bool:
     try:
-        if close_if_unrealized_pnl_breaches(dex, symbol, vault=vault, threshold=-0.05):
+        if close_if_unrealized_pnl_breaches(dex, symbol, threshold=-0.05):
             return True
     except Exception:
         pass
     try:
-        if close_if_breached_leveraged(dex, symbol, current_px, vault=vault):
+        if close_if_breached_leveraged(dex, symbol, current_px):
             return True
     except Exception:
         pass
     try:
-        if close_if_abs_loss_exceeds_5c(dex, symbol, current_px, vault=vault):
+        if close_if_abs_loss_exceeds_5c(dex, symbol, current_px):
             return True
     except Exception:
         pass
@@ -561,38 +560,6 @@ dex = ccxt.hyperliquid({
 })
 
 
-# === Force all HL calls to use subaccount vault ===
-try:
-    dex.options = dex.options or {}
-    dex.options["vaultAddress"] = HL_SUBACCOUNT_VAULT
-except Exception:
-    pass
-
-def _with_vault(params):
-    p = dict(params or {})
-    p.setdefault("vaultAddress", HL_SUBACCOUNT_VAULT)
-    return p
-
-if hasattr(dex, "create_order"):
-    _orig_create_order = dex.create_order
-    def _create_order_vault(symbol, type, side, amount, price=None, params=None):
-        return _orig_create_order(symbol, type, side, amount, price, _with_vault(params))
-    dex.create_order = _create_order_vault
-
-def _patch_method(name):
-    if hasattr(dex, name):
-        orig = getattr(dex, name)
-        def _fn(*args, **kwargs):
-            if args and isinstance(args[-1], dict):
-                args = (*args[:-1], _with_vault(args[-1]))
-            else:
-                kwargs["params"] = _with_vault(kwargs.get("params"))
-            return orig(*args, **kwargs)
-        setattr(dex, name, _fn)
-
-for _meth in ("cancel_order", "cancel_orders", "fetch_open_orders", "fetch_orders", "fetch_positions",
-              "set_leverage", "set_margin_mode", "set_position_mode"):
-    _patch_method(_meth)
 # Segundo DEX (racional inverso) com credenciais distintas
 if dex:
     _log_global("DEX", f"Inicializado | LIVE_TRADING={os.getenv('LIVE_TRADING','0')} | TIMEOUT_MS={dex_timeout}")
@@ -1956,11 +1923,11 @@ class EMAGradientStrategy:
             level="INFO",
         )
         ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
-        _tpsl = ensure_tpsl_for_position(self.dex, self.symbol, vault=HL_SUBACCOUNT_VAULT)
+        _tpsl = ensure_tpsl_for_position(self.dex, self.symbol)
         try:
             _px_now = self.dex.fetch_ticker(self.symbol).get("last")
             if _px_now:
-                guard_close_all(self.dex, self.symbol, float(_px_now), vault=HL_SUBACCOUNT_VAULT)
+                guard_close_all(self.dex, self.symbol, float(_px_now))
         except Exception:
             pass
         try:
@@ -1970,9 +1937,9 @@ class EMAGradientStrategy:
                     ((ordem_entrada.get("info", {}) or {}).get("filled", {}) or {}).get("avgPx")
                 )
             px_ref = float(avg_px) if avg_px else float(price)
-            tpsl = _place_tp_sl_orders_idempotent(self.dex, self.symbol, side, px_ref, vault=HL_SUBACCOUNT_VAULT)
+            tpsl = _place_tp_sl_orders_idempotent(self.dex, self.symbol, side, px_ref)
             self._log(f"TP/SL criados | TP={tpsl['tp']:.6f} SL={tpsl['sl']:.6f}", level="DEBUG");
-            guard_close_all(self.dex, self.symbol, float(self._preco_atual()), vault=HL_SUBACCOUNT_VAULT)
+            guard_close_all(self.dex, self.symbol, float(self._preco_atual()))
         except Exception as e:
             self._log(f"Falha ao criar TP/SL: {type(e).__name__}: {e}", level="WARN")
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
@@ -2342,7 +2309,7 @@ class EMAGradientStrategy:
         if pos:
             emergency_closed = False
             try:
-                if close_if_unrealized_pnl_breaches(self.dex, self.symbol, vault=HL_SUBACCOUNT_VAULT, threshold=-0.05):
+                if close_if_unrealized_pnl_breaches(self.dex, self.symbol, threshold=-0.05):
                     emergency_closed = True
             except Exception as e:
                 self._log(f"Falha ao avaliar emergência de PnL: {type(e).__name__}: {e}", level="WARN")
@@ -3160,13 +3127,16 @@ def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = N
 
 # ===== SAFETY UTILS (inseridos antes do __main__ para evitar NameError) =====
 
-def _get_position_for_vault(dex, symbol, vault):
+def _get_position_for_vault(dex, symbol, vault=None):
     """
     Tenta obter a posição atual (da subconta/vault) para o símbolo.
     Retorna dict com chaves padrão: contracts, entryPrice, side, leverage, info
     """
     try:
-        poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        if vault:
+            poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        else:
+            poss = dex.fetch_positions([symbol]) or []
     except Exception as e:
         print(f"[POS][{symbol}] fetch_positions falhou: {type(e).__name__}: {e}")
         poss = []
@@ -3206,7 +3176,7 @@ def _get_position_for_vault(dex, symbol, vault):
     return best
 
 
-def _get_pos_size_and_leverage(dex, symbol, *, vault):
+def _get_pos_size_and_leverage(dex, symbol, *, vault=None):
     p = _get_position_for_vault(dex, symbol, vault)
     if not p:
         return 0.0, 1.0, None, None
@@ -3224,12 +3194,12 @@ def _get_pos_size_and_leverage(dex, symbol, *, vault):
     return float(qty), float(lev), entry, side
 
 
-def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_pct: float = 0.001):
+def ensure_tpsl_for_position(dex, symbol, *, retries: int = 2, price_tol_pct: float = 0.001):
     """
     Garante stop-loss e trailing-stop reduceOnly para a posição atual, sem degradar trailing existente.
     price_tol_pct = 0.001 => 0,1% de tolerância na comparação de preço.
     """
-    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol)
     if qty <= 0 or not entry or not side:
         print(f"[TPSL][{symbol}] Sem posição; nada a fazer.")
         return {"ok": False, "reason": "no_position", "qty": qty, "lev": lev, "entry": entry}
@@ -3264,7 +3234,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
         return False
 
     try:
-        open_ords = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
+        open_ords = dex.fetch_open_orders(symbol) or []
     except Exception as e:
         print(f"[TPSL][{symbol}] Falha ao ler open orders: {type(e).__name__}: {e}")
         open_ords = []
@@ -3314,7 +3284,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
     )
 
     def _create_stop_try():
-        base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC"}
+        base = {"reduceOnly": True, "timeInForce": "GTC"}
         for v in ({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl},
                   {"triggerPrice": sl},
                   {"stopPrice": sl}):
@@ -3328,7 +3298,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
     def _create_trail_try():
         if trail is None:
             return None
-        base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC", "trigger": "mark"}
+        base = {"reduceOnly": True, "timeInForce": "GTC", "trigger": "mark"}
         params = {"triggerPrice": trail, "stopLossPrice": trail}
         try:
             print(f"[TPSL][{symbol}] Criando TRAILING {params}")
@@ -3346,7 +3316,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
             if exit_side == "sell" and trail > best_trail_price * (1 + price_tol_pct):
                 if best_trail_oid:
                     try:
-                        dex.cancel_order(best_trail_oid, symbol, params={"vaultAddress": vault})
+                        dex.cancel_order(best_trail_oid, symbol)
                         print(f"[TPSL][{symbol}] Cancelando trailing antigo id={best_trail_oid}")
                     except Exception as e:
                         print(f"[TPSL][{symbol}] Falha ao cancelar trailing antigo: {type(e).__name__}: {e}")
@@ -3355,7 +3325,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
             if exit_side == "buy" and trail < best_trail_price * (1 - price_tol_pct):
                 if best_trail_oid:
                     try:
-                        dex.cancel_order(best_trail_oid, symbol, params={"vaultAddress": vault})
+                        dex.cancel_order(best_trail_oid, symbol)
                         print(f"[TPSL][{symbol}] Cancelando trailing antigo id={best_trail_oid}")
                     except Exception as e:
                         print(f"[TPSL][{symbol}] Falha ao cancelar trailing antigo: {type(e).__name__}: {e}")
@@ -3365,7 +3335,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault, retries: int = 2, price_tol_
             created_trail = _create_trail_try()
 
         try:
-            cur = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
+            cur = dex.fetch_open_orders(symbol) or []
         except Exception as e:
             print(f"[TPSL][{symbol}] Releitura open orders falhou: {type(e).__name__}: {e}")
             cur = []
@@ -3523,9 +3493,12 @@ def _approx_equal(a: float, b: float, tol_abs: float = None, tol_pct: float = 0.
     bound = max((tol_abs or 0.0), ref * tol_pct)
     return abs(a - b) <= bound
 
-def _get_current_contracts(dex, symbol, *, vault) -> float:
+def _get_current_contracts(dex, symbol, *, vault=None) -> float:
     try:
-        poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        if vault:
+            poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        else:
+            poss = dex.fetch_positions([symbol]) or []
         for p in poss:
             contracts = p.get("contracts") or p.get("amount") or 0
             if contracts and float(contracts) > 0:
@@ -3534,11 +3507,11 @@ def _get_current_contracts(dex, symbol, *, vault) -> float:
         pass
     return 0.0
 
-def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount, *, vault):
-    contracts_now = _get_current_contracts(dex, symbol, vault=vault)
+def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount):
+    contracts_now = _get_current_contracts(dex, symbol)
     qty = contracts_now if contracts_now > 0 else float(amount)
 
-    qty_target, lev, _, _ = _get_pos_size_and_leverage(dex, symbol, vault=vault)
+    qty_target, lev, _, _ = _get_pos_size_and_leverage(dex, symbol)
     leverage = lev if lev else 1.0
     qty_for_calc = qty_target if qty_target > 0 else qty
 
@@ -3554,13 +3527,13 @@ def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount, *, vault
     exit_side = "sell" if side.lower() in ("long", "buy") else "buy"
 
     try:
-        open_orders = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault}) or []
+        open_orders = dex.fetch_open_orders(symbol) or []
     except Exception:
         open_orders = []
 
     has_stop = False
     best_trail_price: Optional[float] = None
-    params_base = {"vaultAddress": vault, "reduceOnly": True, "timeInForce": "GTC", "trigger": "mark"}
+    params_base = {"reduceOnly": True, "timeInForce": "GTC", "trigger": "mark"}
 
     for o in open_orders:
         try:
@@ -3623,9 +3596,12 @@ def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount, *, vault
 
 
 
-def _get_position_for_vault(dex, symbol, vault):
+def _get_position_for_vault(dex, symbol, vault=None):
     try:
-        poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        if vault:
+            poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        else:
+            poss = dex.fetch_positions([symbol]) or []
         for p in poss:
             qty = float(p.get("contracts") or 0.0)
             side = (p.get("side") or "").lower()
@@ -3635,7 +3611,7 @@ def _get_position_for_vault(dex, symbol, vault):
         pass
     return None
 
-def _get_pos_size_and_leverage(dex, symbol, *, vault):
+def _get_pos_size_and_leverage(dex, symbol, *, vault=None):
     p = _get_position_for_vault(dex, symbol, vault)
     if not p:
         return 0.0, 1.0, None, None
@@ -3661,7 +3637,7 @@ def _approx(a, b, tol=0.001):
 
 
 
-def ensure_tpsl_for_position(dex, symbol, *, vault):
+def ensure_tpsl_for_position(dex, symbol, *, vault=None):
     """
     Garante stop-loss e trailing-stop reduceOnly para a posição atual da subconta.
     """
@@ -3675,7 +3651,6 @@ def ensure_tpsl_for_position(dex, symbol, *, vault):
         side,
         entry,
         qty,
-        vault=vault,
     )
 
     return {
@@ -3691,7 +3666,7 @@ def ensure_tpsl_for_position(dex, symbol, *, vault):
 
 
 
-def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bool:
+def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault=None) -> bool:
     """
     Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
     """
@@ -3709,8 +3684,8 @@ def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) ->
 
     if loss > 0.05:
         try:
-            dex.create_order(symbol, "market", exit_side, qty, None,
-                             {"vaultAddress": vault, "reduceOnly": True})
+            params = {"reduceOnly": True}
+            dex.create_order(symbol, "market", exit_side, qty, None, params)
             return True
         except Exception:
             return False
