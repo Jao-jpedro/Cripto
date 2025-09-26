@@ -5,8 +5,8 @@ from typing import Optional
 
 ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -0.03  # ROI mínimo aceitável (-3%) - mais restritivo
-UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC
+ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
+UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC (PRIORITÁRIO)
 
 
 def _log_global(section: str, message: str, level: str = "INFO") -> None:
@@ -2234,11 +2234,11 @@ class EMAGradientStrategy:
         except Exception as e:
             self._log(f"Erro ao processar ordens triggered (vault): {type(e).__name__}: {e}", level="WARN")
 
-        # Verificar stop loss por PnL/ROI para fechamento imediato
+        # Verificar stop loss por PnL/ROI para fechamento imediato (PnL tem prioridade)
         if pos:
             emergency_closed = False
             try:
-                # Verificar unrealized PnL
+                # PRIORITÁRIO: Verificar unrealized PnL primeiro
                 unrealized_pnl = pos.get("unrealizedPnl")
                 if unrealized_pnl is not None:
                     unrealized_pnl = float(unrealized_pnl)
@@ -2249,11 +2249,37 @@ class EMAGradientStrategy:
                             exit_side = "sell" if side in ("buy", "long") else "buy"
                             self.dex.create_order(self.symbol, "market", exit_side, qty, None, {"reduceOnly": True, "vaultAddress": vault_address})
                             emergency_closed = True
-                            self._log(f"Emergência acionada (vault): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP}, posição fechada imediatamente.", level="ERROR")
+                            self._log(f"Emergência acionada (vault): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
                             self._log(f"Erro ao fechar posição por PnL (vault): {e}", level="ERROR")
+                
+                # Se não fechou por PnL, verificar ROI
+                if not emergency_closed:
+                    roi_value = None
+                    try:
+                        roi_value = pos.get("returnOnEquity")
+                        if roi_value is None:
+                            roi_value = pos.get("returnOnInvestment") 
+                        if roi_value is None:
+                            roi_value = pos.get("roi")
+                    except Exception:
+                        pass
+                    
+                    if roi_value is not None:
+                        try:
+                            roi_f = float(roi_value)
+                            if roi_f <= ROI_HARD_STOP:
+                                qty = abs(float(pos.get("contracts", 0)))
+                                side = self._norm_side(pos.get("side") or pos.get("positionSide"))
+                                exit_side = "sell" if side in ("buy", "long") else "buy"
+                                self.dex.create_order(self.symbol, "market", exit_side, qty, None, {"reduceOnly": True, "vaultAddress": vault_address})
+                                emergency_closed = True
+                                self._log(f"Emergência acionada (vault): ROI <= {ROI_HARD_STOP*100}%, posição fechada imediatamente.", level="ERROR")
+                        except Exception as e:
+                            self._log(f"Erro ao fechar posição por ROI (vault): {e}", level="ERROR")
+                        
             except Exception as e:
-                self._log(f"Falha ao avaliar emergência de PnL (vault): {type(e).__name__}: {e}", level="WARN")
+                self._log(f"Falha ao avaliar emergência de PnL/ROI (vault): {type(e).__name__}: {e}", level="WARN")
             
             if emergency_closed:
                 self._cancel_protective_orders(fetch_backup=True)

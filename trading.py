@@ -3,8 +3,8 @@ from typing import Optional
 
 ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -0.03  # ROI mínimo aceitável (-3%) - mais restritivo
-UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC
+ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
+UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC (PRIORITÁRIO)
 
 
 def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: float) -> bool:
@@ -756,13 +756,15 @@ import ccxt  # type: ignore
 
 
 def guard_close_all(dex, symbol, current_px: float) -> bool:
+    # PRIORITÁRIO: verificar unrealized PnL primeiro
     try:
-        if close_if_roi_breaches(dex, symbol, current_px, threshold=ROI_HARD_STOP):
+        if close_if_unrealized_pnl_breaches(dex, symbol, threshold=UNREALIZED_PNL_HARD_STOP):
             return True
     except Exception:
         pass
+    # Verificar ROI após unrealized PnL
     try:
-        if close_if_unrealized_pnl_breaches(dex, symbol, threshold=-0.05):
+        if close_if_roi_breaches(dex, symbol, current_px, threshold=ROI_HARD_STOP):
             return True
     except Exception:
         pass
@@ -2060,11 +2062,11 @@ class EMAGradientStrategy:
         return ret
 
     def _ensure_position_protections(self, pos: Dict[str, Any], df_for_log: Optional[pd.DataFrame] = None):
-        # Primeira verificação: guard_close_all para fechar imediatamente se PnL <= -3%
+        # Primeira verificação: guard_close_all para fechar imediatamente se PnL <= -0.05 (prioritário) ou ROI <= -5%
         try:
             current_px = self._preco_atual()
             if guard_close_all(self.dex, self.symbol, float(current_px)):
-                self._log("Posição fechada imediatamente por PnL <= -3% (price below)", level="INFO")
+                self._log("Posição fechada imediatamente por PnL <= -0.05 USDC (prioritário) ou ROI <= -5%", level="INFO")
                 return
         except Exception as e:
             if self.debug:
