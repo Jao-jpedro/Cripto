@@ -1232,10 +1232,29 @@ class EMAGradientStrategy:
 
         trailing_px = self._compute_trailing_stop(entry_price, ref_price, norm_side, lev)
 
+        if self.debug and trailing_px is not None:
+            self._log(
+                f"DEBUG protection_prices: stop_px={stop_px:.6f} trailing_px={trailing_px:.6f} "
+                f"side={norm_side}", 
+                level="DEBUG"
+            )
+
         if trailing_px is not None:
             if norm_side == "buy" and trailing_px <= stop_px:
+                if self.debug:
+                    self._log(
+                        f"DEBUG trailing CANCELADO: trailing_px={trailing_px:.6f} <= stop_px={stop_px:.6f} "
+                        f"(LONG)", 
+                        level="DEBUG"
+                    )
                 trailing_px = None
             if norm_side == "sell" and trailing_px >= stop_px:
+                if self.debug:
+                    self._log(
+                        f"DEBUG trailing CANCELADO: trailing_px={trailing_px:.6f} >= stop_px={stop_px:.6f} "
+                        f"(SHORT)", 
+                        level="DEBUG"
+                    )
                 trailing_px = None
         return stop_px, trailing_px
 
@@ -1254,6 +1273,15 @@ class EMAGradientStrategy:
             return None
 
         levered_roi = roi * leverage
+        
+        # Debug: mostrar cálculos do trailing stop
+        if self.debug:
+            self._log(
+                f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} ROI={roi:.4f} "
+                f"levered_ROI={levered_roi:.4f} margin={margin:.4f}", 
+                level="DEBUG"
+            )
+        
         # Trailing stop fica 10% abaixo do ROI alavancado
         # Ex: ROI alavancado 6% → trailing stop em -4% (6% - 10%)
         target_roi = levered_roi - margin
@@ -1264,7 +1292,15 @@ class EMAGradientStrategy:
             # trailing_price = entry_price * (target_roi + 1)
             trailing_price = entry_price * (target_roi + 1.0)
             # Para LONG: trailing stop deve estar abaixo do preço atual
-            return max(0.0, min(trailing_price, current_price))
+            result = max(0.0, min(trailing_price, current_price))
+            
+            if self.debug:
+                self._log(
+                    f"DEBUG trailing LONG: target_ROI={target_roi:.4f} trailing_price={trailing_price:.6f} "
+                    f"result={result:.6f}", 
+                    level="DEBUG"
+                )
+            return result
         else:
             # Para SHORT: target_roi = (entry_price / trailing_price) - 1
             # entry_price / trailing_price = target_roi + 1
@@ -1273,7 +1309,15 @@ class EMAGradientStrategy:
                 return None
             trailing_price = entry_price / (target_roi + 1.0)
             # Para SHORT: trailing stop deve estar acima do preço atual
-            return max(current_price, trailing_price)
+            result = max(current_price, trailing_price)
+            
+            if self.debug:
+                self._log(
+                    f"DEBUG trailing SHORT: target_ROI={target_roi:.4f} trailing_price={trailing_price:.6f} "
+                    f"result={result:.6f}", 
+                    level="DEBUG"
+                )
+            return result
 
 
     # ---------- config → params (reuso dos cálculos do backtest) ----------
