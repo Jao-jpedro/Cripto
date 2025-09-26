@@ -2251,7 +2251,21 @@ class EMAGradientStrategy:
                             side = self._norm_side(pos.get("side") or pos.get("positionSide"))
                             exit_side = "sell" if side in ("buy", "long") else "buy"
                             vault_address = VAULT_ADDRESS
-                            self.dex.create_order(self.symbol, "market", exit_side, qty, None, {"reduceOnly": True, "vaultAddress": vault_address})
+                            
+                            # Buscar preço atual para ordem market
+                            ticker = self.dex.fetch_ticker(self.symbol)
+                            current_price = float(ticker.get("last", 0) or 0)
+                            if current_price <= 0:
+                                self._log("Erro: preço atual inválido para fechamento de emergência por PnL", level="ERROR")
+                                raise ValueError("Preço atual inválido")
+                                
+                            # Ajustar preço para garantir execução
+                            if exit_side == "sell":
+                                order_price = current_price * 0.995  # Ligeiramente abaixo para long
+                            else:
+                                order_price = current_price * 1.005  # Ligeiramente acima para short
+                            
+                            self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
                             emergency_closed = True
                             self._log(f"Emergência acionada (vault): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
@@ -2277,7 +2291,21 @@ class EMAGradientStrategy:
                                 side = self._norm_side(pos.get("side") or pos.get("positionSide"))
                                 exit_side = "sell" if side in ("buy", "long") else "buy"
                                 vault_address = VAULT_ADDRESS
-                                self.dex.create_order(self.symbol, "market", exit_side, qty, None, {"reduceOnly": True, "vaultAddress": vault_address})
+                                
+                                # Buscar preço atual para ordem market
+                                ticker = self.dex.fetch_ticker(self.symbol)
+                                current_price = float(ticker.get("last", 0) or 0)
+                                if current_price <= 0:
+                                    self._log("Erro: preço atual inválido para fechamento de emergência por ROI", level="ERROR")
+                                    raise ValueError("Preço atual inválido")
+                                    
+                                # Ajustar preço para garantir execução
+                                if exit_side == "sell":
+                                    order_price = current_price * 0.995  # Ligeiramente abaixo para long
+                                else:
+                                    order_price = current_price * 1.005  # Ligeiramente acima para short
+                                
+                                self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
                                 emergency_closed = True
                                 self._log(f"Emergência acionada (vault): ROI <= {ROI_HARD_STOP*100}%, posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
