@@ -1,3 +1,5 @@
+from typing import Optional
+
 ABS_LOSS_HARD_STOP = 0.05  # perda máxima em dólar (USDC) permitida
 LIQUIDATION_BUFFER_PCT = 0.002  # 0.2% acima do preço de liquidação
 UNREALIZED_PNL_HARD_STOP = -0.5  # trava de segurança: não deixar passar de -0.5
@@ -49,7 +51,7 @@ def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float, *, vault) -> bo
             return False
 
 
-def _extract_liquidation_price(position) -> float | None:
+def _extract_liquidation_price(position) -> Optional[float]:
         candidates = []
         try:
             candidates.append(position.get("liquidationPrice"))
@@ -295,7 +297,7 @@ def _log_global(section: str, message: str, level: str = "INFO") -> None:
 
     # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
         import requests  # type: ignore
         import pandas as pd  # type: ignore

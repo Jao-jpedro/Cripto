@@ -1,3 +1,5 @@
+from typing import Optional
+
 ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
 ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
@@ -163,7 +165,7 @@ def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -
         thresh_f = float(threshold)
     except Exception:
         thresh_f = -0.05
-    effective_threshold = max(thresh_f, UNREALIZED_PNL_HARD_STOP)
+    effective_threshold = min(thresh_f, -0.05)  # Garante que nunca seja mais permissivo que -0.05
 
     if pnl_f <= effective_threshold:
         # Fecha a posição inteira no lado de saída
@@ -3735,7 +3737,7 @@ if __name__ == "__main__":
     def executar_estrategia(
         df_in: pd.DataFrame,
         dex_in,
-        trade_logger_in: TradeLogger | None,
+        trade_logger_in: Optional[TradeLogger],
         usd_to_spend: float = 1,
         loop: bool = True,
         sleep_seconds: int = 60,
