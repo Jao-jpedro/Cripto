@@ -2583,8 +2583,8 @@ class EMAGradientStrategy:
                     can_long = base_long or force_long
 
                     if can_long:
-                        self._log("Confirmação pós-cooldown LONG valida (executando SHORT).", level="INFO")
-                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._log("Confirmação pós-cooldown LONG valida.", level="INFO")
+                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -2598,8 +2598,8 @@ class EMAGradientStrategy:
                     )
                     can_short = base_short or force_short
                     if can_short:
-                        self._log("Confirmação pós-cooldown SHORT valida (executando LONG).", level="INFO")
-                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._log("Confirmação pós-cooldown SHORT valida.", level="INFO")
+                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -2625,14 +2625,14 @@ class EMAGradientStrategy:
             can_long = base_long or force_long
             can_short = base_short or force_short
             if can_long:
-                self._log("Entrada LONG autorizada: critérios atendidos (executando SHORT).", level="INFO")
-                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._log("Entrada LONG autorizada: critérios atendidos.", level="INFO")
+                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
             if can_short:
-                self._log("Entrada SHORT autorizada: critérios atendidos (executando LONG).", level="INFO")
-                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._log("Entrada SHORT autorizada: critérios atendidos.", level="INFO")
+                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
@@ -3152,6 +3152,8 @@ if __name__ == "__main__":
 
     def fast_safety_check_v4(dex_in, asset_state, vault_address: str) -> None:
         """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos no vault."""
+        open_positions = []
+        
         for asset in ASSET_SETUPS:
             state = asset_state.get(asset.name)
             if state is None:
@@ -3161,77 +3163,96 @@ if __name__ == "__main__":
             
             try:
                 # Verificar se há posição aberta no vault
-                positions = dex_in.fetch_positions([asset.hl_symbol], None, {"vaultAddress": vault_address})
+                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": vault_address})
                 if not positions or float(positions[0].get("contracts", 0)) == 0:
                     continue
                     
                 pos = positions[0]
                 emergency_closed = False
                 
+                # Coletar informações da posição
+                side = pos.get("side") or pos.get("positionSide", "")
+                contracts = float(pos.get("contracts", 0))
+                unrealized_pnl = float(pos.get("unrealizedPnl", 0))
+                roi_value = pos.get("returnOnEquity") or pos.get("returnOnInvestment") or pos.get("roi")
+                roi_pct = float(roi_value) if roi_value is not None else 0.0
+                
+                # Adicionar à lista de posições abertas com status
+                status = "OK"
+                if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
+                    status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.2f}"
+                elif roi_pct <= ROI_HARD_STOP:
+                    status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}%"
+                elif unrealized_pnl < -0.01:
+                    status = f"📉 PnL: ${unrealized_pnl:.2f} ROI: {roi_pct:.1f}%"
+                elif unrealized_pnl > 0.01:
+                    status = f"📈 PnL: +${unrealized_pnl:.2f} ROI: +{roi_pct:.1f}%"
+                
+                open_positions.append(f"{asset.name} {side.upper()}: {status}")
+                
                 # PRIORITÁRIO: Verificar unrealized PnL primeiro
-                unrealized_pnl = pos.get("unrealizedPnl")
-                if unrealized_pnl is not None:
-                    unrealized_pnl = float(unrealized_pnl)
-                    if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                        try:
-                            qty = abs(float(pos.get("contracts", 0)))
-                            side = strategy._norm_side(pos.get("side") or pos.get("positionSide"))
-                            exit_side = "sell" if side in ("buy", "long") else "buy"
+                if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
+                    try:
+                        qty = abs(contracts)
+                        side_norm = strategy._norm_side(side)
+                        exit_side = "sell" if side_norm in ("buy", "long") else "buy"
+                        
+                        # Buscar preço atual para ordem market
+                        ticker = dex_in.fetch_ticker(asset.hl_symbol)
+                        current_price = float(ticker.get("last", 0) or 0)
+                        if current_price <= 0:
+                            continue
                             
-                            # Buscar preço atual para ordem market
-                            ticker = dex_in.fetch_ticker(asset.hl_symbol)
-                            current_price = float(ticker.get("last", 0) or 0)
-                            if current_price <= 0:
-                                continue
-                                
-                            # Ajustar preço para garantir execução
-                            if exit_side == "sell":
-                                order_price = current_price * 0.995  # Ligeiramente abaixo para long
-                            else:
-                                order_price = current_price * 1.005  # Ligeiramente acima para short
-                            
-                            dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
-                            emergency_closed = True
-                            _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência PnL {unrealized_pnl:.4f} - posição fechada", level="ERROR")
-                        except Exception as e:
-                            _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por PnL - {e}", level="WARN")
+                        # Ajustar preço para garantir execução
+                        if exit_side == "sell":
+                            order_price = current_price * 0.995  # Ligeiramente abaixo para long
+                        else:
+                            order_price = current_price * 1.005  # Ligeiramente acima para short
+                        
+                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
+                        emergency_closed = True
+                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
+                    except Exception as e:
+                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por PnL - {e}", level="WARN")
                 
                 # Se não fechou por PnL, verificar ROI
-                if not emergency_closed:
-                    roi_value = pos.get("returnOnEquity") or pos.get("returnOnInvestment") or pos.get("roi")
-                    if roi_value is not None:
-                        try:
-                            roi_f = float(roi_value)
-                            if roi_f <= ROI_HARD_STOP:
-                                qty = abs(float(pos.get("contracts", 0)))
-                                side = strategy._norm_side(pos.get("side") or pos.get("positionSide"))
-                                exit_side = "sell" if side in ("buy", "long") else "buy"
-                                
-                                # Buscar preço atual para ordem market
-                                ticker = dex_in.fetch_ticker(asset.hl_symbol)
-                                current_price = float(ticker.get("last", 0) or 0)
-                                if current_price <= 0:
-                                    continue
-                                    
-                                # Ajustar preço para garantir execução
-                                if exit_side == "sell":
-                                    order_price = current_price * 0.995
-                                else:
-                                    order_price = current_price * 1.005
-                                
-                                dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
-                                emergency_closed = True
-                                _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência ROI {roi_f:.4f} - posição fechada", level="ERROR")
-                        except Exception as e:
-                            _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por ROI - {e}", level="WARN")
+                if not emergency_closed and roi_pct <= ROI_HARD_STOP:
+                    try:
+                        qty = abs(contracts)
+                        side_norm = strategy._norm_side(side)
+                        exit_side = "sell" if side_norm in ("buy", "long") else "buy"
+                        
+                        # Buscar preço atual para ordem market
+                        ticker = dex_in.fetch_ticker(asset.hl_symbol)
+                        current_price = float(ticker.get("last", 0) or 0)
+                        if current_price <= 0:
+                            continue
+                            
+                        # Ajustar preço para garantir execução
+                        if exit_side == "sell":
+                            order_price = current_price * 0.995
+                        else:
+                            order_price = current_price * 1.005
+                        
+                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
+                        emergency_closed = True
+                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
+                    except Exception as e:
+                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por ROI - {e}", level="WARN")
                     
             except Exception as e:
                 _log_global("FAST_SAFETY_V4", f"Erro no safety check {asset.name}: {type(e).__name__}: {e}", level="WARN")
+        
+        # Log resumo das posições abertas
+        if open_positions:
+            _log_global("FAST_SAFETY_V4", f"Posições monitoradas: {' | '.join(open_positions)}", level="INFO")
+        else:
+            _log_global("FAST_SAFETY_V4", "Nenhuma posição aberta para monitorar", level="DEBUG")
 
     def executar_estrategia(
         df_in: pd.DataFrame,
         dex_in,
-        trade_logger_in: TradeLogger | None,
+        trade_logger_in: Optional[TradeLogger],
         usd_to_spend: float = 1,
         loop: bool = True,
         sleep_seconds: int = 60,

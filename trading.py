@@ -3977,6 +3977,8 @@ if __name__ == "__main__":
 
     def fast_safety_check(dex_in, asset_state: Dict[str, Dict[str, Any]]) -> None:
         """Executa verificações rápidas de segurança (PnL, ROI, guard_close_all) para todos os ativos."""
+        open_positions = []
+        
         for asset in ASSET_SETUPS:
             state = asset_state.get(asset.name)
             if state is None:
@@ -3985,11 +3987,39 @@ if __name__ == "__main__":
             strategy: EMAGradientStrategy = state["strategy"]
             
             try:
-                # Busca preço atual rápido (sem rebuild do DF)
-                ticker = dex_in.fetch_ticker(asset.hl_symbol)
-                current_px = float(ticker.get("last", 0))
-                if current_px <= 0:
+                # Verificar se há posição aberta
+                positions = dex_in.fetch_positions([asset.hl_symbol])
+                if not positions or float(positions[0].get("contracts", 0)) == 0:
                     continue
+                
+                pos = positions[0]
+                current_px = float(pos.get("markPrice", 0) or 0)
+                if current_px <= 0:
+                    # Fallback para ticker
+                    ticker = dex_in.fetch_ticker(asset.hl_symbol)
+                    current_px = float(ticker.get("last", 0))
+                    if current_px <= 0:
+                        continue
+                
+                # Coletar informações da posição
+                side = pos.get("side") or pos.get("positionSide", "")
+                contracts = float(pos.get("contracts", 0))
+                unrealized_pnl = float(pos.get("unrealizedPnl", 0))
+                roi_value = pos.get("returnOnEquity") or pos.get("returnOnInvestment") or pos.get("roi")
+                roi_pct = float(roi_value) if roi_value is not None else 0.0
+                
+                # Adicionar à lista de posições abertas
+                status = "OK"
+                if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
+                    status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.2f}"
+                elif roi_pct <= ROI_HARD_STOP:
+                    status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}%"
+                elif unrealized_pnl < -0.01:
+                    status = f"📉 PnL: ${unrealized_pnl:.2f} ROI: {roi_pct:.1f}%"
+                elif unrealized_pnl > 0.01:
+                    status = f"📈 PnL: +${unrealized_pnl:.2f} ROI: +{roi_pct:.1f}%"
+                
+                open_positions.append(f"{asset.name} {side.upper()}: {status}")
                     
                 # Executa guard_close_all (todas as verificações de segurança críticas)
                 closed = guard_close_all(dex_in, asset.hl_symbol, current_px)
@@ -3998,9 +4028,17 @@ if __name__ == "__main__":
                     
             except Exception as e:
                 _log_global("FAST_SAFETY", f"Erro no safety check {asset.name}: {type(e).__name__}: {e}", level="WARN")
+        
+        # Log resumo das posições abertas
+        if open_positions:
+            _log_global("FAST_SAFETY", f"Posições monitoradas: {' | '.join(open_positions)}", level="INFO")
+        else:
+            _log_global("FAST_SAFETY", "Nenhuma posição aberta para monitorar", level="DEBUG")
 
     def trailing_stop_check(dex_in, asset_state: Dict[str, Dict[str, Any]]) -> None:
         """Executa verificações e ajustes de trailing stop para todos os ativos."""
+        active_positions = []
+        
         for asset in ASSET_SETUPS:
             state = asset_state.get(asset.name)
             if state is None:
@@ -4015,6 +4053,37 @@ if __name__ == "__main__":
                     continue
 
                 pos = positions[0]
+                side = pos.get("side") or pos.get("positionSide", "")
+                contracts = float(pos.get("contracts", 0))
+                unrealized_pnl = float(pos.get("unrealizedPnl", 0))
+                roi_value = pos.get("returnOnEquity") or pos.get("returnOnInvestment") or pos.get("roi")
+                roi_pct = float(roi_value) if roi_value is not None else 0.0
+                
+                # Verificar se trailing stop está ativo consultando as ordens
+                trailing_active = False
+                trailing_price = None
+                try:
+                    orders = dex_in.fetch_open_orders(asset.hl_symbol)
+                    for order in orders:
+                        if order.get("type") in ["limit", "stop", "stop_limit"] and order.get("reduceOnly"):
+                            trailing_active = True
+                            trailing_price = float(order.get("stopPrice") or order.get("triggerPrice") or order.get("price", 0))
+                            break
+                except Exception:
+                    pass
+                
+                # Status do trailing stop
+                if trailing_active and trailing_price:
+                    distance_pct = abs((trailing_price - float(pos.get("markPrice", 0))) / float(pos.get("markPrice", 1))) * 100
+                    trailing_status = f"🎯 TS@${trailing_price:.4f} (-{distance_pct:.1f}%)"
+                elif roi_pct >= 5.0:  # ROI suficiente para trailing
+                    trailing_status = "⚠️ TS não criado"
+                else:
+                    trailing_status = "⏳ TS pendente (ROI<5%)"
+                
+                # Coletar info da posição
+                position_info = f"{asset.name} {side.upper()}: ROI {roi_pct:+.1f}% | {trailing_status}"
+                active_positions.append(position_info)
                 
                 # Executar verificação de proteções da posição (inclui trailing stop)
                 # Usar DataFrame dummy para compatibilidade
@@ -4025,6 +4094,12 @@ if __name__ == "__main__":
                 
             except Exception as e:
                 _log_global("TRAILING_CHECK", f"Erro no trailing check {asset.name}: {type(e).__name__}: {e}", level="WARN")
+        
+        # Log resumo dos trailing stops
+        if active_positions:
+            _log_global("TRAILING_CHECK", f"Trailing Stops: {' | '.join(active_positions)}", level="INFO")
+        else:
+            _log_global("TRAILING_CHECK", "Nenhuma posição para trailing stop", level="DEBUG")
 
     def executar_estrategia(
         df_in: pd.DataFrame,
