@@ -3381,6 +3381,116 @@ def ensure_tpsl_for_position(dex, symbol, *, retries: int = 2, price_tol_pct: fl
 
 # ===== FIM SAFETY UTILS =====
 
+def _approx_equal(a: float, b: float, tol_abs: float = None, tol_pct: float = 0.001) -> bool:
+    if a is None or b is None:
+        return False
+    ref = max(abs(a), abs(b), 1e-12)
+    bound = max((tol_abs or 0.0), ref * tol_pct)
+    return abs(a - b) <= bound
+
+
+def _get_current_contracts(dex, symbol, *, vault=None) -> float:
+    try:
+        if vault:
+            poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
+        else:
+            poss = dex.fetch_positions([symbol]) or []
+        for p in poss:
+            contracts = p.get("contracts") or p.get("amount") or 0
+            if contracts and float(contracts) > 0:
+                return float(contracts)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount):
+    contracts_now = _get_current_contracts(dex, symbol)
+    qty = contracts_now if contracts_now > 0 else float(amount)
+
+    qty_target, lev, _, _ = _get_pos_size_and_leverage(dex, symbol)
+    leverage = lev if lev else 1.0
+    qty_for_calc = qty_target if qty_target > 0 else qty
+
+    try:
+        ticker = dex.fetch_ticker(symbol) or {}
+        current = float(ticker.get("last") or ticker.get("info", {}).get("markPx") or entry_px)
+    except Exception:
+        current = entry_px
+
+    targets = compute_tp_sl_leveraged(entry_px, side, leverage, qty_for_calc, current_px=current)
+    trail = targets.get("trail")
+    sl = float(targets["sl"])
+    exit_side = "sell" if side.lower() in ("long", "buy") else "buy"
+
+    try:
+        open_orders = dex.fetch_open_orders(symbol) or []
+    except Exception:
+        open_orders = []
+
+    has_stop = False
+    best_trail_price: Optional[float] = None
+    params_base = {"reduceOnly": True, "timeInForce": "GTC", "trigger": "mark"}
+
+    for o in open_orders:
+        try:
+            o_side = (o.get("side") or "").lower()
+            if o_side != exit_side:
+                continue
+            info = o.get("info") or {}
+            ro_flag = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
+            if not ro_flag:
+                continue
+            trig = (
+                o.get("triggerPrice")
+                or info.get("triggerPrice")
+                or info.get("stopLossPrice")
+                or info.get("stopPrice")
+            )
+            if trig is None:
+                continue
+            trig = float(trig)
+            if _approx_equal(trig, sl):
+                has_stop = True
+                continue
+            if trail is not None:
+                if best_trail_price is None:
+                    best_trail_price = trig
+                else:
+                    if exit_side == "sell" and trig > best_trail_price:
+                        best_trail_price = trig
+                    if exit_side == "buy" and trig < best_trail_price:
+                        best_trail_price = trig
+        except Exception:
+            continue
+
+    results = {"trail": trail, "sl": sl, "created_stop": None, "created_trailing": None, "qty_used": qty}
+
+    if not has_stop and qty > 0:
+        stop_params = dict(params_base)
+        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
+        try:
+            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
+        except Exception:
+            stop_params_fb = dict(params_base)
+            stop_params_fb.update({"triggerPrice": sl})
+            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
+
+    if trail is not None and qty > 0 and best_trail_price is None:
+        trail_params = dict(params_base)
+        trail_params.update({"triggerPrice": trail, "stopLossPrice": trail})
+        try:
+            results["created_trailing"] = dex.create_order(symbol, "market", exit_side, qty, None, trail_params)
+        except Exception:
+            trail_params_fb = dict(params_base)
+            trail_params_fb.update({"triggerPrice": trail})
+            try:
+                results["created_trailing"] = dex.create_order(symbol, "market", exit_side, qty, None, trail_params_fb)
+            except Exception:
+                results["created_trailing"] = None
+
+    return results
+
 if __name__ == "__main__":
     # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
     EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
@@ -3484,209 +3594,3 @@ if __name__ == "__main__":
 
     base_df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     executar_estrategia(base_df, dex, None)
-
-
-def _approx_equal(a: float, b: float, tol_abs: float = None, tol_pct: float = 0.001) -> bool:
-    if a is None or b is None:
-        return False
-    ref = max(abs(a), abs(b), 1e-12)
-    bound = max((tol_abs or 0.0), ref * tol_pct)
-    return abs(a - b) <= bound
-
-def _get_current_contracts(dex, symbol, *, vault=None) -> float:
-    try:
-        if vault:
-            poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
-        else:
-            poss = dex.fetch_positions([symbol]) or []
-        for p in poss:
-            contracts = p.get("contracts") or p.get("amount") or 0
-            if contracts and float(contracts) > 0:
-                return float(contracts)
-    except Exception:
-        pass
-    return 0.0
-
-def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount):
-    contracts_now = _get_current_contracts(dex, symbol)
-    qty = contracts_now if contracts_now > 0 else float(amount)
-
-    qty_target, lev, _, _ = _get_pos_size_and_leverage(dex, symbol)
-    leverage = lev if lev else 1.0
-    qty_for_calc = qty_target if qty_target > 0 else qty
-
-    try:
-        ticker = dex.fetch_ticker(symbol) or {}
-        current = float(ticker.get("last") or ticker.get("info", {}).get("markPx") or entry_px)
-    except Exception:
-        current = entry_px
-
-    targets = compute_tp_sl_leveraged(entry_px, side, leverage, qty_for_calc, current_px=current)
-    trail = targets.get("trail")
-    sl = float(targets["sl"])
-    exit_side = "sell" if side.lower() in ("long", "buy") else "buy"
-
-    try:
-        open_orders = dex.fetch_open_orders(symbol) or []
-    except Exception:
-        open_orders = []
-
-    has_stop = False
-    best_trail_price: Optional[float] = None
-    params_base = {"reduceOnly": True, "timeInForce": "GTC", "trigger": "mark"}
-
-    for o in open_orders:
-        try:
-            o_side = (o.get("side") or "").lower()
-            if o_side != exit_side:
-                continue
-            info = o.get("info") or {}
-            ro_flag = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
-            if not ro_flag:
-                continue
-            trig = (
-                o.get("triggerPrice")
-                or info.get("triggerPrice")
-                or info.get("stopLossPrice")
-                or info.get("stopPrice")
-            )
-            if trig is None:
-                continue
-            trig = float(trig)
-            if _approx_equal(trig, sl):
-                has_stop = True
-                continue
-            if trail is not None:
-                if best_trail_price is None:
-                    best_trail_price = trig
-                else:
-                    if exit_side == "sell" and trig > best_trail_price:
-                        best_trail_price = trig
-                    if exit_side == "buy" and trig < best_trail_price:
-                        best_trail_price = trig
-        except Exception:
-            continue
-
-    results = {"trail": trail, "sl": sl, "created_stop": None, "created_trailing": None, "qty_used": qty}
-
-    if not has_stop and qty > 0:
-        stop_params = dict(params_base)
-        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
-        try:
-            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
-        except Exception:
-            stop_params_fb = dict(params_base)
-            stop_params_fb.update({"triggerPrice": sl})
-            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
-
-    if trail is not None and qty > 0 and best_trail_price is None:
-        trail_params = dict(params_base)
-        trail_params.update({"triggerPrice": trail, "stopLossPrice": trail})
-        try:
-            results["created_trailing"] = dex.create_order(symbol, "market", exit_side, qty, None, trail_params)
-        except Exception:
-            trail_params_fb = dict(params_base)
-            trail_params_fb.update({"triggerPrice": trail})
-            try:
-                results["created_trailing"] = dex.create_order(symbol, "market", exit_side, qty, None, trail_params_fb)
-            except Exception:
-                results["created_trailing"] = None
-
-    return results
-
-
-
-def _get_position_for_vault(dex, symbol, vault=None):
-    try:
-        if vault:
-            poss = dex.fetch_positions([symbol], {"vaultAddress": vault}) or []
-        else:
-            poss = dex.fetch_positions([symbol]) or []
-        for p in poss:
-            qty = float(p.get("contracts") or 0.0)
-            side = (p.get("side") or "").lower()
-            if qty > 0 and side in ("long", "short"):
-                return p
-    except Exception:
-        pass
-    return None
-
-def _get_pos_size_and_leverage(dex, symbol, *, vault=None):
-    p = _get_position_for_vault(dex, symbol, vault)
-    if not p:
-        return 0.0, 1.0, None, None
-    qty = float(p.get("contracts") or 0.0)
-    entry = float(p.get("entryPrice") or 0.0) or None
-    side = p.get("side") or None
-    lev = p.get("leverage")
-    if isinstance(lev, dict):
-        lev = lev.get("value")
-    if lev is None:
-        info = p.get("info") or {}
-        lev = ((info.get("position") or {}).get("leverage") or {}).get("value")
-    if lev is None:
-        lev = 1.0
-    return float(qty), float(lev), entry, side
-
-def _approx(a, b, tol=0.001):
-    try:
-        a, b = float(a), float(b)
-        return abs(a - b) <= max(1e-12, tol * max(abs(a), abs(b), 1.0))
-    except Exception:
-        return False
-
-
-
-def ensure_tpsl_for_position(dex, symbol, *, vault=None):
-    """
-    Garante stop-loss e trailing-stop reduceOnly para a posição atual da subconta.
-    """
-    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
-    if qty <= 0 or not entry or not side:
-        return {"created_stop": None, "created_trailing": None, "qty": qty, "lev": lev, "entry": entry}
-
-    result = _place_tp_sl_orders_idempotent(
-        dex,
-        symbol,
-        side,
-        entry,
-        qty,
-    )
-
-    return {
-        "trail": result.get("trail"),
-        "sl": result.get("sl"),
-        "created_stop": result.get("created_stop"),
-        "created_trailing": result.get("created_trailing"),
-        "qty": qty,
-        "lev": lev,
-        "entry": entry,
-        "side": side,
-    }
-
-
-
-def safety_close_if_loss_exceeds_5c(dex, symbol, current_px: float, *, vault=None) -> bool:
-    """
-    Se a perda não realizada > $0.05, fecha a posição imediatamente (market reduceOnly).
-    """
-    qty, _, entry, side = _get_pos_size_and_leverage(dex, symbol, vault=vault)
-    if qty <= 0 or not entry or not side:
-        return False
-
-    s = side.lower()
-    if s in ("long", "buy"):
-        loss = max(0.0, (entry - float(current_px)) * qty)
-        exit_side = "sell"
-    else:
-        loss = max(0.0, (float(current_px) - entry) * qty)
-        exit_side = "buy"
-
-    if loss > 0.05:
-        try:
-            params = {"reduceOnly": True}
-            dex.create_order(symbol, "market", exit_side, qty, None, params)
-            return True
-        except Exception:
-            return False
-    return False
