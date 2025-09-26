@@ -1367,17 +1367,28 @@ class EMAGradientStrategy:
         # Trailing stop só ativo se for MELHOR que stop loss normal (-5%)
         # Ex: ROI alavancado 15% → trailing em 5% (melhor que -5%) ✓
         # Ex: ROI alavancado 3% → trailing em -7% (pior que -5%) ✗
-        target_roi = levered_roi - margin
-        
-        # Para LONG: trailing deve ser maior que stop normal (-5%)
-        # Para SHORT: trailing deve ser menor que stop normal (+5%)
+        # Trailing stop só deve ser ativado se resultar em proteção MELHOR que stop normal
+        # Para LONG: trailing deve resultar em ROI maior que -5%
+        # Para SHORT: trailing deve resultar em ROI menor que +5%
         stop_loss_roi = -0.05  # Stop loss normal em -5%
+        target_roi = levered_roi - margin  # ROI onde o trailing stop seria colocado
         
+        # Verificar se vale a pena usar trailing stop
         if norm_side == "buy":
-            if target_roi <= stop_loss_roi:  # Se trailing for pior que -5%, não usar
+            # Para LONG: só usar trailing se for melhor que -5% (ou seja, maior que -5%)
+            if target_roi <= stop_loss_roi:  
                 if self.debug:
                     self._log(
                         f"DEBUG trailing DESATIVADO LONG: target_ROI={target_roi:.4f} <= {stop_loss_roi:.2f} (usar stop normal)", 
+                        level="DEBUG"
+                    )
+                return None
+                
+            # Adicionar requisito mínimo: ROI alavancado deve ser pelo menos 8% para ativar trailing
+            if levered_roi < 0.08:
+                if self.debug:
+                    self._log(
+                        f"DEBUG trailing DESATIVADO LONG: levered_ROI={levered_roi:.4f} < 0.08 (ROI insuficiente)", 
                         level="DEBUG"
                     )
                 return None
@@ -1388,6 +1399,15 @@ class EMAGradientStrategy:
                 if self.debug:
                     self._log(
                         f"DEBUG trailing DESATIVADO SHORT: target_ROI={target_roi:.4f} >= {stop_normal_short:.2f} (usar stop normal)", 
+                        level="DEBUG"
+                    )
+                return None
+                
+            # Adicionar requisito mínimo: ROI alavancado deve ser pelo menos 8% para ativar trailing
+            if levered_roi < 0.08:
+                if self.debug:
+                    self._log(
+                        f"DEBUG trailing DESATIVADO SHORT: levered_ROI={levered_roi:.4f} < 0.08 (ROI insuficiente)", 
                         level="DEBUG"
                     )
                 return None
@@ -4005,8 +4025,15 @@ if __name__ == "__main__":
                 side = pos.get("side") or pos.get("positionSide", "")
                 contracts = float(pos.get("contracts", 0))
                 unrealized_pnl = float(pos.get("unrealizedPnl", 0))
-                roi_value = pos.get("returnOnEquity") or pos.get("returnOnInvestment") or pos.get("roi")
-                roi_pct = float(roi_value) if roi_value is not None else 0.0
+                position_value = abs(float(pos.get("positionValue", 0)))
+                leverage = float(pos.get("leverage", 1)) or 1.0  # Default 1x se não encontrar
+                
+                # Calcular ROI com alavancagem: (PnL / (position_value / leverage)) * 100
+                # O capital real investido = position_value / leverage
+                roi_pct = 0.0
+                if position_value > 0 and leverage > 0:
+                    capital_real = position_value / leverage
+                    roi_pct = (unrealized_pnl / capital_real) * 100
                 
                 # Adicionar à lista de posições abertas
                 status = "OK"
@@ -4056,8 +4083,50 @@ if __name__ == "__main__":
                 side = pos.get("side") or pos.get("positionSide", "")
                 contracts = float(pos.get("contracts", 0))
                 unrealized_pnl = float(pos.get("unrealizedPnl", 0))
-                roi_value = pos.get("returnOnEquity") or pos.get("returnOnInvestment") or pos.get("roi")
-                roi_pct = float(roi_value) if roi_value is not None else 0.0
+                
+                # Tentar múltiplos campos para position_value
+                position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
+                
+                # Buscar mark_price de múltiplas fontes
+                mark_price = pos.get("markPrice") or pos.get("price") or pos.get("avgPrice")
+                
+                # Se mark_price for None, buscar preço atual via strategy._preco_atual()
+                if mark_price is None:
+                    try:
+                        current_price = strategy._preco_atual()
+                        if current_price and current_price > 0:
+                            mark_price = current_price
+                    except Exception as e:
+                        _log_global("TRAILING_CHECK", f"Erro ao buscar preço atual para {asset.name}: {e}", level="WARN")
+                
+                if position_value is None:
+                    # Calcular position_value manualmente: contracts × markPrice
+                    if mark_price and contracts:
+                        position_value = abs(float(contracts) * float(mark_price))
+                    else:
+                        position_value = 0
+                else:
+                    position_value = abs(float(position_value))
+                
+                leverage = float(pos.get("leverage", 1)) or 1.0  # Default 1x se não encontrar
+                
+                # DEBUG: Mostrar valores brutos da API e calculados
+                _log_global("TRAILING_CHECK", 
+                    f"DEBUG {asset.name}: unrealized_pnl_raw={pos.get('unrealizedPnl')} "
+                    f"position_value_raw={pos.get('positionValue')} mark_price_raw={pos.get('markPrice')} "
+                    f"mark_price_final={mark_price} calculated_pos_value={position_value:.4f} leverage_raw={pos.get('leverage')}", 
+                    level="DEBUG")
+                
+                # Calcular ROI com alavancagem: (PnL / (position_value / leverage)) * 100
+                # O capital real investido = position_value / leverage
+                roi_pct = 0.0
+                if position_value > 0 and leverage > 0:
+                    capital_real = position_value / leverage
+                    roi_pct = (unrealized_pnl / capital_real) * 100
+                    _log_global("TRAILING_CHECK",
+                        f"DEBUG {asset.name}: capital_real=${capital_real:.4f} "
+                        f"pnl=${unrealized_pnl:.4f} roi_calc={roi_pct:.4f}%", 
+                        level="DEBUG")
                 
                 # Verificar se trailing stop está ativo consultando as ordens
                 trailing_active = False
@@ -4074,8 +4143,12 @@ if __name__ == "__main__":
                 
                 # Status do trailing stop
                 if trailing_active and trailing_price:
-                    distance_pct = abs((trailing_price - float(pos.get("markPrice", 0))) / float(pos.get("markPrice", 1))) * 100
-                    trailing_status = f"🎯 TS@${trailing_price:.4f} (-{distance_pct:.1f}%)"
+                    # Usar o mark_price que já foi determinado acima
+                    if mark_price is not None and float(mark_price) > 0:
+                        distance_pct = abs((trailing_price - float(mark_price)) / float(mark_price)) * 100
+                        trailing_status = f"🎯 TS@${trailing_price:.4f} (-{distance_pct:.1f}%)"
+                    else:
+                        trailing_status = f"🎯 TS@${trailing_price:.4f} (sem preço)"
                 elif roi_pct >= 5.0:  # ROI suficiente para trailing
                     trailing_status = "⚠️ TS não criado"
                 else:
@@ -4086,11 +4159,20 @@ if __name__ == "__main__":
                 active_positions.append(position_info)
                 
                 # Executar verificação de proteções da posição (inclui trailing stop)
-                # Usar DataFrame dummy para compatibilidade
-                dummy_df = pd.DataFrame({"close": [0]})  # Valor não importa para ensure_position_protections
-                
-                # Chamar a verificação de proteções da strategy (inclui trailing stop)
-                strategy._ensure_position_protections(pos, df_for_log=dummy_df)
+                # Usar o markPrice atual que foi determinado acima
+                dummy_df = pd.DataFrame({"close": [0]})  # Valor padrão
+                if mark_price and float(mark_price) > 0:
+                    # Sobrescrever temporariamente o método _preco_atual com markPrice
+                    original_preco_atual = strategy._preco_atual
+                    strategy._preco_atual = lambda: float(mark_price)
+                    try:
+                        strategy._ensure_position_protections(pos, df_for_log=dummy_df)
+                    finally:
+                        # Restaurar método original
+                        strategy._preco_atual = original_preco_atual
+                else:
+                    # Usar método original se não tiver markPrice válido
+                    strategy._ensure_position_protections(pos, df_for_log=dummy_df)
                 
             except Exception as e:
                 _log_global("TRAILING_CHECK", f"Erro no trailing check {asset.name}: {type(e).__name__}: {e}", level="WARN")
