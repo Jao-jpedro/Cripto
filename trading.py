@@ -3975,6 +3975,57 @@ if __name__ == "__main__":
     # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
     EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
+    def fast_safety_check(dex_in, asset_state: Dict[str, Dict[str, Any]]) -> None:
+        """Executa verificações rápidas de segurança (PnL, ROI, guard_close_all) para todos os ativos."""
+        for asset in ASSET_SETUPS:
+            state = asset_state.get(asset.name)
+            if state is None:
+                continue  # Asset ainda não foi inicializado
+                
+            strategy: EMAGradientStrategy = state["strategy"]
+            
+            try:
+                # Busca preço atual rápido (sem rebuild do DF)
+                ticker = dex_in.fetch_ticker(asset.hl_symbol)
+                current_px = float(ticker.get("last", 0))
+                if current_px <= 0:
+                    continue
+                    
+                # Executa guard_close_all (todas as verificações de segurança críticas)
+                closed = guard_close_all(dex_in, asset.hl_symbol, current_px)
+                if closed:
+                    _log_global("FAST_SAFETY", f"{asset.name}: Posição fechada por safety check", level="WARN")
+                    
+            except Exception as e:
+                _log_global("FAST_SAFETY", f"Erro no safety check {asset.name}: {type(e).__name__}: {e}", level="WARN")
+
+    def trailing_stop_check(dex_in, asset_state: Dict[str, Dict[str, Any]]) -> None:
+        """Executa verificações e ajustes de trailing stop para todos os ativos."""
+        for asset in ASSET_SETUPS:
+            state = asset_state.get(asset.name)
+            if state is None:
+                continue  # Asset ainda não foi inicializado
+                
+            strategy: EMAGradientStrategy = state["strategy"]
+            
+            try:
+                # Verificar se há posição aberta
+                positions = dex_in.fetch_positions([asset.hl_symbol])
+                if not positions or float(positions[0].get("contracts", 0)) == 0:
+                    continue
+
+                pos = positions[0]
+                
+                # Executar verificação de proteções da posição (inclui trailing stop)
+                # Usar DataFrame dummy para compatibilidade
+                dummy_df = pd.DataFrame({"close": [0]})  # Valor não importa para ensure_position_protections
+                
+                # Chamar a verificação de proteções da strategy (inclui trailing stop)
+                strategy._ensure_position_protections(pos, df_for_log=dummy_df)
+                
+            except Exception as e:
+                _log_global("TRAILING_CHECK", f"Erro no trailing check {asset.name}: {type(e).__name__}: {e}", level="WARN")
+
     def executar_estrategia(
         df_in: pd.DataFrame,
         dex_in,
@@ -3995,82 +4046,124 @@ if __name__ == "__main__":
         asset_state: Dict[str, Dict[str, Any]] = {}
         default_cols = df_in.columns if isinstance(df_in, pd.DataFrame) else pd.Index([])
 
+        # Configuração dos loops
+        fast_sleep = 5  # Fast safety loop: 5 segundos
+        trailing_sleep = 15  # Trailing stop check: 15 segundos
+        slow_sleep = sleep_seconds  # Full analysis loop: 60 segundos (ou env var)
+        try:
+            env_sleep = os.getenv("SLEEP_SECONDS")
+            if env_sleep:
+                slow_sleep = int(env_sleep)
+        except Exception:
+            pass
+        
+        # Contadores
         iter_count = 0
+        last_full_analysis = 0
+        last_trailing_check = 0
+        
+        _log_global("ENGINE", f"Iniciando triple-loop: FAST_SAFETY={fast_sleep}s TRAILING={trailing_sleep}s FULL_ANALYSIS={slow_sleep}s")
+
         while True:
             iter_count += 1
+            current_time = _time.time()
+            
             try:
                 live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-                _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)}")
+                # Heartbeat menos frequente
+                if iter_count % 6 == 1:  # A cada 30s no fast loop
+                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} triple_loop=True")
             except Exception:
                 pass
 
-            for asset in ASSET_SETUPS:
-                _log_global("ASSET", f"Processando {asset.name}")
-                try:
-                    df_asset = build_df(asset.data_symbol, INTERVAL, debug=True)
-                except Exception as e:
-                    _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
-                    continue
+            # SEMPRE executa fast safety check
+            fast_safety_check(dex_in, asset_state)
 
-                try:
-                    df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
-                except Exception as e:
-                    _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
-                    df_asset_hour = pd.DataFrame()
+            # Decide se executa trailing stop check (a cada ~15s)
+            time_since_trailing = current_time - last_trailing_check
+            should_run_trailing = (time_since_trailing >= trailing_sleep) or (iter_count == 1)
 
-                if not isinstance(df_asset, pd.DataFrame) or df_asset.empty:
-                    _log_global("ASSET", f"DataFrame vazio para {asset.name}; pulando.", level="WARN")
-                    continue
+            if should_run_trailing:
+                _log_global("ENGINE", f"Executando trailing check (último há {time_since_trailing:.1f}s)", level="DEBUG")
+                last_trailing_check = current_time
+                trailing_stop_check(dex_in, asset_state)
 
-                state = asset_state.get(asset.name)
-                if state is None:
-                    cfg = GradientConfig()
-                    cfg.LEVERAGE = asset.leverage
-                    cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
-                    cfg.TRAILING_ROI_MARGIN = asset.trailing_margin
-                    safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
-                    csv_path = f"trade_log_{safe_suffix}.csv"
-                    xlsx_path = f"trade_log_{safe_suffix}.xlsx"
-                    cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
-                    logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
-                    strategy = EMAGradientStrategy(
-                        dex=dex_in,
-                        symbol=asset.hl_symbol,
-                        cfg=cfg,
-                        logger=logger,
-                        debug=True,
-                    )
-                    asset_state[asset.name] = {"strategy": strategy, "logger": logger}
-                strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
+            # Decide se executa análise completa (a cada ~60s)
+            time_since_analysis = current_time - last_full_analysis
+            should_run_full_analysis = (time_since_analysis >= slow_sleep) or (iter_count == 1)
 
-                usd_asset = usd_to_spend
-                try:
-                    global_env = os.getenv("USD_PER_TRADE")
-                    if global_env:
-                        usd_asset = float(global_env)
-                    if asset.usd_env:
-                        specific_env = os.getenv(asset.usd_env)
-                        if specific_env:
-                            usd_asset = float(specific_env)
-                except Exception:
-                    pass
+            if should_run_full_analysis:
+                _log_global("ENGINE", f"Executando análise completa (última há {time_since_analysis:.1f}s)")
+                last_full_analysis = current_time
 
-                try:
-                    strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
-                except Exception as e:
-                    _log_global("ASSET", f"Erro executando {asset.name}: {type(e).__name__}: {e}", level="ERROR")
-                _time.sleep(0.25)
+                # FULL ANALYSIS LOOP - processar todos os assets
+                for asset in ASSET_SETUPS:
+                    _log_global("ASSET", f"Análise completa: {asset.name}")
+                    try:
+                        df_asset = build_df(asset.data_symbol, INTERVAL, debug=True)
+                    except Exception as e:
+                        _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
+                        continue
+
+                    try:
+                        df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
+                    except Exception as e:
+                        _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
+                        df_asset_hour = pd.DataFrame()
+
+                    if not isinstance(df_asset, pd.DataFrame) or df_asset.empty:
+                        _log_global("ASSET", f"DataFrame vazio para {asset.name}; pulando.", level="WARN")
+                        continue
+
+                    # Inicialização do asset (se necessário)
+                    state = asset_state.get(asset.name)
+                    if state is None:
+                        cfg = GradientConfig()
+                        cfg.LEVERAGE = asset.leverage
+                        cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
+                        cfg.TRAILING_ROI_MARGIN = asset.trailing_margin
+                        safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
+                        csv_path = f"trade_log_{safe_suffix}.csv"
+                        xlsx_path = f"trade_log_{safe_suffix}.xlsx"
+                        cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
+                        logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
+                        strategy = EMAGradientStrategy(
+                            dex=dex_in,
+                            symbol=asset.hl_symbol,
+                            cfg=cfg,
+                            logger=logger,
+                            debug=True,
+                        )
+                        asset_state[asset.name] = {"strategy": strategy, "logger": logger}
+                    
+                    strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
+
+                    # USD por trade
+                    usd_asset = usd_to_spend
+                    try:
+                        global_env = os.getenv("USD_PER_TRADE")
+                        if global_env:
+                            usd_asset = float(global_env)
+                        if asset.usd_env:
+                            specific_env = os.getenv(asset.usd_env)
+                            if specific_env:
+                                usd_asset = float(specific_env)
+                    except Exception:
+                        pass
+
+                    # Executar análise técnica completa
+                    try:
+                        strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
+                    except Exception as e:
+                        _log_global("ASSET", f"Erro na análise completa {asset.name}: {type(e).__name__}: {e}", level="ERROR")
+                    _time.sleep(0.25)
 
             if not loop:
                 break
 
-            try:
-                env_sleep = os.getenv("SLEEP_SECONDS")
-                if env_sleep:
-                    sleep_seconds = int(env_sleep)
-            except Exception:
-                pass
-            _time.sleep(max(1, int(sleep_seconds)))
+            # Sleep do fast loop
+            _time.sleep(fast_sleep)
 
+    # Execução automática apenas quando executado diretamente
     base_df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
     executar_estrategia(base_df, dex, None)
