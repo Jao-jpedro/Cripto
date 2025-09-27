@@ -4087,17 +4087,17 @@ if __name__ == "__main__":
                 # Tentar múltiplos campos para position_value
                 position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
                 
-                # Buscar mark_price de múltiplas fontes
-                mark_price = pos.get("markPrice") or pos.get("price") or pos.get("avgPrice")
-                
-                # Se mark_price for None, buscar preço atual via strategy._preco_atual()
-                if mark_price is None:
-                    try:
-                        current_price = strategy._preco_atual()
-                        if current_price and current_price > 0:
-                            mark_price = current_price
-                    except Exception as e:
-                        _log_global("TRAILING_CHECK", f"Erro ao buscar preço atual para {asset.name}: {e}", level="WARN")
+                # SEMPRE buscar preço atual em tempo real via strategy._preco_atual() (prioridade)
+                mark_price = None
+                try:
+                    current_price = strategy._preco_atual()
+                    if current_price and current_price > 0:
+                        mark_price = current_price
+                        _log_global("TRAILING_CHECK", f"DEBUG {asset.name}: preço atualizado via _preco_atual = {current_price}", level="DEBUG")
+                except Exception as e:
+                    _log_global("TRAILING_CHECK", f"Erro ao buscar preço atual para {asset.name}: {e}", level="WARN")
+                    # Fallback para campos da API se _preco_atual() falhar
+                    mark_price = pos.get("markPrice") or pos.get("price") or pos.get("avgPrice")
                 
                 if position_value is None:
                     # Calcular position_value manualmente: contracts × markPrice
@@ -4114,7 +4114,7 @@ if __name__ == "__main__":
                 _log_global("TRAILING_CHECK", 
                     f"DEBUG {asset.name}: unrealized_pnl_raw={pos.get('unrealizedPnl')} "
                     f"position_value_raw={pos.get('positionValue')} mark_price_raw={pos.get('markPrice')} "
-                    f"mark_price_final={mark_price} calculated_pos_value={position_value:.4f} leverage_raw={pos.get('leverage')}", 
+                    f"mark_price_LIVE={mark_price} calculated_pos_value={position_value:.4f} leverage_raw={pos.get('leverage')}", 
                     level="DEBUG")
                 
                 # Calcular ROI com alavancagem: (PnL / (position_value / leverage)) * 100
