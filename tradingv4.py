@@ -8,10 +8,39 @@ LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de
 ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
 UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC (PRIORITÁRIO)
 
+# High Water Mark global para trailing stops verdadeiros
+# Formato: {symbol: roi_maximo_atingido}
+TRAILING_HIGH_WATER_MARK = {}
+
 
 def _log_global(section: str, message: str, level: str = "INFO") -> None:
     """Formato padrão para logs fora das classes."""
     print(f"[{level}] [{section}] {message}", flush=True)
+
+
+def _update_high_water_mark(symbol: str, current_roi: float) -> float:
+    """Atualiza e retorna o ROI máximo (High Water Mark) para trailing stops verdadeiros."""
+    global TRAILING_HIGH_WATER_MARK
+    
+    if symbol not in TRAILING_HIGH_WATER_MARK:
+        TRAILING_HIGH_WATER_MARK[symbol] = current_roi
+        return current_roi
+    
+    # Só atualiza se o ROI atual for maior que o máximo anterior
+    if current_roi > TRAILING_HIGH_WATER_MARK[symbol]:
+        TRAILING_HIGH_WATER_MARK[symbol] = current_roi
+        return current_roi
+    
+    # Retorna o máximo histórico (não deixa piorar)
+    return TRAILING_HIGH_WATER_MARK[symbol]
+
+
+def _clear_high_water_mark(symbol: str) -> None:
+    """Remove o High Water Mark quando uma posição é fechada."""
+    global TRAILING_HIGH_WATER_MARK
+    if symbol in TRAILING_HIGH_WATER_MARK:
+        del TRAILING_HIGH_WATER_MARK[symbol]
+        _log_global("TRAILING_HWM", f"{symbol}: High Water Mark resetado", level="DEBUG")
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
 import warnings as _warnings
@@ -873,18 +902,25 @@ class EMAGradientStrategy:
                     capital_real = position_value / leverage
                     current_roi_pct = (unrealized_pnl / capital_real) * 100
                     
+                    # *** TRAILING STOP VERDADEIRO: Usar High Water Mark ***
+                    trailing_roi_pct = _update_high_water_mark(self.symbol, current_roi_pct)
+                    
                     self._log(
                         f"DEBUG trailing: unrealized_pnl={unrealized_pnl:.4f} position_value={position_value:.4f} "
-                        f"leverage={leverage:.1f} capital_real=${capital_real:.4f} ROI={current_roi_pct:.2f}%", 
+                        f"leverage={leverage:.1f} capital_real=${capital_real:.4f} ROI={current_roi_pct:.2f}% "
+                        f"HWM={trailing_roi_pct:.2f}%", 
                         level="DEBUG"
                     )
+                    
+                    # Usar o ROI máximo (High Water Mark) para determinar o trailing stop
+                    current_roi_pct = trailing_roi_pct
             except Exception as e:
                 self._log(f"Erro ao calcular ROI atual: {e}", level="WARN")
         
         # Calcular stop loss dinâmico baseado no ROI
         base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         
-        # Trailing stop dinâmico granular:
+        # Trailing stop dinâmico granular (USANDO HIGH WATER MARK):
         # ROI < 2.5%: stop em -5%
         # ROI >= 2.5%: stop em -2.5%
         # ROI >= 5%: stop em 0% (breakeven)
@@ -2143,6 +2179,9 @@ class EMAGradientStrategy:
                 pass
             self._trail_max_gain_pct = None
 
+            # *** TRAILING STOP: Limpar High Water Mark ***
+            _clear_high_water_mark(self.symbol)
+
             # Notificação de fechamento (inclui tentativa de PnL/valor conta)
             try:
                 self._notify_trade(
@@ -2355,6 +2394,7 @@ class EMAGradientStrategy:
                             
                             self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
                             emergency_closed = True
+                            _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
                             self._log(f"Emergência acionada (vault): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
                             self._log(f"Erro ao fechar posição por PnL (vault): {e}", level="ERROR")
@@ -2395,6 +2435,7 @@ class EMAGradientStrategy:
                                 
                                 self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
                                 emergency_closed = True
+                                _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
                                 self._log(f"Emergência acionada (vault): ROI <= {ROI_HARD_STOP*100}%, posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
                             self._log(f"Erro ao fechar posição por ROI (vault): {e}", level="ERROR")
@@ -3357,6 +3398,7 @@ if __name__ == "__main__":
                         
                         dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
                         emergency_closed = True
+                        _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
                     except Exception as e:
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por PnL - {e}", level="WARN")
@@ -3382,6 +3424,7 @@ if __name__ == "__main__":
                         
                         dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
                         emergency_closed = True
+                        _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
                     except Exception as e:
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por ROI - {e}", level="WARN")

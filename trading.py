@@ -6,6 +6,35 @@ LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de
 ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
 UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC (PRIORITÁRIO)
 
+# High Water Mark global para trailing stops verdadeiros
+# Formato: {symbol: roi_maximo_atingido}
+TRAILING_HIGH_WATER_MARK = {}
+
+
+def _update_high_water_mark(symbol: str, current_roi: float) -> float:
+    """Atualiza e retorna o ROI máximo (High Water Mark) para trailing stops verdadeiros."""
+    global TRAILING_HIGH_WATER_MARK
+    
+    if symbol not in TRAILING_HIGH_WATER_MARK:
+        TRAILING_HIGH_WATER_MARK[symbol] = current_roi
+        return current_roi
+    
+    # Só atualiza se o ROI atual for maior que o máximo anterior
+    if current_roi > TRAILING_HIGH_WATER_MARK[symbol]:
+        TRAILING_HIGH_WATER_MARK[symbol] = current_roi
+        return current_roi
+    
+    # Retorna o máximo histórico (não deixa piorar)
+    return TRAILING_HIGH_WATER_MARK[symbol]
+
+
+def _clear_high_water_mark(symbol: str) -> None:
+    """Remove o High Water Mark quando uma posição é fechada."""
+    global TRAILING_HIGH_WATER_MARK
+    if symbol in TRAILING_HIGH_WATER_MARK:
+        del TRAILING_HIGH_WATER_MARK[symbol]
+        print(f"[DEBUG] [TRAILING_HWM] {symbol}: High Water Mark resetado", flush=True)
+
 
 def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: float) -> bool:
     """
@@ -1356,6 +1385,10 @@ class EMAGradientStrategy:
 
         levered_roi = roi * leverage
         
+        # *** TRAILING STOP VERDADEIRO: Usar High Water Mark ***
+        # Usar o ROI máximo histórico ao invés do ROI atual
+        trailing_levered_roi = _update_high_water_mark(f"trailing_{self.symbol}", levered_roi)
+        
         # Calcular ROI real via PnL se posição disponível
         real_roi_pct = None
         if position:
@@ -1379,26 +1412,22 @@ class EMAGradientStrategy:
             if real_roi_pct is not None:
                 self._log(
                     f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} ROI_approx={roi:.4f} "
-                    f"ROI_real={real_roi_pct:.4f}% levered_ROI={levered_roi:.4f} margin={margin:.4f}", 
+                    f"ROI_real={real_roi_pct:.4f}% levered_ROI={levered_roi:.4f} HWM={trailing_levered_roi:.4f} margin={margin:.4f}", 
                     level="DEBUG"
                 )
             else:
                 self._log(
                     f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} ROI={roi:.4f} "
-                    f"levered_ROI={levered_roi:.4f} margin={margin:.4f}", 
+                    f"levered_ROI={levered_roi:.4f} HWM={trailing_levered_roi:.4f} margin={margin:.4f}", 
                     level="DEBUG"
                 )
         
         # Trailing stop só ativo se for MELHOR que stop loss normal (-5%)
-        # Ex: ROI alavancado 15% → trailing em 5% (melhor que -5%) ✓
-        # Ex: ROI alavancado 3% → trailing em -7% (pior que -5%) ✗
-        # Trailing stop só deve ser ativado se resultar em proteção MELHOR que stop normal
-        # Para LONG: trailing deve resultar em ROI maior que -5%
-        # Para SHORT: trailing deve resultar em ROI menor que +5%
+        # *** USANDO HIGH WATER MARK - nunca piora! ***
         stop_loss_roi = -0.05  # Stop loss normal em -5%
-        target_roi = levered_roi - margin  # ROI onde o trailing stop seria colocado
+        target_roi = trailing_levered_roi - margin  # ROI baseado no MÁXIMO histórico
         
-        # Verificar se vale a pena usar trailing stop
+        # Verificar se vale a pena usar trailing stop (BASEADO NO HWM)
         if norm_side == "buy":
             # Para LONG: só usar trailing se for melhor que -5% (ou seja, maior que -5%)
             if target_roi <= stop_loss_roi:  
@@ -1409,11 +1438,11 @@ class EMAGradientStrategy:
                     )
                 return None
                 
-            # Adicionar requisito mínimo: ROI alavancado deve ser pelo menos 8% para ativar trailing
-            if levered_roi < 0.08:
+            # Adicionar requisito mínimo: ROI alavancado máximo deve ser pelo menos 8%
+            if trailing_levered_roi < 0.08:
                 if self.debug:
                     self._log(
-                        f"DEBUG trailing DESATIVADO LONG: levered_ROI={levered_roi:.4f} < 0.08 (ROI insuficiente)", 
+                        f"DEBUG trailing DESATIVADO LONG: HWM={trailing_levered_roi:.4f} < 0.08 (ROI insuficiente)", 
                         level="DEBUG"
                     )
                 return None
@@ -1428,11 +1457,11 @@ class EMAGradientStrategy:
                     )
                 return None
                 
-            # Adicionar requisito mínimo: ROI alavancado deve ser pelo menos 8% para ativar trailing
-            if levered_roi < 0.08:
+            # Adicionar requisito mínimo: ROI alavancado máximo deve ser pelo menos 8%
+            if trailing_levered_roi < 0.08:
                 if self.debug:
                     self._log(
-                        f"DEBUG trailing DESATIVADO SHORT: levered_ROI={levered_roi:.4f} < 0.08 (ROI insuficiente)", 
+                        f"DEBUG trailing DESATIVADO SHORT: HWM={trailing_levered_roi:.4f} < 0.08 (ROI insuficiente)", 
                         level="DEBUG"
                     )
                 return None
@@ -2679,6 +2708,9 @@ class EMAGradientStrategy:
             except Exception:
                 pass
 
+            # *** TRAILING STOP: Limpar High Water Mark ***
+            _clear_high_water_mark(f"trailing_{self.symbol}")
+
             # Notificação de fechamento (inclui tentativa de PnL/valor conta)
             try:
                 self._notify_trade(
@@ -2858,6 +2890,10 @@ class EMAGradientStrategy:
                 except Exception:
                     pass
                 self._cancel_protective_orders(fetch_backup=True)
+                
+                # *** TRAILING STOP: Limpar High Water Mark ***
+                _clear_high_water_mark(f"trailing_{self.symbol}")
+                
                 self._last_pos_side = None
                 self._last_stop_order_id = None
                 self._last_trailing_order_id = None
@@ -2893,6 +2929,10 @@ class EMAGradientStrategy:
             self._cancel_protective_orders(fetch_backup=True)
             # aplica cooldown por barras para evitar reversão imediata
             self._marcar_cooldown_barras(df)
+            
+            # *** TRAILING STOP: Limpar High Water Mark ***
+            _clear_high_water_mark(f"trailing_{self.symbol}")
+            
             self._last_pos_side = None
             self._last_stop_order_id = None
             self._last_trailing_order_id = None
