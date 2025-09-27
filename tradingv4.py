@@ -743,8 +743,8 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.05   # take profit fixo em 5% da margem
+    STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop inicial
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.15   # take profit máximo em 15% da margem
     MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
@@ -846,20 +846,102 @@ class EMAGradientStrategy:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
         print(f"[{level}] [{prefix}] {message}", flush=True)
 
-    def _protection_prices(self, entry_price: float, side: str) -> Tuple[float, float]:
+    def _protection_prices(self, entry_price: float, side: str, position: Optional[Dict[str, Any]] = None) -> Tuple[float, float]:
         if entry_price <= 0:
             raise ValueError("entry_price deve ser positivo")
         norm_side = self._norm_side(side)
         if norm_side not in ("buy", "sell"):
             raise ValueError("side inválido para proteção")
-        risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
+        
+        # Calcular ROI atual se posição disponível (usando mesma fórmula do trading.py)
+        current_roi_pct = 0.0
+        if position:
+            try:
+                unrealized_pnl = float(position.get("unrealizedPnl", 0))
+                position_value = position.get("positionValue") or position.get("notional") or position.get("size")
+                leverage = float(position.get("leverage", self.cfg.LEVERAGE))
+                
+                if position_value is None:
+                    # Calcular position_value manualmente se necessário
+                    contracts = float(position.get("contracts", 0))
+                    current_px = self._preco_atual()
+                    if contracts > 0 and current_px > 0:
+                        position_value = abs(contracts * current_px)
+                
+                if position_value and position_value > 0 and leverage > 0:
+                    # Mesma fórmula do trading.py: (PnL / (position_value / leverage)) * 100
+                    capital_real = position_value / leverage
+                    current_roi_pct = (unrealized_pnl / capital_real) * 100
+                    
+                    self._log(
+                        f"DEBUG trailing: unrealized_pnl={unrealized_pnl:.4f} position_value={position_value:.4f} "
+                        f"leverage={leverage:.1f} capital_real=${capital_real:.4f} ROI={current_roi_pct:.2f}%", 
+                        level="DEBUG"
+                    )
+            except Exception as e:
+                self._log(f"Erro ao calcular ROI atual: {e}", level="WARN")
+        
+        # Calcular stop loss dinâmico baseado no ROI
+        base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
+        
+        # Trailing stop dinâmico granular:
+        # ROI < 2.5%: stop em -5%
+        # ROI >= 2.5%: stop em -2.5%
+        # ROI >= 5%: stop em 0% (breakeven)
+        # ROI >= 7.5%: stop em +2.5%
+        # ROI >= 10%: stop em +5%
+        # ROI >= 12.5%: stop em +7.5%
+        if current_roi_pct >= 12.5:
+            # ROI >= 12.5%: stop em +7.5%
+            trailing_stop_pct = 0.075 / float(self.cfg.LEVERAGE)
+            if norm_side == "buy":
+                stop_px = entry_price * (1.0 + trailing_stop_pct)
+            else:
+                stop_px = entry_price * (1.0 - trailing_stop_pct)
+            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
+        elif current_roi_pct >= 10.0:
+            # ROI >= 10%: stop em +5%
+            trailing_stop_pct = 0.05 / float(self.cfg.LEVERAGE)
+            if norm_side == "buy":
+                stop_px = entry_price * (1.0 + trailing_stop_pct)
+            else:
+                stop_px = entry_price * (1.0 - trailing_stop_pct)
+            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 10% → stop +5% @ {stop_px:.6f}", level="DEBUG")
+        elif current_roi_pct >= 7.5:
+            # ROI >= 7.5%: stop em +2.5%
+            trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
+            if norm_side == "buy":
+                stop_px = entry_price * (1.0 + trailing_stop_pct)
+            else:
+                stop_px = entry_price * (1.0 - trailing_stop_pct)
+            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 7.5% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
+        elif current_roi_pct >= 5.0:
+            # ROI >= 5%: stop em 0% (breakeven)
+            stop_px = entry_price
+            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
+        elif current_roi_pct >= 2.5:
+            # ROI >= 2.5%: stop em -2.5%
+            trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
+            if norm_side == "buy":
+                stop_px = entry_price * (1.0 - trailing_stop_pct)
+            else:
+                stop_px = entry_price * (1.0 + trailing_stop_pct)
+            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 2.5% → stop -2.5% @ {stop_px:.6f}", level="DEBUG")
+        else:
+            # ROI < 2.5%: stop normal em -5%
+            if norm_side == "buy":
+                stop_px = entry_price * (1.0 - base_risk_ratio)
+            else:
+                stop_px = entry_price * (1.0 + base_risk_ratio)
+            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
+        
+        # Take profit fixo em 15%
         reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         if norm_side == "buy":
-            stop_px = entry_price * (1.0 - risk_ratio)
             take_px = entry_price * (1.0 + reward_ratio)
         else:
-            stop_px = entry_price * (1.0 + risk_ratio)
             take_px = entry_price * (1.0 - reward_ratio)
+        
         return stop_px, take_px
 
 
@@ -1157,7 +1239,13 @@ class EMAGradientStrategy:
             try:
                 snap = df_for_log.tail(1)
             except Exception:
-                snap = df_for_log.iloc[[-1]]
+                try:
+                    snap = df_for_log.iloc[[-1]]
+                except Exception:
+                    snap = None
+        elif df_for_log is None:
+            # df_for_log é None, criar um DataFrame vazio para evitar erros
+            snap = None
 
         # (C) SEMPRE grava no buffer local
         try:
@@ -1717,7 +1805,7 @@ class EMAGradientStrategy:
                     self._log("Leverage ajustada para isolated em posição existente.", level="INFO")
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
-            stop_px, take_px = self._protection_prices(entry, norm_side)
+            stop_px, take_px = self._protection_prices(entry, norm_side, position=pos)
             manage_take = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT or 0.0) > 0.0
             if not manage_take:
                 take_px = None
@@ -3150,10 +3238,8 @@ if __name__ == "__main__":
     # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
     EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
-    def fast_safety_check_v4(dex_in, asset_state, vault_address: str) -> None:
-        """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos no vault."""
-        open_positions = []
-        
+    def check_all_trailing_stops_v4(dex_in, asset_state, vault_address: str) -> None:
+        """Verifica e ajusta trailing stops dinâmicos para TODAS as posições abertas."""
         for asset in ASSET_SETUPS:
             state = asset_state.get(asset.name)
             if state is None:
@@ -3168,14 +3254,74 @@ if __name__ == "__main__":
                     continue
                     
                 pos = positions[0]
+                
+                # Executar trailing stop dinâmico para esta posição
+                try:
+                    strategy._ensure_position_protections(pos)
+                except Exception as e:
+                    _log_global("TRAILING_CHECK", f"{asset.name}: Erro no trailing stop - {e}", level="WARN")
+                    
+            except Exception as e:
+                _log_global("TRAILING_CHECK", f"Erro verificando {asset.name}: {type(e).__name__}: {e}", level="WARN")
+
+    def fast_safety_check_v4(dex_in, asset_state, vault_address: str) -> None:
+        """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos no vault."""
+        open_positions = []
+        
+        # Debug: verificar quantos assets estão no asset_state
+        _log_global("FAST_SAFETY_V4", f"Asset_state contém {len(asset_state)} assets: {list(asset_state.keys())}", level="DEBUG")
+        
+        for asset in ASSET_SETUPS:
+            state = asset_state.get(asset.name)
+            
+            try:
+                # Verificar se há posição aberta no vault (independente do asset_state)
+                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": vault_address})
+                if not positions or float(positions[0].get("contracts", 0)) == 0:
+                    continue
+                    
+                pos = positions[0]
                 emergency_closed = False
+                
+                # Se não tem strategy no asset_state, pular o trailing stop mas ainda mostrar no log
+                if state is None:
+                    _log_global("FAST_SAFETY_V4", f"{asset.name}: Posição encontrada mas asset não inicializado", level="DEBUG")
+                else:
+                    strategy: EMAGradientStrategy = state["strategy"]
                 
                 # Coletar informações da posição
                 side = pos.get("side") or pos.get("positionSide", "")
                 contracts = float(pos.get("contracts", 0))
                 unrealized_pnl = float(pos.get("unrealizedPnl", 0))
-                roi_value = pos.get("returnOnEquity") or pos.get("returnOnInvestment") or pos.get("roi")
-                roi_pct = float(roi_value) if roi_value is not None else 0.0
+                
+                # Calcular ROI real usando mesma fórmula do trailing stop
+                roi_pct = 0.0
+                try:
+                    position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
+                    leverage = float(pos.get("leverage", 10))
+                    
+                    if position_value is None:
+                        # Calcular position_value manualmente se necessário
+                        current_px = 0
+                        if state is not None:
+                            current_px = state["strategy"]._preco_atual()
+                        else:
+                            # Fallback: usar ticker se não temos strategy
+                            try:
+                                ticker = dex_in.fetch_ticker(asset.hl_symbol)
+                                current_px = float(ticker.get("last", 0) or 0)
+                            except Exception:
+                                current_px = 0
+                        
+                        if contracts > 0 and current_px > 0:
+                            position_value = abs(contracts * current_px)
+                    
+                    if position_value and position_value > 0 and leverage > 0:
+                        # Mesma fórmula: (PnL / (position_value / leverage)) * 100
+                        capital_real = position_value / leverage
+                        roi_pct = (unrealized_pnl / capital_real) * 100
+                except Exception as e:
+                    _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro calculando ROI - {e}", level="WARN")
                 
                 # Adicionar à lista de posições abertas com status
                 status = "OK"
@@ -3390,6 +3536,9 @@ if __name__ == "__main__":
                     # FAST SAFETY CHECK IMEDIATAMENTE APÓS O ASSET
                     _log_global("ASSET", f"Fast safety check pós-{asset.name}")
                     fast_safety_check_v4(dex_in, asset_state, VAULT_ADDRESS)
+                    
+                    # TRAILING STOP CHECK PARA TODAS AS POSIÇÕES APÓS CADA ASSET
+                    check_all_trailing_stops_v4(dex_in, asset_state, VAULT_ADDRESS)
                     
                     _time.sleep(0.25)
 
