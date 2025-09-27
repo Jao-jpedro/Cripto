@@ -110,11 +110,13 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
     """
     Cancela ordens com status 'Triggered' e cria uma nova ordem 'price below' se necessário (versão vault).
     """
+    print(f"[DEBUG_CLOSE] 🔍 cancel_triggered_orders_and_create_price_below: {symbol} @ {current_px:.4f}", flush=True)
     try:
         orders_cancelled = 0
         
         # Buscar ordens abertas
         open_orders = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault})
+        print(f"[DEBUG_CLOSE] 📋 Encontradas {len(open_orders)} ordens abertas para {symbol}", flush=True)
         
         for order in open_orders:
             # Verificar se a ordem tem status 'Triggered'
@@ -125,26 +127,42 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
             if order_status == 'triggered' or 'trigger' in order_type.lower():
                 try:
                     # Cancelar a ordem triggered
+                    print(f"[DEBUG_CLOSE] ⚠️ CANCELANDO ordem triggered: {order['id']} - status:{order_status} type:{order_type}", flush=True)
                     dex.cancel_order(order['id'], symbol, {"vaultAddress": vault})
                     orders_cancelled += 1
                     print(f"[INFO] Ordem Triggered cancelada (vault): {order['id']}", flush=True)
                 except Exception as e:
                     print(f"[WARN] Erro ao cancelar ordem (vault) {order['id']}: {e}", flush=True)
         
-        # Se cancelou alguma ordem triggered, criar uma ordem price below
+        # Se cancelou alguma ordem triggered, criar uma ordem price below/above correta
         if orders_cancelled > 0:
+            print(f"[DEBUG_CLOSE] 🔄 Cancelamos {orders_cancelled} ordens triggered - criando nova ordem de stop", flush=True)
             try:
                 # Verificar se há posição aberta para determinar o lado
                 positions = dex.fetch_positions([symbol], {"vaultAddress": vault})
+                print(f"[DEBUG_CLOSE] 📊 Verificando posições para {symbol}: {len(positions)} encontradas", flush=True)
+                
                 if positions and float(positions[0].get("contracts", 0)) > 0:
                     pos = positions[0]
                     side = pos.get('side', '').lower()
                     qty = abs(float(pos.get('contracts', 0)))
                     
+                    print(f"[DEBUG_CLOSE] 🎯 Posição encontrada: {side} {qty:.4f} contratos", flush=True)
+                    
                     if side and qty > 0:
-                        # Criar ordem price below (5% abaixo do preço atual)
-                        price_below = current_px * 0.95  # 5% abaixo
                         exit_side = "sell" if side in ("long", "buy") else "buy"
+                        
+                        # LÓGICA CORRETA: price below para LONG, price above para SHORT
+                        if side in ("long", "buy"):
+                            # Para LONG: SELL order 5% ABAIXO (stop loss)
+                            order_price = current_px * 0.95
+                            order_type = "price_below"
+                            print(f"[DEBUG_CLOSE] 📉 LONG: criando SELL stop @ {order_price:.4f} (5% abaixo de {current_px:.4f})", flush=True)
+                        else:
+                            # Para SHORT: BUY order 5% ACIMA (stop loss)  
+                            order_price = current_px * 1.05
+                            order_type = "price_above"
+                            print(f"[DEBUG_CLOSE] 📈 SHORT: criando BUY stop @ {order_price:.4f} (5% acima de {current_px:.4f})", flush=True)
                         
                         # Criar ordem limit para saída (com vault)
                         order = dex.create_order(
@@ -152,14 +170,20 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
                             "limit", 
                             exit_side, 
                             qty, 
-                            price_below,
+                            order_price,
                             {"reduceOnly": True, "vaultAddress": vault}
                         )
-                        print(f"[INFO] Ordem price below criada (vault): {order.get('id')} - Preço: {price_below:.4f}", flush=True)
+                        print(f"[DEBUG_CLOSE] ✅ ORDEM STOP CRIADA: {order.get('id')} - {exit_side.upper()} {qty:.4f} @ {order_price:.4f}", flush=True)
+                        print(f"[INFO] Ordem {order_type} criada (vault): {order.get('id')} - {side.upper()} exit @ {order_price:.4f}", flush=True)
                         return True
+                else:
+                    print(f"[DEBUG_CLOSE] ❌ Nenhuma posição válida encontrada para criar stop", flush=True)
                         
             except Exception as e:
-                print(f"[WARN] Erro ao criar ordem price below (vault): {e}", flush=True)
+                print(f"[DEBUG_CLOSE] ⛔ ERRO ao criar ordem stop: {e}", flush=True)
+                print(f"[WARN] Erro ao criar ordem stop (vault): {e}", flush=True)
+        else:
+            print(f"[DEBUG_CLOSE] ℹ️ Nenhuma ordem triggered cancelada - saindo", flush=True)
         
         return orders_cancelled > 0
         
@@ -934,7 +958,7 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L6: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 10.0:
             # ROI >= 10%: stop em +5%
             trailing_stop_pct = 0.05 / float(self.cfg.LEVERAGE)
@@ -942,7 +966,7 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 10% → stop +5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +5% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 7.5:
             # ROI >= 7.5%: stop em +2.5%
             trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
@@ -950,11 +974,11 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 7.5% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 5.0:
             # ROI >= 5%: stop em 0% (breakeven)
             stop_px = entry_price
-            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] ⚖️ TRAILING L3: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 2.5:
             # ROI >= 2.5%: stop em -2.5%
             trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
@@ -962,14 +986,14 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
-            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% >= 2.5% → stop -2.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] 📉 TRAILING L2: ROI {current_roi_pct:.1f}% >= 2.5% → stop -2.5% @ {stop_px:.6f}", level="DEBUG")
         else:
             # ROI < 2.5%: stop normal em -5%
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 - base_risk_ratio)
             else:
                 stop_px = entry_price * (1.0 + base_risk_ratio)
-            self._log(f"DEBUG trailing: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] ⬇️ TRAILING L1: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
         
         # Take profit fixo em 15%
         reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
@@ -2354,6 +2378,8 @@ class EMAGradientStrategy:
 
         prev_side = self._last_pos_side
         pos = self._posicao_aberta()
+        pos_info = 'None' if pos is None else f'size={pos.get("contracts", 0)}'
+        self._log(f"[DEBUG_CLOSE] prev_side={prev_side} | pos={pos_info}", level="DEBUG")
         self._log(f"Snapshot posição atual: {pos}", level="DEBUG")
 
         # Verificar e cancelar ordens triggered, criar price below se necessário
@@ -2395,6 +2421,7 @@ class EMAGradientStrategy:
                             self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
                             emergency_closed = True
                             _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
+                            self._log(f"[DEBUG_CLOSE] 🚨 FECHAMENTO POR PNL: {unrealized_pnl:.2f} <= {UNREALIZED_PNL_HARD_STOP}", level="ERROR")
                             self._log(f"Emergência acionada (vault): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
                             self._log(f"Erro ao fechar posição por PnL (vault): {e}", level="ERROR")
@@ -2436,6 +2463,7 @@ class EMAGradientStrategy:
                                 self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
                                 emergency_closed = True
                                 _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
+                                self._log(f"[DEBUG_CLOSE] 🚨 FECHAMENTO POR ROI: {roi_f:.4f} <= {ROI_HARD_STOP}", level="ERROR")
                                 self._log(f"Emergência acionada (vault): ROI <= {ROI_HARD_STOP*100}%, posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
                             self._log(f"Erro ao fechar posição por ROI (vault): {e}", level="ERROR")
@@ -2452,6 +2480,7 @@ class EMAGradientStrategy:
 
         # se havia posição e agora não há → stop/saída ocorreu fora
         if prev_side and not pos:
+            self._log("[DEBUG_CLOSE] ⚠️ FECHAMENTO EXTERNO DETECTADO!", level="ERROR")
             self._log("Posição fechada externamente detectada (provável stop).", level="INFO")
             try:
                 last_px = self._preco_atual()

@@ -40,11 +40,13 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
     """
     Cancela ordens com status 'Triggered' e cria uma nova ordem 'price below' se necessário.
     """
+    print(f"[DEBUG_CLOSE] 🔍 cancel_triggered_orders_and_create_price_below: {symbol} @ {current_px:.4f}", flush=True)
     try:
         orders_cancelled = 0
         
         # Buscar ordens abertas
         open_orders = dex.fetch_open_orders(symbol)
+        print(f"[DEBUG_CLOSE] 📋 Encontradas {len(open_orders)} ordens abertas para {symbol}", flush=True)
         
         for order in open_orders:
             # Verificar se a ordem tem status 'Triggered'
@@ -55,6 +57,7 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
             if order_status == 'triggered' or 'trigger' in order_type.lower():
                 try:
                     # Cancelar a ordem triggered
+                    print(f"[DEBUG_CLOSE] ⚠️ CANCELANDO ordem triggered: {order['id']} - status:{order_status} type:{order_type}", flush=True)
                     dex.cancel_order(order['id'], symbol)
                     orders_cancelled += 1
                     print(f"[INFO] Ordem Triggered cancelada: {order['id']}", flush=True)
@@ -63,18 +66,33 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
         
         # Se cancelou alguma ordem triggered, criar uma ordem price below
         if orders_cancelled > 0:
+            print(f"[DEBUG_CLOSE] 🔄 Cancelamos {orders_cancelled} ordens triggered - criando nova ordem de stop", flush=True)
             try:
                 # Verificar se há posição aberta para determinar o lado
                 positions = dex.fetch_positions([symbol])
+                print(f"[DEBUG_CLOSE] 📊 Verificando posições para {symbol}: {len(positions)} encontradas", flush=True)
+                
                 if positions and float(positions[0].get("contracts", 0)) > 0:
                     pos = positions[0]
                     side = pos.get('side', '').lower()
                     qty = abs(float(pos.get('contracts', 0)))
                     
+                    print(f"[DEBUG_CLOSE] 🎯 Posição encontrada: {side} {qty:.4f} contratos", flush=True)
+                    
                     if side and qty > 0:
-                        # Criar ordem price below (5% abaixo do preço atual)
-                        price_below = current_px * 0.95  # 5% abaixo
                         exit_side = "sell" if side in ("long", "buy") else "buy"
+                        
+                        # LÓGICA CORRETA: price below para LONG, price above para SHORT
+                        if side in ("long", "buy"):
+                            # Para LONG: SELL order 5% ABAIXO (stop loss)
+                            order_price = current_px * 0.95
+                            order_type = "price_below"
+                            print(f"[DEBUG_CLOSE] 📉 LONG: criando SELL stop @ {order_price:.4f} (5% abaixo de {current_px:.4f})", flush=True)
+                        else:
+                            # Para SHORT: BUY order 5% ACIMA (stop loss)  
+                            order_price = current_px * 1.05
+                            order_type = "price_above"
+                            print(f"[DEBUG_CLOSE] 📈 SHORT: criando BUY stop @ {order_price:.4f} (5% acima de {current_px:.4f})", flush=True)
                         
                         # Criar ordem limit para saída
                         order = dex.create_order(
@@ -82,14 +100,20 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
                             "limit", 
                             exit_side, 
                             qty, 
-                            price_below,
+                            order_price,
                             {"reduceOnly": True}
                         )
-                        print(f"[INFO] Ordem price below criada: {order.get('id')} - Preço: {price_below:.4f}", flush=True)
+                        print(f"[DEBUG_CLOSE] ✅ ORDEM STOP CRIADA: {order.get('id')} - {exit_side.upper()} {qty:.4f} @ {order_price:.4f}", flush=True)
+                        print(f"[INFO] Ordem {order_type} criada: {order.get('id')} - {side.upper()} exit @ {order_price:.4f}", flush=True)
                         return True
+                else:
+                    print(f"[DEBUG_CLOSE] ❌ Nenhuma posição válida encontrada para criar stop", flush=True)
                         
             except Exception as e:
+                print(f"[DEBUG_CLOSE] ⛔ ERRO ao criar ordem stop: {e}", flush=True)
                 print(f"[WARN] Erro ao criar ordem price below: {e}", flush=True)
+        else:
+            print(f"[DEBUG_CLOSE] ℹ️ Nenhuma ordem triggered cancelada - saindo", flush=True)
         
         return orders_cancelled > 0
         
@@ -2878,6 +2902,7 @@ class EMAGradientStrategy:
                         price_emg = float(df["valor_fechamento"].iloc[-1])
                     except Exception:
                         price_emg = None
+                self._log("[DEBUG_CLOSE] 🚨 FECHAMENTO POR PNL: unrealizedPnL <= -0.05", level="ERROR")
                 self._log("Emergência acionada: unrealizedPnL <= -0.05, posição fechada imediatamente.", level="ERROR")
                 try:
                     self._safe_log(
@@ -2916,6 +2941,7 @@ class EMAGradientStrategy:
 
         # se havia posição e agora não há → stop/saída ocorreu fora
         if prev_side and not pos:
+            self._log("[DEBUG_CLOSE] ⚠️ FECHAMENTO EXTERNO DETECTADO!", level="ERROR")
             self._log("Posição fechada externamente detectada (provável stop).", level="INFO")
             try:
                 last_px = self._preco_atual()
