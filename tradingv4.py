@@ -1339,6 +1339,13 @@ class EMAGradientStrategy:
 
         # (E) tenta logger externo
         try:
+            # Garantir que snap não seja None ou vazio
+            if snap is None or snap.empty or not hasattr(snap, 'columns'):
+                snap = pd.DataFrame({
+                    "ts": [datetime.now(timezone.utc)],
+                    "valor_fechamento": [0.0],
+                    "criptomoeda": [self.symbol.replace("/", "_")]
+                })
             self.logger.append_event(df_snapshot=snap, evento=evento, **to_send)
             if (evento or "").lower() != "decisao":
                 self._log(f"Logger externo OK: {evento} (com snapshot)", level="DEBUG")
@@ -1348,7 +1355,14 @@ class EMAGradientStrategy:
             sys.stdout.flush()  # Troque _sys por sys
 
         try:
-            self.logger.append_event(evento=evento, **to_send)
+            # Criar um stub DataFrame básico quando não há snapshot
+            if snap is None or snap.empty or not hasattr(snap, 'columns'):
+                snap = pd.DataFrame({
+                    "ts": [datetime.now(timezone.utc)],
+                    "valor_fechamento": [0.0],
+                    "criptomoeda": [self.symbol.replace("/", "_")]
+                })
+            self.logger.append_event(df_snapshot=snap, evento=evento, **to_send)
             if (evento or "").lower() != "decisao":
                 self._log(f"Logger externo OK: {evento} (sem snapshot)", level="DEBUG")
             return
@@ -1356,7 +1370,11 @@ class EMAGradientStrategy:
             self._log(f"Logger externo falhou (sem snapshot): {type(e2).__name__}: {e2}. Tentando stub.", level="WARN")
 
         try:
-            df_stub = pd.DataFrame({"ts": [datetime.now(timezone.utc)]})
+            df_stub = pd.DataFrame({
+                "ts": [datetime.now(timezone.utc)],
+                "valor_fechamento": [0.0],
+                "criptomoeda": [self.symbol.replace("/", "_")]
+            })
             self.logger.append_event(df_snapshot=df_stub, evento=evento, **to_send)
             self._log(f"Logger externo OK: {evento} (stub)", level="DEBUG")
             return
@@ -3408,6 +3426,7 @@ if __name__ == "__main__":
                 
                 # PRIORITÁRIO: Verificar unrealized PnL primeiro
                 if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
+                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 TESTE PNL: {unrealized_pnl:.4f} <= {UNREALIZED_PNL_HARD_STOP} = True", level="ERROR")
                     try:
                         qty = abs(contracts)
                         side_norm = strategy._norm_side(side)
@@ -3431,9 +3450,12 @@ if __name__ == "__main__":
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
                     except Exception as e:
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por PnL - {e}", level="WARN")
+                else:
+                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ PNL OK: {unrealized_pnl:.4f} > {UNREALIZED_PNL_HARD_STOP}", level="DEBUG")
                 
                 # Se não fechou por PnL, verificar ROI
                 if not emergency_closed and roi_pct <= ROI_HARD_STOP:
+                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 TESTE ROI: {roi_pct:.4f} <= {ROI_HARD_STOP} = True", level="ERROR")
                     try:
                         qty = abs(contracts)
                         side_norm = strategy._norm_side(side)
@@ -3457,6 +3479,9 @@ if __name__ == "__main__":
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
                     except Exception as e:
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por ROI - {e}", level="WARN")
+                else:
+                    if not emergency_closed:
+                        _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ ROI OK: {roi_pct:.4f} > {ROI_HARD_STOP}", level="DEBUG")
                     
             except Exception as e:
                 _log_global("FAST_SAFETY_V4", f"Erro no safety check {asset.name}: {type(e).__name__}: {e}", level="WARN")

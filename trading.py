@@ -1845,6 +1845,13 @@ class EMAGradientStrategy:
 
         # (E) tenta logger externo
         try:
+            # Garantir que snap não seja None ou vazio
+            if snap is None or snap.empty or not hasattr(snap, 'columns'):
+                snap = pd.DataFrame({
+                    "ts": [datetime.now(timezone.utc)],
+                    "valor_fechamento": [0.0],
+                    "criptomoeda": [self.symbol.replace("/", "_")]
+                })
             self.logger.append_event(df_snapshot=snap, evento=evento, **to_send)
             if (evento or "").lower() != "decisao":
                 self._log(f"Logger externo OK: {evento} (com snapshot)", level="DEBUG")
@@ -1854,7 +1861,14 @@ class EMAGradientStrategy:
             sys.stdout.flush()  # Troque _sys por sys
 
         try:
-            self.logger.append_event(evento=evento, **to_send)
+            # Criar um stub DataFrame básico quando não há snapshot
+            if snap is None or snap.empty or not hasattr(snap, 'columns'):
+                snap = pd.DataFrame({
+                    "ts": [datetime.now(timezone.utc)],
+                    "valor_fechamento": [0.0],
+                    "criptomoeda": [self.symbol.replace("/", "_")]
+                })
+            self.logger.append_event(df_snapshot=snap, evento=evento, **to_send)
             if (evento or "").lower() != "decisao":
                 self._log(f"Logger externo OK: {evento} (sem snapshot)", level="DEBUG")
             return
@@ -1862,7 +1876,11 @@ class EMAGradientStrategy:
             self._log(f"Logger externo falhou (sem snapshot): {type(e2).__name__}: {e2}. Tentando stub.", level="WARN")
 
         try:
-            df_stub = pd.DataFrame({"ts": [datetime.now(timezone.utc)]})
+            df_stub = pd.DataFrame({
+                "ts": [datetime.now(timezone.utc)],
+                "valor_fechamento": [0.0],
+                "criptomoeda": [self.symbol.replace("/", "_")]
+            })
             self.logger.append_event(df_snapshot=df_stub, evento=evento, **to_send)
             self._log(f"Logger externo OK: {evento} (stub)", level="DEBUG")
             return
