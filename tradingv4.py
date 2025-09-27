@@ -744,7 +744,7 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.15   # take profit fixo em 15% da margem
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.05   # take profit fixo em 5% da margem
     MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
