@@ -1300,7 +1300,7 @@ class EMAGradientStrategy:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
         print(f"[{level}] [{prefix}] {message}", flush=True)
 
-    def _protection_prices(self, entry_price: float, side: str, current_price: Optional[float] = None) -> Tuple[float, Optional[float]]:
+    def _protection_prices(self, entry_price: float, side: str, current_price: Optional[float] = None, position: Optional[Dict[str, Any]] = None) -> Tuple[float, Optional[float]]:
         if entry_price <= 0:
             raise ValueError("entry_price deve ser positivo")
         norm_side = self._norm_side(side)
@@ -1321,7 +1321,7 @@ class EMAGradientStrategy:
         else:
             stop_px = entry_price * (1.0 + risk_ratio)
 
-        trailing_px = self._compute_trailing_stop(entry_price, ref_price, norm_side, lev)
+        trailing_px = self._compute_trailing_stop(entry_price, ref_price, norm_side, lev, position)
 
         if self.debug and trailing_px is not None:
             self._log(
@@ -1340,7 +1340,7 @@ class EMAGradientStrategy:
                 )
         return stop_px, trailing_px
 
-    def _compute_trailing_stop(self, entry_price: float, current_price: float, norm_side: str, leverage: float) -> Optional[float]:
+    def _compute_trailing_stop(self, entry_price: float, current_price: float, norm_side: str, leverage: float, position: Optional[Dict[str, Any]] = None) -> Optional[float]:
         if entry_price <= 0 or current_price <= 0 or leverage <= 0:
             return None
         margin = float(getattr(self.cfg, "TRAILING_ROI_MARGIN", 0.10) or 0.0)
@@ -1356,13 +1356,38 @@ class EMAGradientStrategy:
 
         levered_roi = roi * leverage
         
+        # Calcular ROI real via PnL se posição disponível
+        real_roi_pct = None
+        if position:
+            try:
+                unrealized_pnl = float(position.get("unrealizedPnl", 0))
+                position_value = position.get("positionValue") or position.get("notional") or position.get("size")
+                if position_value is None:
+                    # Calcular position_value manualmente se necessário
+                    contracts = float(position.get("contracts", 0))
+                    if contracts > 0:
+                        position_value = abs(contracts * current_price)
+                
+                if position_value and position_value > 0:
+                    capital_real = abs(float(position_value)) / leverage
+                    real_roi_pct = (unrealized_pnl / capital_real) * 100
+            except Exception:
+                pass
+        
         # Debug: mostrar cálculos do trailing stop
         if self.debug:
-            self._log(
-                f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} ROI={roi:.4f} "
-                f"levered_ROI={levered_roi:.4f} margin={margin:.4f}", 
-                level="DEBUG"
-            )
+            if real_roi_pct is not None:
+                self._log(
+                    f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} ROI_approx={roi:.4f} "
+                    f"ROI_real={real_roi_pct:.4f}% levered_ROI={levered_roi:.4f} margin={margin:.4f}", 
+                    level="DEBUG"
+                )
+            else:
+                self._log(
+                    f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} ROI={roi:.4f} "
+                    f"levered_ROI={levered_roi:.4f} margin={margin:.4f}", 
+                    level="DEBUG"
+                )
         
         # Trailing stop só ativo se for MELHOR que stop loss normal (-5%)
         # Ex: ROI alavancado 15% → trailing em 5% (melhor que -5%) ✓
@@ -2298,7 +2323,7 @@ class EMAGradientStrategy:
             except Exception:
                 current_px = entry
 
-            stop_px, trail_px = self._protection_prices(entry, norm_side, current_price=current_px)
+            stop_px, trail_px = self._protection_prices(entry, norm_side, current_price=current_px, position=pos)
             close_side = "sell" if norm_side == "buy" else "buy"
 
             orders = self._fetch_reduce_only_orders()
