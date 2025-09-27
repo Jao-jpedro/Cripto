@@ -6,7 +6,7 @@ from typing import Optional
 ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
 ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
-UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC (PRIORITÁRIO)
+UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
@@ -3414,13 +3414,13 @@ if __name__ == "__main__":
                 # Adicionar à lista de posições abertas com status
                 status = "OK"
                 if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                    status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.2f}"
+                    status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.3f} (será fechado!)"
                 elif roi_pct <= ROI_HARD_STOP:
-                    status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}%"
-                elif unrealized_pnl < -0.01:
-                    status = f"📉 PnL: ${unrealized_pnl:.2f} ROI: {roi_pct:.1f}%"
-                elif unrealized_pnl > 0.01:
-                    status = f"📈 PnL: +${unrealized_pnl:.2f} ROI: +{roi_pct:.1f}%"
+                    status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}% (será fechado!)"
+                elif unrealized_pnl < -0.01:  # Alertar perdas > -1 cent
+                    status = f"📉 PnL: ${unrealized_pnl:.3f} ROI: {roi_pct:.1f}%"
+                elif unrealized_pnl > 0.01:   # Alertar lucros > +1 cent
+                    status = f"📈 PnL: +${unrealized_pnl:.3f} ROI: +{roi_pct:.1f}%"
                 
                 open_positions.append(f"{asset.name} {side.upper()}: {status}")
                 

@@ -4,7 +4,7 @@ from typing import Optional
 ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
 ROI_HARD_STOP = -0.05  # ROI mínimo aceitável (-5%)
-UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura para unrealizedPnL em USDC (PRIORITÁRIO)
+UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
