@@ -797,7 +797,7 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop inicial
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.15   # take profit máximo em 15% da margem
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.20   # take profit máximo em 20% da margem
     MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
@@ -944,14 +944,32 @@ class EMAGradientStrategy:
         # Calcular stop loss dinâmico baseado no ROI
         base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         
-        # Trailing stop dinâmico granular (USANDO HIGH WATER MARK):
+        # Trailing stop dinâmico granular expandido (USANDO HIGH WATER MARK):
         # ROI < 2.5%: stop em -5%
         # ROI >= 2.5%: stop em -2.5%
         # ROI >= 5%: stop em 0% (breakeven)
         # ROI >= 7.5%: stop em +2.5%
         # ROI >= 10%: stop em +5%
         # ROI >= 12.5%: stop em +7.5%
-        if current_roi_pct >= 12.5:
+        # ROI >= 15%: stop em +10%
+        # ROI >= 17.5%: stop em +12.5%
+        if current_roi_pct >= 17.5:
+            # ROI >= 17.5%: stop em +12.5%
+            trailing_stop_pct = 0.125 / float(self.cfg.LEVERAGE)
+            if norm_side == "buy":
+                stop_px = entry_price * (1.0 + trailing_stop_pct)
+            else:
+                stop_px = entry_price * (1.0 - trailing_stop_pct)
+            self._log(f"[DEBUG_CLOSE] 🚀 TRAILING L8: ROI {current_roi_pct:.1f}% >= 17.5% → stop +12.5% @ {stop_px:.6f}", level="DEBUG")
+        elif current_roi_pct >= 15.0:
+            # ROI >= 15%: stop em +10%
+            trailing_stop_pct = 0.10 / float(self.cfg.LEVERAGE)
+            if norm_side == "buy":
+                stop_px = entry_price * (1.0 + trailing_stop_pct)
+            else:
+                stop_px = entry_price * (1.0 - trailing_stop_pct)
+            self._log(f"[DEBUG_CLOSE] 🎯 TRAILING L7: ROI {current_roi_pct:.1f}% >= 15% → stop +10% @ {stop_px:.6f}", level="DEBUG")
+        elif current_roi_pct >= 12.5:
             # ROI >= 12.5%: stop em +7.5%
             trailing_stop_pct = 0.075 / float(self.cfg.LEVERAGE)
             if norm_side == "buy":
@@ -995,7 +1013,7 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + base_risk_ratio)
             self._log(f"[DEBUG_CLOSE] ⬇️ TRAILING L1: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
         
-        # Take profit fixo em 15%
+        # Take profit fixo em 20%
         reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         if norm_side == "buy":
             take_px = entry_price * (1.0 + reward_ratio)
@@ -1898,8 +1916,9 @@ class EMAGradientStrategy:
             remaining_orders: List[Dict[str, Any]] = []
             stop_match = None
             take_match = None
-            tol_stop = max(1e-8, abs(stop_px) * 1e-5)
-            tol_take = max(1e-8, abs(take_px) * 1e-5) if manage_take and take_px is not None else None
+            # Aumentar tolerância para trailing stops (0.1% ao invés de 0.001%)
+            tol_stop = max(1e-6, abs(stop_px) * 0.001)  # 0.1% de tolerância
+            tol_take = max(1e-6, abs(take_px) * 0.001) if manage_take and take_px is not None else None
 
             for order in orders or []:
                 oid = self._extract_order_id(order)
@@ -1913,23 +1932,37 @@ class EMAGradientStrategy:
                     continue
                 kind_guess = self._classify_protection_price(order, price, entry, norm_side)
                 if kind_guess == "stop":
+                    # Verificar se a ordem existente está numa faixa aceitável para trailing stop
+                    price_diff_pct = abs(price - stop_px) / stop_px * 100
                     if norm_side == "buy":
-                        if price >= stop_px - tol_stop:
+                        # Para long: manter ordem se o preço da ordem é maior ou igual ao novo stop (mais conservador)
+                        # OU se a diferença é pequena (< 0.1%)
+                        if price >= stop_px - tol_stop or price_diff_pct < 0.1:
                             stop_match = order
-                            stop_px = max(stop_px, price)
+                            # Manter o preço mais conservador (maior para long)
+                            if price > stop_px:
+                                stop_px = price
                             self._last_stop_order_id = oid
                             self._last_stop_order_px = price
                             remaining_orders.append(order)
+                            self._log(f"[TRAILING] Mantendo stop existente @ {price:.6f} (calculado: {stop_px:.6f}) - diff: {price_diff_pct:.3f}%", level="DEBUG")
                         else:
+                            self._log(f"[TRAILING] Cancelando stop desatualizado @ {price:.6f} (novo: {stop_px:.6f}) - diff: {price_diff_pct:.3f}%", level="DEBUG")
                             self._cancel_order_silent(oid)
                     else:
-                        if price <= stop_px + tol_stop:
+                        # Para short: manter ordem se o preço da ordem é menor ou igual ao novo stop (mais conservador)
+                        # OU se a diferença é pequena (< 0.1%)
+                        if price <= stop_px + tol_stop or price_diff_pct < 0.1:
                             stop_match = order
-                            stop_px = min(stop_px, price)
+                            # Manter o preço mais conservador (menor para short)
+                            if price < stop_px:
+                                stop_px = price
                             self._last_stop_order_id = oid
                             self._last_stop_order_px = price
                             remaining_orders.append(order)
+                            self._log(f"[TRAILING] Mantendo stop existente @ {price:.6f} (calculado: {stop_px:.6f}) - diff: {price_diff_pct:.3f}%", level="DEBUG")
                         else:
+                            self._log(f"[TRAILING] Cancelando stop desatualizado @ {price:.6f} (novo: {stop_px:.6f}) - diff: {price_diff_pct:.3f}%", level="DEBUG")
                             self._cancel_order_silent(oid)
                 elif kind_guess == "take":
                     if not manage_take:
