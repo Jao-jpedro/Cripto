@@ -1,9 +1,7 @@
-print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 
-# Constantes para stop loss
 from typing import Optional
 
-ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
+ABS_LOSS_HARD_STOP = 0.50  # perda máxima absoluta em USDC permitida antes de zerar
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
 ROI_HARD_STOP = -5.0  # ROI mínimo aceitável (-5%) - em percentual
 UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real
@@ -11,11 +9,6 @@ UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
 TRAILING_HIGH_WATER_MARK = {}
-
-
-def _log_global(section: str, message: str, level: str = "INFO") -> None:
-    """Formato padrão para logs fora das classes."""
-    print(f"[{level}] [{section}] {message}", flush=True)
 
 
 def _update_high_water_mark(symbol: str, current_roi: float) -> float:
@@ -40,10 +33,469 @@ def _clear_high_water_mark(symbol: str) -> None:
     global TRAILING_HIGH_WATER_MARK
     if symbol in TRAILING_HIGH_WATER_MARK:
         del TRAILING_HIGH_WATER_MARK[symbol]
-        _log_global("TRAILING_HWM", f"{symbol}: High Water Mark resetado", level="DEBUG")
+        print(f"[DEBUG] [TRAILING_HWM] {symbol}: High Water Mark resetado", flush=True)
+
+
+def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: float) -> bool:
+    """
+    Cancela ordens com status 'Triggered' e cria uma nova ordem 'price below' se necessário.
+    """
+    print(f"[DEBUG_CLOSE] 🔍 cancel_triggered_orders_and_create_price_below: {symbol} @ {current_px:.4f}", flush=True)
+    try:
+        orders_cancelled = 0
+        
+        # Buscar ordens abertas
+        open_orders = dex.fetch_open_orders(symbol)
+        print(f"[DEBUG_CLOSE] 📋 Encontradas {len(open_orders)} ordens abertas para {symbol}", flush=True)
+        
+        for order in open_orders:
+            # Verificar se a ordem tem status 'Triggered'
+            order_status = order.get('status', '').lower()
+            order_info = order.get('info', {})
+            order_type = order_info.get('orderType', '')
+            
+            if order_status == 'triggered' or 'trigger' in order_type.lower():
+                try:
+                    # Cancelar a ordem triggered
+                    print(f"[DEBUG_CLOSE] ⚠️ CANCELANDO ordem triggered: {order['id']} - status:{order_status} type:{order_type}", flush=True)
+                    dex.cancel_order(order['id'], symbol)
+                    orders_cancelled += 1
+                    print(f"[INFO] Ordem Triggered cancelada: {order['id']}", flush=True)
+                except Exception as e:
+                    print(f"[WARN] Erro ao cancelar ordem {order['id']}: {e}", flush=True)
+        
+        # Se cancelou alguma ordem triggered, criar uma ordem price below
+        if orders_cancelled > 0:
+            print(f"[DEBUG_CLOSE] 🔄 Cancelamos {orders_cancelled} ordens triggered - criando nova ordem de stop", flush=True)
+            try:
+                # Verificar se há posição aberta para determinar o lado
+                positions = dex.fetch_positions([symbol])
+                print(f"[DEBUG_CLOSE] 📊 Verificando posições para {symbol}: {len(positions)} encontradas", flush=True)
+                
+                if positions and float(positions[0].get("contracts", 0)) > 0:
+                    pos = positions[0]
+                    side = pos.get('side', '').lower()
+                    qty = abs(float(pos.get('contracts', 0)))
+                    
+                    print(f"[DEBUG_CLOSE] 🎯 Posição encontrada: {side} {qty:.4f} contratos", flush=True)
+                    
+                    if side and qty > 0:
+                        exit_side = "sell" if side in ("long", "buy") else "buy"
+                        
+                        # LÓGICA CORRETA: price below para LONG, price above para SHORT
+                        if side in ("long", "buy"):
+                            # Para LONG: SELL order 5% ABAIXO (stop loss)
+                            order_price = current_px * 0.95
+                            order_type = "price_below"
+                            print(f"[DEBUG_CLOSE] 📉 LONG: criando SELL stop @ {order_price:.4f} (5% abaixo de {current_px:.4f})", flush=True)
+                        else:
+                            # Para SHORT: BUY order 5% ACIMA (stop loss)  
+                            order_price = current_px * 1.05
+                            order_type = "price_above"
+                            print(f"[DEBUG_CLOSE] 📈 SHORT: criando BUY stop @ {order_price:.4f} (5% acima de {current_px:.4f})", flush=True)
+                        
+                        # Criar ordem limit para saída
+                        order = dex.create_order(
+                            symbol, 
+                            "limit", 
+                            exit_side, 
+                            qty, 
+                            order_price,
+                            {"reduceOnly": True}
+                        )
+                        print(f"[DEBUG_CLOSE] ✅ ORDEM STOP CRIADA: {order.get('id')} - {exit_side.upper()} {qty:.4f} @ {order_price:.4f}", flush=True)
+                        print(f"[INFO] Ordem {order_type} criada: {order.get('id')} - {side.upper()} exit @ {order_price:.4f}", flush=True)
+                        return True
+                else:
+                    print(f"[DEBUG_CLOSE] ❌ Nenhuma posição válida encontrada para criar stop", flush=True)
+                        
+            except Exception as e:
+                print(f"[DEBUG_CLOSE] ⛔ ERRO ao criar ordem stop: {e}", flush=True)
+                print(f"[WARN] Erro ao criar ordem price below: {e}", flush=True)
+        else:
+            print(f"[DEBUG_CLOSE] ℹ️ Nenhuma ordem triggered cancelada - saindo", flush=True)
+        
+        return orders_cancelled > 0
+        
+    except Exception as e:
+        print(f"[ERROR] Erro na função cancel_triggered_orders_and_create_price_below: {e}", flush=True)
+        return False
+
+
+def close_if_abs_loss_exceeds_5c(dex, symbol, current_px: float) -> bool:
+    try:
+        qty, _, entry_px, side = _get_pos_size_and_leverage(dex, symbol)
+    except Exception:
+        qty, entry_px, side = 0.0, None, None
+    if not side or qty <= 0 or not entry_px:
+        return False
+
+    try:
+        px_now = float(current_px)
+    except Exception:
+        return False
+
+    try:
+        entry_f = float(entry_px)
+    except Exception:
+        return False
+
+    s = str(side).lower()
+    if s in ("long", "buy"):
+        loss = max(0.0, (entry_f - px_now) * qty)
+        exit_side = "sell"
+    elif s in ("short", "sell"):
+        loss = max(0.0, (px_now - entry_f) * qty)
+        exit_side = "buy"
+    else:
+        return False
+
+    if loss < ABS_LOSS_HARD_STOP:
+        return False
+
+    try:
+        # Buscar preço atual para ordem market
+        ticker = dex.fetch_ticker(symbol)
+        current_price = float(ticker.get("last", 0) or px_now)
+        
+        # Ajustar preço para garantir execução
+        if exit_side == "sell":
+            order_price = current_price * 0.995  # Ligeiramente abaixo para long
+        else:
+            order_price = current_price * 1.005  # Ligeiramente acima para short
+            
+        dex.create_order(symbol, "market", exit_side, float(qty), order_price, {"reduceOnly": True})
+        return True
+    except Exception:
+        return False
+
+
+def _extract_liquidation_price(position):
+    candidates = []
+    try:
+        candidates.append(position.get("liquidationPrice"))
+    except Exception:
+        pass
+    try:
+        info = position.get("info", {}) or {}
+        if isinstance(info, dict):
+            candidates.append(info.get("liquidationPrice"))
+            pos_info = info.get("position") or {}
+            if isinstance(pos_info, dict):
+                candidates.append(pos_info.get("liquidationPrice"))
+                candidates.append(pos_info.get("liquidationPx"))
+    except Exception:
+        pass
+
+    for raw in candidates:
+        if raw in (None, ""):
+            continue
+        try:
+            return float(str(raw).replace(",", "."))
+        except Exception:
+            continue
+    return None
+
+
+def close_if_breached_leveraged(dex, symbol, current_px: float, *, buffer_pct: float = LIQUIDATION_BUFFER_PCT) -> bool:
+    try:
+        pos = _get_position_for_vault(dex, symbol, None)
+    except Exception:
+        pos = None
+    if not pos:
+        return False
+
+    liq_px = _extract_liquidation_price(pos)
+    if liq_px is None or liq_px <= 0:
+        return False
+
+    try:
+        price_now = float(current_px)
+    except Exception:
+        return False
+
+    side = str(pos.get("side") or pos.get("positionSide") or "").lower()
+    if side not in ("long", "buy", "short", "sell"):
+        return False
+
+    if side in ("long", "buy"):
+        if price_now <= 0:
+            return False
+        breached = price_now <= liq_px * (1 + buffer_pct)
+        exit_side = "sell"
+    else:
+        breached = price_now >= liq_px * (1 - buffer_pct)
+        exit_side = "buy"
+
+    if not breached:
+        return False
+
+    try:
+        qty, _, _, side_confirm = _get_pos_size_and_leverage(dex, symbol)
+    except Exception:
+        qty, side_confirm = 0.0, None
+    if not side_confirm or qty <= 0:
+        return False
+
+    try:
+        # Buscar preço atual para ordem market
+        ticker = dex.fetch_ticker(symbol)
+        current_price = float(ticker.get("last", 0) or price_now)
+        
+        # Ajustar preço para garantir execução
+        if exit_side == "sell":
+            order_price = current_price * 0.995  # Ligeiramente abaixo para long
+        else:
+            order_price = current_price * 1.005  # Ligeiramente acima para short
+            
+        dex.create_order(symbol, "market", exit_side, float(qty), order_price, {"reduceOnly": True})
+        return True
+    except Exception:
+        return False
+
+
+def _compute_roi_from_price(entry: float, side: str, price: float, leverage: float = 1.0):
+    try:
+        entry_f = float(entry)
+        price_f = float(price)
+        lev_f = float(leverage)
+    except Exception:
+        return None
+    if entry_f <= 0 or price_f <= 0 or lev_f <= 0:
+        return None
+    s = (side or "").lower()
+    if s in ("long", "buy"):
+        return ((price_f - entry_f) / entry_f) * lev_f
+    if s in ("short", "sell"):
+        return ((entry_f - price_f) / entry_f) * lev_f
+    return None
+def close_if_unrealized_pnl_breaches(dex, symbol, *, threshold: float = -0.05) -> bool:
+    """
+    Fecha imediatamente se unrealizedPnl <= threshold (ex.: threshold=-0.05 para -5 cents).
+    Se unrealizedPnl não estiver disponível, não faz nada (fallbacks separados cuidam do resto).
+    """
+    print(f"[PNL_CHECK] Verificando {symbol} - threshold={threshold}")
+    try:
+        pos = _get_position_for_vault(dex, symbol, None)
+    except Exception as e:
+        print(f"[PNL_CHECK] Erro obtendo posição {symbol}: {type(e).__name__}: {e}")
+        pos = None
+    if not pos:
+        print(f"[PNL_CHECK] {symbol}: Sem posição")
+        return False
+    # Tenta extrair unrealizedPnl em vários formatos
+    pnl = None
+    try:
+        pnl = pos.get("unrealizedPnl")
+        if pnl is None:
+            pnl = (pos.get("info", {}) or {}).get("unrealizedPnl")
+        if pnl is None:
+            pnl = ((pos.get("info", {}) or {}).get("position", {}) or {}).get("unrealizedPnl")
+    except Exception:
+        pnl = None
+    
+    if pnl is None:
+        print(f"[PNL_CHECK] {symbol}: unrealizedPnl não encontrado")
+        return False
+        
+    try:
+        pnl_f = float(str(pnl).replace(",", "."))
+    except Exception as e:
+        print(f"[PNL_CHECK] {symbol}: Erro convertendo PnL {pnl}: {type(e).__name__}: {e}")
+        return False
+
+    try:
+        thresh_f = float(threshold)
+    except Exception:
+        thresh_f = -0.05
+    effective_threshold = min(thresh_f, -0.05)  # Garante que nunca seja mais permissivo que -0.05
+
+    print(f"[PNL_CHECK] {symbol}: PnL={pnl_f:.4f} vs threshold={effective_threshold:.4f}")
+
+    if pnl_f <= effective_threshold:
+        print(f"[PNL_CHECK] {symbol}: PnL BREACH! {pnl_f:.4f} <= {effective_threshold:.4f} - tentando fechar...")
+        # Fecha a posição inteira no lado de saída
+        try:
+            qty, _, _, side = _get_pos_size_and_leverage(dex, symbol)
+            if not side or qty <= 0:
+                print(f"[PNL_CHECK] {symbol}: Não pode fechar - side={side} qty={qty}")
+                return False
+            exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
+            print(f"[PNL_CHECK] {symbol}: Executando market {exit_side} qty={qty}")
+            
+            # Buscar preço atual para ordem market
+            ticker = dex.fetch_ticker(symbol)
+            current_price = float(ticker.get("last", 0) or 0)
+            if current_price <= 0:
+                print(f"[PNL_CHECK] {symbol}: Erro - preço atual inválido")
+                return False
+                
+            # Ajustar preço para garantir execução
+            if exit_side == "sell":
+                order_price = current_price * 0.995  # Ligeiramente abaixo para long
+            else:
+                order_price = current_price * 1.005  # Ligeiramente acima para short
+            
+            dex.create_order(symbol, "market", exit_side, float(qty), order_price, {"reduceOnly": True})
+            print(f"[PNL_CHECK] {symbol}: Posição fechada com sucesso por PnL!")
+            return True
+        except Exception as e:
+            print(f"[PNL_CHECK] {symbol}: Erro ao fechar posição: {type(e).__name__}: {e}")
+            return False
+    else:
+        print(f"[PNL_CHECK] {symbol}: PnL OK ({pnl_f:.4f} > {effective_threshold:.4f})")
+    return False
+
+
+def close_if_roi_breaches(dex, symbol, current_px: float, *, threshold: float = ROI_HARD_STOP) -> bool:
+    print(f"[ROI_CHECK] Verificando {symbol} - threshold={threshold}")
+    try:
+        pos = _get_position_for_vault(dex, symbol, None)
+    except Exception as e:
+        print(f"[ROI_CHECK] Erro obtendo posição {symbol}: {type(e).__name__}: {e}")
+        pos = None
+    if not pos:
+        print(f"[ROI_CHECK] {symbol}: Sem posição")
+        return False
+
+    # tenta ROI direto da posição
+    roi_value = None
+    try:
+        roi_value = pos.get("returnOnInvestment")
+        if roi_value is None:
+            roi_value = pos.get("roi")
+        if roi_value is None:
+            roi_value = (pos.get("info", {}) or {}).get("returnOnInvestment")
+        if roi_value is None:
+            roi_value = ((pos.get("info", {}) or {}).get("position", {}) or {}).get("returnOnInvestment")
+    except Exception:
+        roi_value = None
+
+    roi_f = None
+    if roi_value is not None:
+        try:
+            roi_str = str(roi_value).strip()
+            has_pct = roi_str.endswith("%")
+            if has_pct:
+                roi_str = roi_str[:-1]
+            roi_f = float(roi_str.replace(",", "."))
+            if has_pct:
+                roi_f /= 100.0
+        except Exception:
+            roi_f = None
+
+    try:
+        qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol)
+    except Exception:
+        qty, lev, entry, side = 0.0, 1.0, None, None
+
+    if roi_f is None:
+        print(f"[ROI_CHECK] {symbol}: ROI não encontrado na posição, calculando...")
+        if not side or qty <= 0 or not entry:
+            print(f"[ROI_CHECK] {symbol}: Dados insuficientes - side={side} qty={qty} entry={entry}")
+            return False
+        px_now = current_px
+        if px_now is None:
+            try:
+                px_now = float(dex.fetch_ticker(symbol).get("last"))
+            except Exception:
+                px_now = None
+        if px_now is None:
+            print(f"[ROI_CHECK] {symbol}: Não conseguiu obter preço atual")
+            return False
+        roi_f = _compute_roi_from_price(entry, side, px_now, leverage=lev)
+        print(f"[ROI_CHECK] {symbol}: ROI calculado={roi_f:.4f} (entry={entry} current={px_now} side={side} lev={lev})")
+
+    if roi_f is None:
+        print(f"[ROI_CHECK] {symbol}: ROI ainda None após cálculo")
+        return False
+
+    try:
+        thresh_f = float(threshold)
+    except Exception:
+        thresh_f = ROI_HARD_STOP
+    effective_threshold = max(thresh_f, ROI_HARD_STOP)
+
+    print(f"[ROI_CHECK] {symbol}: ROI={roi_f:.4f} vs threshold={effective_threshold:.4f}")
+    
+    if roi_f > effective_threshold:
+        print(f"[ROI_CHECK] {symbol}: ROI OK ({roi_f:.4f} > {effective_threshold:.4f})")
+        return False
+
+    print(f"[ROI_CHECK] {symbol}: ROI BREACH! {roi_f:.4f} <= {effective_threshold:.4f} - tentando fechar...")
+    try:
+        if not side or qty <= 0:
+            print(f"[ROI_CHECK] {symbol}: Não pode fechar - side={side} qty={qty}")
+            return False
+        exit_side = "sell" if str(side).lower() in ("long", "buy") else "buy"
+        print(f"[ROI_CHECK] {symbol}: Executando market {exit_side} qty={qty}")
+        
+        # Buscar preço atual para ordem market (usar px_now se disponível)
+        current_price = px_now
+        if current_price is None or current_price <= 0:
+            ticker = dex.fetch_ticker(symbol)
+            current_price = float(ticker.get("last", 0) or 0)
+        if current_price <= 0:
+            print(f"[ROI_CHECK] {symbol}: Erro - preço atual inválido")
+            return False
+            
+        # Ajustar preço para garantir execução
+        if exit_side == "sell":
+            order_price = current_price * 0.995  # Ligeiramente abaixo para long
+        else:
+            order_price = current_price * 1.005  # Ligeiramente acima para short
+        
+        dex.create_order(symbol, "market", exit_side, float(qty), order_price, {"reduceOnly": True})
+        print(f"[ROI_CHECK] {symbol}: Posição fechada com sucesso!")
+        return True
+    except Exception as e:
+        print(f"[ROI_CHECK] {symbol}: Erro ao fechar posição: {type(e).__name__}: {e}")
+        return False
+
+#codigo com [all] trades=70 win_rate=35.71% PF=1.378 maxDD=-6.593% Sharpe=0.872 
+
+print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
+
+
+def _log_global(section: str, message: str, level: str = "INFO") -> None:
+    """Formato padrão para logs fora das classes."""
+    print(f"[{level}] [{section}] {message}", flush=True)
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
+
+from typing import TYPE_CHECKING, Optional, Dict
+if TYPE_CHECKING:
+    import requests  # type: ignore
+    import pandas as pd  # type: ignore
+    import numpy as np  # type: ignore
+    from requests.adapters import HTTPAdapter  # type: ignore
+    from urllib3.util.retry import Retry  # type: ignore
+else:
+    try:
+        import requests  # type: ignore
+    except Exception:
+        requests = None  # type: ignore
+    try:
+        import pandas as pd  # type: ignore
+    except Exception:
+        pd = None  # type: ignore
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        np = None  # type: ignore
+    try:
+        from requests.adapters import HTTPAdapter  # type: ignore
+        from urllib3.util.retry import Retry  # type: ignore
+    except Exception:
+        HTTPAdapter = object  # type: ignore
+        class Retry:  # type: ignore
+            def __init__(self, *args, **kwargs): pass
+
 import warnings as _warnings
+# ===== Hyperliquid accounts / vault / signer =====
+HL_MAIN_ACCOUNT = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
+HL_API_WALLET = "0x95cf910f947a5be26bc7c18f8b8048185126b4e9"
+
 _warnings.filterwarnings(
     "ignore",
     message=r".*urllib3 v2 only supports OpenSSL 1.1.1\+.*",
@@ -51,955 +503,46 @@ _warnings.filterwarnings(
     module=r"urllib3.*",
 )
 
-import requests
-import pandas as pd
-import numpy as np
+def compute_tp_sl(entry_px: float, side: str, *, leverage: float = 1.0,
+                  trailing_margin: float = 0.10, current_px: Optional[float] = None) -> Dict[str, Optional[float]]:
+    """
+    Calcula stop-loss percentual padrão (5%/leverage) e trailing-stop mantendo 10% do ROI alavancado.
+    """
+    entry = float(entry_px)
+    if entry <= 0:
+        raise ValueError("entry_px deve ser positivo")
+    lev = max(float(leverage or 1.0), 1.0)
+    price_now = float(current_px) if current_px not in (None, 0) else entry
+    margin = max(float(trailing_margin or 0.0), 0.0)
+
+    side_norm = (side or "").lower()
+    if side_norm in ("long", "buy"):
+        sl = entry * (1.0 - 0.05 / lev)
+        roi = (price_now / entry) - 1.0
+        levered_roi = roi * lev
+        adjusted = levered_roi - margin
+        factor = (adjusted / lev) + 1.0
+        trail = price_now * factor
+        trail = max(0.0, min(trail, price_now))
+        if trail <= sl:
+            trail = None
+        return {"trail": float(trail) if trail is not None else None, "sl": float(sl)}
+
+    sl = entry * (1.0 + 0.05 / lev)
+    roi = (entry / price_now) - 1.0 if price_now > 0 else 0.0
+    levered_roi = roi * lev
+    adjusted = levered_roi - margin
+    factor = (adjusted / lev) + 1.0
+    trail = price_now * factor
+    trail = max(price_now, trail)
+    if trail >= sl:
+        trail = None
+    return {"trail": float(trail) if trail is not None else None, "sl": float(sl)}
+
 import math
 from datetime import datetime, timedelta, timezone
 import os
 import sys  # Adicione esta linha no topo do arquivo
-import sqlite3
-import json
-import time as time_module
-import threading
-import hashlib
-from pathlib import Path
-import pytz
-
-# =============================================================================
-# LEARNER SYSTEM - SQLite + Discord Reporting + Feature Collection
-# =============================================================================
-
-class TradingLearner:
-    """
-    Sistema de aprendizado que coleta métricas na entrada, calcula P(stop) 
-    e reporta perfis problemáticos ao Discord
-    """
-    
-    def __init__(self):
-        # Configurações via environment
-        self.db_path = os.getenv("LEARN_DB_PATH", "/var/data/hl_learn.db")
-        # Usar o mesmo webhook das notificações de entrada/saída
-        self.discord_webhook = os.getenv("DISCORD_WEBHOOK", 
-            "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM")
-        self.observe_only = os.getenv("OBSERVE_ONLY", "true").lower() == "true"
-        
-        # Thresholds - ajustados para facilitar detecção
-        self.min_n = int(os.getenv("MIN_N", "5"))  # Reduzido para facilitar teste
-        self.p_thresh_block = float(os.getenv("P_THRESH_BLOCK", "0.90"))
-        self.min_n_watch = int(os.getenv("MIN_N_WATCH", "3"))  # Reduzido para facilitar relatórios
-        self.p_thresh_watch = float(os.getenv("P_THRESH_WATCH", "0.60"))  # Reduzido para capturar mais perfis
-        self.max_watch_rows = int(os.getenv("MAX_WATCH_ROWS", "15"))
-        
-        # Reporting - configuração otimizada para envio frequente
-        self.report_interval_trades = os.getenv("REPORT_INTERVAL_TRADES")
-        if self.report_interval_trades:
-            self.report_interval_trades = int(self.report_interval_trades)
-        else:
-            # Default: enviar relatório a cada 5 trades para teste
-            self.report_interval_trades = 5
-            
-        self.report_cron_daily = os.getenv("REPORT_CRON_DAILY")  # "23:30"
-        
-        # Timezone BRT
-        self.brt_tz = pytz.timezone('America/Sao_Paulo')
-        
-        # Contadores
-        self.trade_counter = 0
-        self.last_report_trade = 0
-        self.lock = threading.Lock()
-        
-        # Setup database
-        self._setup_database()
-        
-    def _setup_database(self):
-        """Inicializa banco SQLite com WAL mode e schema"""
-        try:
-            # Criar diretório se não existir
-            db_dir = Path(self.db_path).parent
-            db_dir.mkdir(parents=True, exist_ok=True)
-            
-            self.conn = sqlite3.connect(
-                self.db_path,
-                check_same_thread=False,
-                timeout=10.0
-            )
-            
-            # Configurar WAL mode e otimizações
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            self.conn.execute("PRAGMA synchronous=NORMAL")
-            self.conn.execute("PRAGMA cache_size=-16000")  # 16MB cache
-            self.conn.execute("PRAGMA foreign_keys=ON")
-            
-            # Criar tabelas
-            self._create_tables()
-            
-            _log_global("LEARNER", f"Database initialized at {self.db_path}", "INFO")
-            
-        except Exception as e:
-            # Fallback para /tmp com warning
-            _log_global("LEARNER", f"Failed to create DB at {self.db_path}: {e}", "WARN")
-            fallback_path = "/tmp/hl_learn_fallback.db"
-            _log_global("LEARNER", f"Using fallback path: {fallback_path}", "WARN")
-            
-            self.conn = sqlite3.connect(fallback_path, check_same_thread=False)
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            self._create_tables()
-            
-    def _create_tables(self):
-        """Cria schema do banco"""
-        # Tabela de metadados
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS meta (
-                schema_version INTEGER PRIMARY KEY,
-                updated REAL NOT NULL
-            )
-        """)
-        
-        # Tabela de estatísticas por perfil
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS stats (
-                key TEXT PRIMARY KEY,
-                features_json TEXT NOT NULL,
-                n INTEGER NOT NULL DEFAULT 0,
-                stopped INTEGER NOT NULL DEFAULT 0,
-                updated REAL NOT NULL
-            )
-        """)
-        
-        # Tabela de eventos individuais
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS events (
-                id TEXT PRIMARY KEY,
-                ts REAL NOT NULL,
-                symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                price REAL,
-                features_raw_json TEXT,
-                label TEXT NOT NULL
-            )
-        """)
-        
-        # Tabela de lock de relatórios
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS reports_lock (
-                period_key TEXT PRIMARY KEY,
-                created REAL NOT NULL
-            )
-        """)
-        
-        # Índices
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_symbol ON events(symbol)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_stats_updated ON stats(updated)")
-        
-        # Inserir versão do schema
-        self.conn.execute("""
-            INSERT OR IGNORE INTO meta (schema_version, updated) 
-            VALUES (1, ?)
-        """, (time_module.time(),))
-        
-        self.conn.commit()
-        
-    def _retry_db_operation(self, operation, *args, max_retries=3):
-        """Executa operação de BD com retry em caso de SQLITE_BUSY"""
-        for attempt in range(max_retries):
-            try:
-                return operation(*args)
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    wait_time = 0.1 * (2 ** attempt)  # Exponential backoff
-                    time_module.sleep(wait_time)
-                    continue
-                raise
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    _log_global("LEARNER", f"DB operation failed after {max_retries} attempts: {e}", "ERROR")
-                raise
-                
-    def get_current_brt_time(self):
-        """Retorna datetime atual em BRT"""
-        return datetime.now(self.brt_tz)
-        
-    def extract_features_raw(self, symbol: str, side: str, df: pd.DataFrame, price: float) -> dict:
-        """Extrai features brutas no momento da entrada"""
-        if df.empty or len(df) < 252:
-            return {}
-            
-        try:
-            current_time = self.get_current_brt_time()
-            last_row = df.iloc[-1]
-            
-            # (A) Preço & Volatilidade
-            atr_series = df.get('atr', pd.Series())
-            atr_pct = (atr_series.iloc[-1] / price * 100) if not atr_series.empty else None
-            
-            atr_252_percentile = None
-            if not atr_series.empty and len(atr_series) >= 252:
-                atr_252_percentile = (atr_series.iloc[-252:] <= atr_series.iloc[-1]).mean() * 100
-                
-            # (B) Tendência & Momentum  
-            ema7 = df.get('ema7', pd.Series())
-            ema21 = df.get('ema21', pd.Series())
-            
-            slope_ema7 = None
-            slope_ema21 = None
-            if not ema7.empty and len(ema7) >= 7:
-                slope_ema7 = (ema7.iloc[-1] - ema7.iloc[-7]) / ema7.iloc[-7] * 100
-            if not ema21.empty and len(ema21) >= 21:
-                slope_ema21 = (ema21.iloc[-1] - ema21.iloc[-21]) / ema21.iloc[-21] * 100
-                
-            rsi = df.get('rsi', pd.Series()).iloc[-1] if 'rsi' in df.columns else None
-            
-            # (C) Volume & Liquidez
-            volume = df.get('volume', pd.Series())
-            vol_ratio = None
-            vol_percentile_252 = None
-            
-            if not volume.empty and len(volume) >= 2:
-                vol_ma_20 = volume.rolling(20).mean()
-                if not vol_ma_20.empty:
-                    vol_ratio = volume.iloc[-1] / vol_ma_20.iloc[-1]
-                    
-                if len(volume) >= 252:
-                    vol_percentile_252 = (volume.iloc[-252:] <= volume.iloc[-1]).mean() * 100
-                    
-            # (D) Candle / Microestrutura
-            candle_body_pct = None
-            if 'open' in df.columns and 'close' in df.columns and 'high' in df.columns and 'low' in df.columns:
-                high_low = last_row['high'] - last_row['low']
-                body = abs(last_row['close'] - last_row['open'])
-                if high_low > 0:
-                    candle_body_pct = (body / high_low) * 100
-                    
-            # (E) Níveis & Estrutura
-            high_20 = df['high'].rolling(20).max()
-            low_20 = df['low'].rolling(20).min()
-            
-            dist_hhv20_atr = None
-            dist_llv20_atr = None
-            
-            if not high_20.empty and not low_20.empty and atr_pct is not None:
-                current_atr = atr_series.iloc[-1] if not atr_series.empty else price * 0.02
-                dist_hhv20_atr = (high_20.iloc[-1] - price) / current_atr
-                dist_llv20_atr = (price - low_20.iloc[-1]) / current_atr
-                
-            # (F) Regime & Calendário
-            hour_brt = current_time.hour
-            dow = current_time.weekday()  # 0=Monday, 6=Sunday
-            
-            session_flag = self._determine_session(hour_brt)
-            vol_regime = self._determine_vol_regime(atr_pct) if atr_pct else "UNKNOWN"
-            
-            # (G) Risco & Execução 
-            leverage_eff = float(os.getenv("LEVERAGE", "5"))
-            
-            # Montar features_raw
-            features_raw = {
-                # Metadata
-                "symbol": symbol,
-                "side": side,
-                "price": price,
-                "timestamp": current_time.timestamp(),
-                
-                # (A) Preço & Volatilidade
-                "atr_pct": atr_pct,
-                "atr_percentile_252": atr_252_percentile,
-                
-                # (B) Tendência & Momentum
-                "slope_ema7": slope_ema7,
-                "slope_ema21": slope_ema21,
-                "rsi": rsi,
-                
-                # (C) Volume & Liquidez
-                "vol_ratio": vol_ratio,
-                "vol_percentile_252": vol_percentile_252,
-                
-                # (D) Candle
-                "candle_body_pct": candle_body_pct,
-                
-                # (E) Níveis
-                "dist_hhv20_atr": dist_hhv20_atr,
-                "dist_llv20_atr": dist_llv20_atr,
-                
-                # (F) Regime
-                "hour_brt": hour_brt,
-                "dow": dow,
-                "session_flag": session_flag,
-                "vol_regime": vol_regime,
-                
-                # (G) Risco
-                "leverage_eff": leverage_eff
-            }
-            
-            return features_raw
-            
-        except Exception as e:
-            _log_global("LEARNER", f"Error extracting features: {e}", "WARN")
-            return {
-                "symbol": symbol,
-                "side": side,
-                "price": price,
-                "timestamp": self.get_current_brt_time().timestamp(),
-                "error": str(e)
-            }
-            
-    def _determine_session(self, hour_brt: int) -> str:
-        """Determina sessão de trading baseada no horário BRT"""
-        if 21 <= hour_brt or hour_brt < 2:  # 21:00-02:00 BRT
-            return "ASIA"
-        elif 2 <= hour_brt < 8:  # 02:00-08:00 BRT  
-            return "EU_OPEN"
-        elif 8 <= hour_brt < 10:  # 08:00-10:00 BRT
-            return "US_OPEN"
-        elif 10 <= hour_brt < 14:  # 10:00-14:00 BRT
-            return "US_LUNCH"
-        elif 14 <= hour_brt < 18:  # 14:00-18:00 BRT
-            return "US_CLOSE"
-        else:
-            return "OTHER"
-            
-    def _determine_vol_regime(self, atr_pct: float) -> str:
-        """Classifica volatilidade em tercis (LOW/MID/HIGH)"""
-        if atr_pct is None:
-            return "UNKNOWN"
-        # Thresholds aproximados - ajustar conforme histórico
-        if atr_pct < 2.0:
-            return "LOW"
-        elif atr_pct < 4.0:
-            return "MID"
-        else:
-            return "HIGH"
-            
-    def bin_features(self, features_raw: dict) -> dict:
-        """Converte features brutas em versão binada para agregação"""
-        try:
-            binned = {}
-            
-            # Sempre incluir symbol e side
-            binned["symbol"] = features_raw.get("symbol")
-            binned["side"] = features_raw.get("side")
-            
-            # Binning numérico
-            atr_pct = features_raw.get("atr_pct")
-            if atr_pct is not None:
-                binned["atr_pct_bin"] = round(atr_pct, 1)  # 0.1% precision
-                
-            vol_ratio = features_raw.get("vol_ratio")
-            if vol_ratio is not None:
-                binned["vol_ratio_bin"] = round(vol_ratio * 4) / 4  # 0.25 steps
-                
-            rsi = features_raw.get("rsi")
-            if rsi is not None:
-                binned["rsi_bin"] = int(rsi // 5) * 5  # múltiplos de 5
-                
-            # Percentis em blocos de 10
-            for field in ["atr_percentile_252", "vol_percentile_252"]:
-                val = features_raw.get(field)
-                if val is not None:
-                    binned[f"{field}_bin"] = int(val // 10) * 10
-                    
-            # Slopes com precisão de 0.1%
-            for field in ["slope_ema7", "slope_ema21"]:
-                val = features_raw.get(field) 
-                if val is not None:
-                    binned[f"{field}_bin"] = round(val, 1)
-                    
-            # Distâncias ATR
-            for field in ["dist_hhv20_atr", "dist_llv20_atr"]:
-                val = features_raw.get(field)
-                if val is not None:
-                    binned[f"{field}_bin"] = round(val * 2) / 2  # 0.5 steps
-                    
-            # Campos categóricos diretos
-            for field in ["hour_brt", "dow", "session_flag", "vol_regime"]:
-                val = features_raw.get(field)
-                if val is not None:
-                    binned[field] = val
-                    
-            # Core bins para backoff
-            binned["core_bins"] = {
-                "symbol": binned.get("symbol"),
-                "side": binned.get("side"),
-                "atr_regime": features_raw.get("vol_regime", "UNKNOWN"),
-                "vol_ratio_bin": binned.get("vol_ratio_bin"),
-                "hour_brt": binned.get("hour_brt"),
-                "session_flag": binned.get("session_flag")
-            }
-            
-            return binned
-            
-        except Exception as e:
-            _log_global("LEARNER", f"Error binning features: {e}", "WARN")
-            return {
-                "symbol": features_raw.get("symbol"),
-                "side": features_raw.get("side"),
-                "error": str(e)
-            }
-            
-    def generate_profile_key(self, features_binned: dict) -> str:
-        """Gera chave única para o perfil baseado em features binadas"""
-        # Ordenar chaves para consistência
-        key_parts = []
-        for k in sorted(features_binned.keys()):
-            if k != "core_bins" and features_binned[k] is not None:
-                key_parts.append(f"{k}:{features_binned[k]}")
-        
-        key_str = "|".join(key_parts)
-        # Usar hash para chaves muito longas
-        if len(key_str) > 200:
-            return hashlib.md5(key_str.encode()).hexdigest()
-        return key_str
-        
-    def get_stop_probability_with_backoff(self, features_binned: dict) -> tuple:
-        """
-        Calcula P(stop) com backoff hierárquico.
-        Retorna (p_stop, n_samples) ou (None, 0) se não encontrar dados suficientes
-        """
-        try:
-            # Tentar chave completa primeiro
-            full_key = self.generate_profile_key(features_binned)
-            
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (full_key,))
-            row = cursor.fetchone()
-            
-            if row and row[0] >= self.min_n:
-                n, stopped = row
-                p_stop = (stopped + 1) / (n + 2)  # Suavização de Laplace
-                return p_stop, n
-                
-            # Backoff para core bins se não tiver amostras suficientes
-            core_bins = features_binned.get("core_bins", {})
-            if core_bins:
-                core_key = self.generate_profile_key(core_bins)
-                cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (core_key,))
-                row = cursor.fetchone()
-                
-                if row and row[0] >= self.min_n:
-                    n, stopped = row
-                    p_stop = (stopped + 1) / (n + 2)
-                    return p_stop, n
-                    
-            # Backoff final apenas symbol + side
-            minimal_key = f"symbol:{features_binned.get('symbol')}|side:{features_binned.get('side')}"
-            cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (minimal_key,))
-            row = cursor.fetchone()
-            
-            if row and row[0] >= self.min_n:
-                n, stopped = row  
-                p_stop = (stopped + 1) / (n + 2)
-                return p_stop, n
-                
-            return None, 0
-            
-        except Exception as e:
-            _log_global("LEARNER", f"Error getting stop probability: {e}", "WARN")
-            return None, 0
-            
-    def record_entry(self, symbol: str, side: str, price: float, df: pd.DataFrame) -> dict:
-        """
-        Registra entrada no sistema de aprendizado.
-        Retorna contexto para usar no fechamento.
-        """
-        try:
-            # Extrair features
-            features_raw = self.extract_features_raw(symbol, side, df, price)
-            features_binned = self.bin_features(features_raw)
-            
-            # Gerar ID único para este evento
-            event_id = f"{symbol}_{side}_{int(time_module.time()*1000)}_{hash(str(features_raw)) % 10000}"
-            
-            # Registrar evento de abertura
-            def _insert_event():
-                cursor = self.conn.cursor()
-                cursor.execute("""
-                    INSERT OR REPLACE INTO events 
-                    (id, ts, symbol, side, price, features_raw_json, label)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    event_id,
-                    time_module.time(),
-                    symbol,
-                    side,
-                    price,
-                    json.dumps(features_raw, default=str),
-                    "open"
-                ))
-                self.conn.commit()
-                
-            self._retry_db_operation(_insert_event)
-            
-            # Calcular P(stop) informativo
-            p_stop, n_samples = self.get_stop_probability_with_backoff(features_binned)
-            
-            # Log observacional
-            core_bins_summary = {k: v for k, v in features_binned.get("core_bins", {}).items() 
-                               if v is not None}
-            
-            if self.observe_only:
-                _log_global("LEARNER", 
-                    f"observe_only | {symbol} {side} | Pstop={p_stop:.3f if p_stop else 'N/A'}, "
-                    f"n={n_samples}, core_bins={core_bins_summary}", "INFO")
-            
-            # Incrementar contador de trades
-            with self.lock:
-                self.trade_counter += 1
-                
-            # Verificar se deve enviar relatório
-            self._check_and_send_report()
-            
-            # Retornar contexto para fechamento
-            return {
-                "event_id": event_id,
-                "entry_price": price,
-                "features_raw": features_raw,
-                "features_binned": features_binned,
-                "p_stop": p_stop,
-                "n_samples": n_samples
-            }
-            
-        except Exception as e:
-            _log_global("LEARNER", f"Error recording entry: {e}", "ERROR")
-            return {}
-            
-    def record_close(self, context: dict, close_price: float, close_kind: str = "unknown"):
-        """Registra fechamento e atualiza estatísticas"""
-        if not context:
-            return
-            
-        try:
-            event_id = context.get("event_id")
-            entry_price = context.get("entry_price")
-            features_binned = context.get("features_binned", {})
-            
-            if not event_id or not entry_price:
-                return
-                
-            # Determinar se foi STOP
-            is_stop = self._determine_if_stop(entry_price, close_price, close_kind, features_binned)
-            
-            label = "close_STOP" if is_stop else "close_NONSTOP"
-            
-            # Registrar evento de fechamento
-            def _insert_close():
-                cursor = self.conn.cursor()
-                cursor.execute("""
-                    INSERT OR REPLACE INTO events 
-                    (id, ts, symbol, side, price, features_raw_json, label)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    f"{event_id}_close",
-                    time_module.time(),
-                    features_binned.get("symbol", ""),
-                    features_binned.get("side", ""),
-                    close_price,
-                    json.dumps(context.get("features_raw", {}), default=str),
-                    label
-                ))
-                self.conn.commit()
-                
-            self._retry_db_operation(_insert_close)
-            
-            # Atualizar estatísticas
-            self._update_stats(features_binned, is_stop)
-            
-            # Log
-            pnl_pct = ((close_price - entry_price) / entry_price * 100) if entry_price else 0
-            core_bins_summary = {k: v for k, v in features_binned.get("core_bins", {}).items() 
-                               if v is not None}
-            
-            _log_global("LEARNER", 
-                f"close | label={label} | pnl={pnl_pct:.2f}% | core_bins={core_bins_summary}", "INFO")
-                
-        except Exception as e:
-            _log_global("LEARNER", f"Error recording close: {e}", "ERROR")
-            
-    def _determine_if_stop(self, entry_price: float, close_price: float, close_kind: str, features_binned: dict) -> bool:
-        """Determina se o fechamento foi por stop loss"""
-        try:
-            # Se o close_kind indica stop externo
-            if close_kind in ["close_external", "stop_loss"]:
-                return True
-                
-            # Calcular se bateu no nível de stop baseado na configuração
-            side = features_binned.get("side", "").lower()
-            leverage = features_binned.get("leverage_eff", 5.0)
-            stop_loss_pct = float(os.getenv("STOP_LOSS_CAPITAL_PCT", "0.05")) / leverage
-            
-            if side == "buy":
-                stop_level = entry_price * (1.0 - stop_loss_pct)
-                return close_price <= stop_level
-            elif side == "sell":
-                stop_level = entry_price * (1.0 + stop_loss_pct)
-                return close_price >= stop_level
-                
-            return False
-            
-        except Exception as e:
-            _log_global("LEARNER", f"Error determining stop: {e}", "WARN")
-            return False
-            
-    def _update_stats(self, features_binned: dict, is_stop: bool):
-        """Atualiza estatísticas para diferentes níveis de granularidade"""
-        try:
-            # Gerar chaves para diferentes níveis
-            keys_to_update = []
-            
-            # 1. Chave completa
-            full_key = self.generate_profile_key(features_binned)
-            keys_to_update.append(full_key)
-            
-            # 2. Core bins
-            core_bins = features_binned.get("core_bins", {})
-            if core_bins:
-                core_key = self.generate_profile_key(core_bins)
-                keys_to_update.append(core_key)
-                
-            # 3. Minimal (symbol + side)
-            symbol = features_binned.get("symbol")
-            side = features_binned.get("side")
-            if symbol and side:
-                minimal_key = f"symbol:{symbol}|side:{side}"
-                keys_to_update.append(minimal_key)
-                
-            # Atualizar todas as chaves
-            def _update_all_keys():
-                cursor = self.conn.cursor()
-                current_time = time_module.time()
-                
-                for key in keys_to_update:
-                    # Upsert statistics
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO stats (key, features_json, n, stopped, updated)
-                        VALUES (
-                            ?, 
-                            ?, 
-                            COALESCE((SELECT n FROM stats WHERE key = ?), 0) + 1,
-                            COALESCE((SELECT stopped FROM stats WHERE key = ?), 0) + ?,
-                            ?
-                        )
-                    """, (
-                        key,
-                        json.dumps(features_binned, default=str),
-                        key,
-                        key,
-                        1 if is_stop else 0,
-                        current_time
-                    ))
-                    
-                self.conn.commit()
-                
-            self._retry_db_operation(_update_all_keys)
-            
-        except Exception as e:
-            _log_global("LEARNER", f"Error updating stats: {e}", "ERROR")
-            
-    def _check_and_send_report(self):
-        """Verifica se deve enviar relatório e envia se necessário"""
-        try:
-            should_report = False
-            
-            # Check por intervalo de trades
-            if self.report_interval_trades:
-                with self.lock:
-                    if (self.trade_counter - self.last_report_trade) >= self.report_interval_trades:
-                        should_report = True
-                        
-            # Check por horário (cron daily)
-            elif self.report_cron_daily:
-                current_time = self.get_current_brt_time()
-                target_hour, target_min = map(int, self.report_cron_daily.split(':'))
-                
-                # Janela de ±2 minutos
-                if (current_time.hour == target_hour and 
-                    abs(current_time.minute - target_min) <= 2):
-                    should_report = True
-                    
-            if should_report:
-                self._send_discord_report()
-                
-        except Exception as e:
-            _log_global("LEARNER", f"Error checking report trigger: {e}", "WARN")
-            
-    def _send_discord_report(self):
-        """Envia relatório para Discord com mutex anti-duplicata"""
-        if not self.discord_webhook:
-            _log_global("LEARNER", "Discord webhook not configured, skipping report", "DEBUG")
-            return
-            
-        try:
-            # Definir period_key
-            if self.report_interval_trades:
-                period_key = f"trades_{self.trade_counter // self.report_interval_trades}"
-            else:
-                period_key = self.get_current_brt_time().strftime("%Y-%m-%d")
-                
-            # Tentar adquirir lock
-            def _try_acquire_lock():
-                cursor = self.conn.cursor()
-                cursor.execute("""
-                    INSERT OR IGNORE INTO reports_lock (period_key, created)
-                    VALUES (?, ?)
-                """, (period_key, time_module.time()))
-                
-                affected = cursor.rowcount
-                self.conn.commit()
-                return affected > 0
-                
-            lock_acquired = self._retry_db_operation(_try_acquire_lock)
-            
-            if not lock_acquired:
-                _log_global("LEARNER", f"Report lock already exists for period {period_key}", "DEBUG")
-                return
-                
-            # Gerar e enviar relatório
-            report_data = self._generate_report_data()
-            self._send_to_discord(report_data, period_key)
-            
-            # Atualizar contador de último relatório
-            with self.lock:
-                self.last_report_trade = self.trade_counter
-                
-        except Exception as e:
-            _log_global("LEARNER", f"Error sending Discord report: {e}", "ERROR")
-            
-    def _generate_report_data(self) -> dict:
-        """Gera dados do relatório watchlist"""
-        try:
-            cursor = self.conn.cursor()
-            
-            # Buscar perfis problemáticos
-            cursor.execute("""
-                SELECT key, features_json, n, stopped, 
-                       (CAST(stopped AS REAL) + 1) / (CAST(n AS REAL) + 2) as p_stop
-                FROM stats 
-                WHERE n >= ? AND (CAST(stopped AS REAL) / CAST(n AS REAL)) >= ?
-                ORDER BY p_stop DESC, n DESC
-                LIMIT ?
-            """, (self.min_n_watch, self.p_thresh_watch, self.max_watch_rows))
-            
-            problem_profiles = cursor.fetchall()
-            
-            # KPIs do período
-            cursor.execute("SELECT COUNT(*) FROM events WHERE label = 'open'")
-            total_entries = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT COUNT(*) FROM events WHERE label = 'close_STOP'")
-            total_stops = cursor.fetchone()[0]
-            
-            stop_rate = (total_stops / total_entries * 100) if total_entries > 0 else 0
-            
-            # Top 5 símbolos por perda
-            cursor.execute("""
-                SELECT symbol, COUNT(*) as stop_count
-                FROM events 
-                WHERE label = 'close_STOP'
-                GROUP BY symbol
-                ORDER BY stop_count DESC
-                LIMIT 5
-            """)
-            top_losers = cursor.fetchall()
-            
-            return {
-                "problem_profiles": problem_profiles,
-                "total_entries": total_entries,
-                "total_stops": total_stops,
-                "stop_rate": stop_rate,
-                "top_losers": top_losers,
-                "timestamp": self.get_current_brt_time()
-            }
-            
-        except Exception as e:
-            _log_global("LEARNER", f"Error generating report data: {e}", "ERROR")
-            return {}
-            
-    def _send_to_discord(self, report_data: dict, period_key: str):
-        """Envia dados para Discord via webhook"""
-        try:
-            if not report_data:
-                return
-                
-            # Construir mensagem
-            message = self._build_discord_message(report_data, period_key)
-            
-            # Enviar via webhook
-            payload = {"content": message}
-            
-            response = requests.post(
-                self.discord_webhook,
-                json=payload,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                _log_global("LEARNER", 
-                    f"discord_report sent | rows={len(report_data.get('problem_profiles', []))} | "
-                    f"entries={report_data.get('total_entries', 0)} | "
-                    f"stop_rate={report_data.get('stop_rate', 0):.1f}%", "INFO")
-            else:
-                _log_global("LEARNER", f"Discord webhook failed: {response.status_code}", "WARN")
-                
-        except Exception as e:
-            _log_global("LEARNER", f"Error sending to Discord: {e}", "WARN")
-            
-    def _build_discord_message(self, data: dict, period_key: str) -> str:
-        """Constrói mensagem formatada para Discord"""
-        try:
-            timestamp = data.get("timestamp", self.get_current_brt_time())
-            
-            message = f"🚨 **Trading Learner - Perfis de Alto Risco**\n"
-            message += f"📅 {timestamp.strftime('%d/%m/%Y %H:%M BRT')}\n\n"
-            
-            # KPIs
-            message += f"📊 **Estatísticas do Período:**\n"
-            message += f"• **Total de Entradas**: {data.get('total_entries', 0)}\n"
-            message += f"• **Total de Stops**: {data.get('total_stops', 0)}\n"
-            message += f"• **Taxa de Stop**: {data.get('stop_rate', 0):.1f}%\n\n"
-            
-            # Top losers
-            top_losers = data.get('top_losers', [])
-            if top_losers:
-                message += f"💸 **Símbolos com Mais Perdas:**\n"
-                for symbol, count in top_losers[:5]:
-                    message += f"• **{symbol}**: {count} stops\n"
-                message += "\n"
-            
-            # Problem profiles - seção principal
-            profiles = data.get('problem_profiles', [])
-            if profiles:
-                message += f"⚠️ **PERFIS DE ALTO RISCO ({len(profiles)}):**\n"
-                message += f"*Configurações com P(stop) ≥ {self.p_thresh_watch:.0%} e amostra ≥ {self.min_n_watch}*\n\n"
-                
-                for i, (key, features_json, n, stopped, p_stop) in enumerate(profiles[:10]):
-                    try:
-                        features = json.loads(features_json) if features_json else {}
-                        symbol = features.get('symbol', 'UNKNOWN')
-                        side = features.get('side', '?').upper()
-                        
-                        # Extrair informações do core_bins para contexto
-                        core_bins = features.get('core_bins', {})
-                        session = core_bins.get('session_flag', 'N/A')
-                        vol_regime = core_bins.get('vol_regime', 'N/A')
-                        hour = core_bins.get('hour_brt', 'N/A')
-                        
-                        # Calcular taxa de stop
-                        stop_rate_profile = (stopped / n * 100) if n > 0 else 0
-                        
-                        message += f"**{i+1}.** `{symbol}` **{side}** - {stop_rate_profile:.1f}% stops\n"
-                        message += f"    • Amostra: {n} trades ({stopped} stops)\n"
-                        message += f"    • P(stop): {p_stop:.1%}\n"
-                        message += f"    • Contexto: {session} | Vol: {vol_regime} | Hora: {hour}\n\n"
-                        
-                    except Exception:
-                        message += f"**{i+1}.** Erro ao processar perfil\n\n"
-                        
-                # Resumo final
-                total_risky_trades = sum(n for _, _, n, _, _ in profiles)
-                total_risky_stops = sum(stopped for _, _, _, stopped, _ in profiles)
-                avg_risk_rate = (total_risky_stops / total_risky_trades * 100) if total_risky_trades > 0 else 0
-                
-                message += f"📈 **Resumo dos Perfis de Risco:**\n"
-                message += f"• Trades analisados: {total_risky_trades}\n"
-                message += f"• Stops nos perfis: {total_risky_stops}\n"
-                message += f"• Taxa média: {avg_risk_rate:.1f}%\n"
-                
-            else:
-                message += "✅ **Nenhum perfil de alto risco detectado!**\n"
-                message += f"*Todos os perfis têm P(stop) < {self.p_thresh_watch:.0%}*\n"
-                
-            # Footer
-            message += f"\n🤖 *Relatório automático do sistema de aprendizado*"
-                
-            # Truncar se muito longo
-            if len(message) > 1900:
-                message = message[:1850] + "\n... *(truncado)*"
-                
-            return message
-            
-        except Exception as e:
-            return f"❌ **Erro ao gerar relatório**: {str(e)[:100]}"
-
-# Instância global do learner
-_global_learner: Optional[TradingLearner] = None
-
-def get_learner() -> TradingLearner:
-    """Retorna instância global do learner (singleton)"""
-    global _global_learner
-    if _global_learner is None:
-        _global_learner = TradingLearner()
-    return _global_learner
-
-def test_learner_discord_report():
-    """Função para testar o envio de relatório ao Discord"""
-    try:
-        learner = get_learner()
-        
-        # Inserir alguns dados de teste
-        test_data = [
-            ("BTCUSDT", "buy", 50000.0, True),   # Stop
-            ("BTCUSDT", "buy", 51000.0, False),  # Win  
-            ("BTCUSDT", "buy", 49000.0, True),   # Stop
-            ("ETHUSDT", "sell", 3000.0, True),   # Stop
-            ("ETHUSDT", "sell", 2950.0, True),   # Stop
-            ("SOLUSDT", "buy", 150.0, False),    # Win
-        ]
-        
-        print("🔄 Inserindo dados de teste no learner...")
-        
-        for symbol, side, price, is_stop in test_data:
-            # Simular features básicas
-            features_raw = {
-                "symbol": symbol,
-                "side": side,
-                "price": price,
-                "timestamp": learner.get_current_brt_time().timestamp(),
-                "atr_pct": 2.5,
-                "vol_ratio": 1.2,
-                "rsi": 65.0,
-                "hour_brt": learner.get_current_brt_time().hour,
-                "session_flag": "US_OPEN",
-                "vol_regime": "MID"
-            }
-            
-            features_binned = learner.bin_features(features_raw)
-            
-            # Simular inserção no banco
-            key = learner.generate_profile_key(features_binned)
-            
-            # Atualizar stats diretamente
-            cursor = learner.conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO stats (key, features_json, n, stopped, updated)
-                VALUES (
-                    ?, 
-                    ?, 
-                    COALESCE((SELECT n FROM stats WHERE key = ?), 0) + 1,
-                    COALESCE((SELECT stopped FROM stats WHERE key = ?), 0) + ?,
-                    ?
-                )
-            """, (
-                key,
-                json.dumps(features_binned, default=str),
-                key,
-                key, 
-                1 if is_stop else 0,
-                time_module.time()
-            ))
-            learner.conn.commit()
-        
-        print("✅ Dados de teste inseridos")
-        print("📤 Enviando relatório de teste ao Discord...")
-        
-        # Forçar envio de relatório
-        learner._send_discord_report()
-        
-        print("✅ Relatório enviado! Verifique seu Discord.")
-        
-    except Exception as e:
-        print(f"❌ Erro no teste: {e}")
-        import traceback
-        traceback.print_exc()
 
 BASE_URL = "https://api.binance.com/api/v3/"
 
@@ -1017,11 +560,6 @@ interval = INTERVAL  # compat com trechos legados
 
 # df global (placeholder); será preenchido mais adiante
 df: pd.DataFrame = pd.DataFrame()
-
-
-class MarketDataUnavailable(Exception):
-    """Sinaliza indisponibilidade temporária de candles para um ativo/timeframe."""
-    pass
 
 # --- Compat: stubs para ambiente local (sem Databricks) ---
 try:  # display (Databricks) → no-op amigável
@@ -1047,92 +585,6 @@ except NameError:  # pragma: no cover
 # URL(s) base da API da Binance com failover
 import time as _time
 
-
-def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: float, *, vault) -> bool:
-    """
-    Cancela ordens com status 'Triggered' e cria uma nova ordem 'price below' se necessário (versão vault).
-    """
-    print(f"[DEBUG_CLOSE] 🔍 cancel_triggered_orders_and_create_price_below: {symbol} @ {current_px:.4f}", flush=True)
-    try:
-        orders_cancelled = 0
-        
-        # Buscar ordens abertas
-        open_orders = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault})
-        print(f"[DEBUG_CLOSE] 📋 Encontradas {len(open_orders)} ordens abertas para {symbol}", flush=True)
-        
-        for order in open_orders:
-            # Verificar se a ordem tem status 'Triggered'
-            order_status = order.get('status', '').lower()
-            order_info = order.get('info', {})
-            order_type = order_info.get('orderType', '')
-            
-            if order_status == 'triggered' or 'trigger' in order_type.lower():
-                try:
-                    # Cancelar a ordem triggered
-                    print(f"[DEBUG_CLOSE] ⚠️ CANCELANDO ordem triggered: {order['id']} - status:{order_status} type:{order_type}", flush=True)
-                    dex.cancel_order(order['id'], symbol, {"vaultAddress": vault})
-                    orders_cancelled += 1
-                    print(f"[INFO] Ordem Triggered cancelada (vault): {order['id']}", flush=True)
-                except Exception as e:
-                    print(f"[WARN] Erro ao cancelar ordem (vault) {order['id']}: {e}", flush=True)
-        
-        # Se cancelou alguma ordem triggered, criar uma ordem price below/above correta
-        if orders_cancelled > 0:
-            print(f"[DEBUG_CLOSE] 🔄 Cancelamos {orders_cancelled} ordens triggered - criando nova ordem de stop", flush=True)
-            try:
-                # Verificar se há posição aberta para determinar o lado
-                positions = dex.fetch_positions([symbol], {"vaultAddress": vault})
-                print(f"[DEBUG_CLOSE] 📊 Verificando posições para {symbol}: {len(positions)} encontradas", flush=True)
-                
-                if positions and float(positions[0].get("contracts", 0)) > 0:
-                    pos = positions[0]
-                    side = pos.get('side', '').lower()
-                    qty = abs(float(pos.get('contracts', 0)))
-                    
-                    print(f"[DEBUG_CLOSE] 🎯 Posição encontrada: {side} {qty:.4f} contratos", flush=True)
-                    
-                    if side and qty > 0:
-                        exit_side = "sell" if side in ("long", "buy") else "buy"
-                        
-                        # LÓGICA CORRETA: price below para LONG, price above para SHORT
-                        if side in ("long", "buy"):
-                            # Para LONG: SELL order 5% ABAIXO (stop loss)
-                            order_price = current_px * 0.95
-                            order_type = "price_below"
-                            print(f"[DEBUG_CLOSE] 📉 LONG: criando SELL stop @ {order_price:.4f} (5% abaixo de {current_px:.4f})", flush=True)
-                        else:
-                            # Para SHORT: BUY order 5% ACIMA (stop loss)  
-                            order_price = current_px * 1.05
-                            order_type = "price_above"
-                            print(f"[DEBUG_CLOSE] 📈 SHORT: criando BUY stop @ {order_price:.4f} (5% acima de {current_px:.4f})", flush=True)
-                        
-                        # Criar ordem limit para saída (com vault)
-                        order = dex.create_order(
-                            symbol, 
-                            "limit", 
-                            exit_side, 
-                            qty, 
-                            order_price,
-                            {"reduceOnly": True, "vaultAddress": vault}
-                        )
-                        print(f"[DEBUG_CLOSE] ✅ ORDEM STOP CRIADA: {order.get('id')} - {exit_side.upper()} {qty:.4f} @ {order_price:.4f}", flush=True)
-                        print(f"[INFO] Ordem {order_type} criada (vault): {order.get('id')} - {side.upper()} exit @ {order_price:.4f}", flush=True)
-                        return True
-                else:
-                    print(f"[DEBUG_CLOSE] ❌ Nenhuma posição válida encontrada para criar stop", flush=True)
-                        
-            except Exception as e:
-                print(f"[DEBUG_CLOSE] ⛔ ERRO ao criar ordem stop: {e}", flush=True)
-                print(f"[WARN] Erro ao criar ordem stop (vault): {e}", flush=True)
-        else:
-            print(f"[DEBUG_CLOSE] ℹ️ Nenhuma ordem triggered cancelada - saindo", flush=True)
-        
-        return orders_cancelled > 0
-        
-    except Exception as e:
-        print(f"[ERROR] Erro na função cancel_triggered_orders_and_create_price_below (vault): {e}", flush=True)
-        return False
-
 def _binance_bases():
     # Força o endpoint público (dados históricos) para evitar 451/403
     return ["https://data-api.binance.vision/api/v3/"]
@@ -1140,8 +592,7 @@ def _binance_bases():
 def _binance_session():
     s = requests.Session()
     try:
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
+
         retry = Retry(
             total=int(os.getenv("BINANCE_RETRIES", "3")),
             backoff_factor=float(os.getenv("BINANCE_BACKOFF", "0.5")),
@@ -1270,13 +721,12 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
              debug: bool = True,
              target_candles: int = None) -> pd.DataFrame:
     # Sempre prioriza um número alvo de candles (inclui o atual não fechado)
-    n_target = 20
+    n_target = int(os.getenv("TARGET_CANDLES", "0"))
     if target_candles is not None:
-        n_target = max(1, int(target_candles))
-    else:
-        env_target = int(os.getenv("TARGET_CANDLES", "0"))
-        if env_target > 0:
-            n_target = max(1, env_target)
+        n_target = int(target_candles)
+    if n_target <= 0:
+        n_target = 50  # padrão solicitado
+    n_target = min(n_target, 50)
 
     if debug:
         _log_global("DATA", f"Iniciando build_df symbol={symbol} tf={tf} alvo={n_target}")
@@ -1301,109 +751,108 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
 
     symbol_bybit = symbol[:-4] + "/USDT" if symbol.endswith("USDT") else symbol
     data = []
-    ex = None
-
-    # Primeiro tenta Binance
     try:
-        candles_needed = n_target
-        start_dt = datetime.fromtimestamp(cur_open_epoch - (candles_needed - 1) * secs, UTC)
-        end_dt = now_utc
-        if debug:
-            _log_global("BINANCE_VISION", "Buscando candles recentes (prioridade)")
-        bdata = get_binance_data(symbol, tf, start_dt, end_dt)
-        if bdata:
-            data = bdata[-n_target:]
-            if debug:
-                _log_global("BINANCE_VISION", f"{len(data)} candles carregados (prioridade)")
-    except Exception as e:
-        if debug:
-            _log_global("BINANCE_VISION", f"Falhou ao buscar prioridade: {type(e).__name__}: {e}", level="WARN")
+        import ccxt  # type: ignore
 
-    # Fallback: Bybit
-    if not data:
-        try:
-            import ccxt  # type: ignore
-            ex = ccxt.bybit({
-                "enableRateLimit": True,
-                "timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000")),
-                "options": {"timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000"))},
-            })
-            lim = max(1, n_target)
-            cc = []
-            last_err = None
-            for attempt in range(2):
-                try:
-                    cc = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, limit=lim) or []
-                    break
-                except Exception as e:
-                    last_err = e
-                    if debug:
-                        _log_global("BYBIT", f"fetch_ohlcv tentativa {attempt+1} falhou: {type(e).__name__}: {e}", level="WARN")
-                    _time.sleep(0.3)
-            if cc:
-                if len(cc) > n_target:
-                    cc = cc[-n_target:]
-                data = [{
-                    "data": o[0],
-                    "valor_fechamento": float(o[4]),
-                    "criptomoeda": symbol,
-                    "volume_compra": float(o[5] or 0.0),
-                    "volume_venda": float(o[5] or 0.0),
-                } for o in cc]
+        ex = ccxt.bybit({
+            "enableRateLimit": True,
+            "timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000")),
+            "options": {"timeout": int(os.getenv("BYBIT_TIMEOUT_MS", "5000"))},
+        })
+        # Busca até os últimos n_target candles (Bybit normalmente retorna fechados; alguns mercados incluem o em formação)
+        lim = max(1, n_target)
+        cc = []
+        last_err = None
+        for attempt in range(2):
+            try:
+                cc = ex.fetch_ohlcv(symbol_bybit, timeframe=tf, limit=lim) or []
+                break
+            except Exception as e:
+                last_err = e
                 if debug:
-                    _log_global("BYBIT", f"{len(data)} candles carregados (fallback)")
-            else:
-                if debug:
-                    _log_global("BYBIT", f"Nenhum candle retornado (último erro: {last_err})", level="WARN")
-        except Exception as e:
+                    _log_global("BYBIT", f"fetch_ohlcv tentativa {attempt+1} falhou: {type(e).__name__}: {e}", level="WARN")
+                _time.sleep(0.3)
+        if cc:
+            # Garante no máximo n_target candles
+            if len(cc) > n_target:
+                cc = cc[-n_target:]
+            data = [{
+                "data": o[0],
+                "valor_fechamento": float(o[4]),
+                "criptomoeda": symbol,
+                "volume_compra": float(o[5] or 0.0),
+                "volume_venda": float(o[5] or 0.0),
+            } for o in cc]
             if debug:
-                _log_global("BYBIT", f"Exceção geral: {type(e).__name__}: {e}", level="WARN")
-
-    if data:
-        last_ts = int(data[-1]["data"])
-        if last_ts != cur_open_ms:
-            live_price = None
-            if ex is not None:
+                _log_global("BYBIT", f"{len(data)} candles carregados (API)")
+        else:
+            if debug:
+                _log_global("BYBIT", f"Nenhum candle retornado (último erro: {last_err})", level="WARN")
+        # Se o último candle não é o atual, adiciona o preço atual como candle em formação
+        if data:
+            need_append_live = True
+            last_ts = int(data[-1]["data"])
+            if last_ts == cur_open_ms:
+                need_append_live = False
+            elif last_ts > cur_open_ms:
+                need_append_live = False
+            if need_append_live and len(data) < n_target:
                 try:
                     ticker = ex.fetch_ticker(symbol_bybit)
-                    if ticker and ticker.get("last") is not None:
-                        live_price = float(ticker["last"])
+                    if ticker and (ticker.get("last") is not None):
+                        data.append({
+                            "data": cur_open_ms,
+                            "valor_fechamento": float(ticker["last"]),
+                            "criptomoeda": symbol,
+                            "volume_compra": 0.0,
+                            "volume_venda": 0.0,
+                        })
                         if debug:
-                            _log_global("BYBIT", f"Candle em formação anexado via ticker price={live_price}")
+                            _log_global("BYBIT", f"Ticker adicionou candle em formação price={ticker['last']}")
                 except Exception as e:
                     if debug:
-                        _log_global("BYBIT", f"Ticker Bybit indisponível para candle em formação: {type(e).__name__}: {e}", level="DEBUG")
-            if live_price is None:
-                try:
-                    resp = requests.get(
-                        f"{BASE_URL}ticker/price",
-                        params={"symbol": symbol},
-                        timeout=int(os.getenv("BINANCE_TIMEOUT", "10")),
-                    )
-                    if resp.status_code == 200:
-                        payload = resp.json()
-                        price_val = payload.get("price") if isinstance(payload, dict) else None
-                        if price_val is not None:
-                            live_price = float(price_val)
-                            if debug:
-                                _log_global("BINANCE", f"Candle em formação anexado via ticker price={live_price}")
-                except Exception as e:
-                    if debug:
-                        _log_global("BINANCE", f"Falha ao buscar ticker atual: {type(e).__name__}: {e}", level="DEBUG")
-            if live_price is not None:
-                data.append({
-                    "data": cur_open_ms,
-                    "valor_fechamento": float(live_price),
-                    "criptomoeda": symbol,
-                    "volume_compra": 0.0,
-                    "volume_venda": 0.0,
-                })
-                if len(data) > n_target:
-                    data = data[-n_target:]
+                        _log_global("BYBIT", f"Não foi possível adicionar preço atual: {type(e).__name__}: {e}", level="WARN")
+        # Garante exatamente n_target no máximo (fechados + atual)
+        if data and len(data) > n_target:
+            data = data[-n_target:]
+    except Exception as e:
+        if debug:
+            _log_global("BYBIT", f"Exceção geral: {type(e).__name__}: {e}", level="WARN")
+
+    # Fallback 1: tentar Binance Vision pública se Bybit vazio (sem bloquear)
+    if not data:
+        try:
+            candles_needed = n_target
+            start_dt = datetime.fromtimestamp(cur_open_epoch - (candles_needed - 1) * secs, UTC)
+            end_dt = now_utc
+            if debug:
+                _log_global("BINANCE_VISION", "Ativando fallback público")
+            bdata = get_binance_data(symbol, tf, start_dt, end_dt)
+            if bdata:
+                data = bdata[-n_target:]
+                if debug:
+                    _log_global("BINANCE_VISION", f"{len(data)} candles carregados")
+        except Exception as e:
+            if debug:
+                _log_global("BINANCE_VISION", f"Falhou: {type(e).__name__}: {e}", level="WARN")
+
+    # Fallback: snapshot local
+    if not data and os.path.exists("df_log.csv") and os.path.getsize("df_log.csv") > 0:
+        try:
+            df_local = pd.read_csv("df_log.csv")
+            if "data" in df_local.columns:
+                df_local["data"] = pd.to_datetime(df_local["data"])
+            if debug:
+                _log_global("DATA", "Fallback local df_log.csv carregado")
+            return df_local
+        except Exception as e:
+            if debug:
+                _log_global("DATA", f"Falha ao ler df_log.csv: {e}", level="WARN")
+
     if not data:
         if debug:
-            _log_global("DATA", f"Nenhum dado encontrado para {symbol} tf={tf}", level="ERROR")
-        raise MarketDataUnavailable(f"sem dados para {symbol} tf={tf}")
+            _log_global("DATA", f"Sem dados retornados para {symbol} tf={tf}", level="ERROR")
+        return pd.DataFrame()
 
     df_out = pd.DataFrame(data)
     df_out["data"] = pd.to_datetime(df_out["data"], unit="ms")
@@ -1440,28 +889,102 @@ DEX (Hyperliquid via ccxt)
 """
 import ccxt  # type: ignore
 
+
+def guard_close_all(dex, symbol, current_px: float) -> bool:
+    # PRIORITÁRIO: verificar unrealized PnL primeiro
+    try:
+        if close_if_unrealized_pnl_breaches(dex, symbol, threshold=UNREALIZED_PNL_HARD_STOP):
+            print(f"[GUARD] Posição {symbol} fechada por unrealized PnL <= {UNREALIZED_PNL_HARD_STOP}")
+            return True
+    except Exception as e:
+        print(f"[GUARD] Erro verificando unrealized PnL para {symbol}: {type(e).__name__}: {e}")
+        pass
+    # Verificar ROI após unrealized PnL
+    try:
+        if close_if_roi_breaches(dex, symbol, current_px, threshold=ROI_HARD_STOP):
+            print(f"[GUARD] Posição {symbol} fechada por ROI <= {ROI_HARD_STOP}")
+            return True
+    except Exception as e:
+        print(f"[GUARD] Erro verificando ROI para {symbol}: {type(e).__name__}: {e}")
+        pass
+    try:
+        if close_if_breached_leveraged(dex, symbol, current_px):
+            print(f"[GUARD] Posição {symbol} fechada por breached leveraged")
+            return True
+    except Exception as e:
+        print(f"[GUARD] Erro verificando breached leveraged para {symbol}: {type(e).__name__}: {e}")
+        pass
+    try:
+        if close_if_abs_loss_exceeds_5c(dex, symbol, current_px):
+            print(f"[GUARD] Posição {symbol} fechada por abs loss > 5c")
+            return True
+    except Exception as e:
+        print(f"[GUARD] Erro verificando abs loss para {symbol}: {type(e).__name__}: {e}")
+        pass
+    print(f"[GUARD] {symbol}: Nenhum critério de fechamento atingido")
+    return False
+def compute_tp_sl_leveraged(entry_px: float, side: str, leverage: float, qty: float,
+                            current_px: Optional[float] = None,
+                            trailing_margin: float = 0.10):
+    """
+    Calcula stop-loss percentual e trailing-stop baseado no ROI alavancado.
+    Mantém o CAP de perda absoluta de $0.05 => |entry - SL| * qty <= 0.05.
+    """
+    entry = float(entry_px)
+    if entry <= 0:
+        raise ValueError("entry_px deve ser positivo")
+    L = max(float(leverage or 1.0), 1.0)
+    q = max(float(qty or 0.0), 1e-12)
+    current = float(current_px) if current_px not in (None, 0) else entry
+    margin = max(float(trailing_margin or 0.0), 0.0)
+
+    s = (side or "").lower()
+    if s in ("long", "buy"):
+        p_sl = entry * (1.0 - 0.05 / L)
+        p_sl_cap = entry - (0.05 / q)
+        p_sl_final = max(p_sl, p_sl_cap)
+
+        roi = (current / entry) - 1.0
+        levered_roi = roi * L
+        adjusted = levered_roi - margin
+        factor = (adjusted / L) + 1.0
+        trail_price = current * factor
+        trail_price = max(0.0, min(trail_price, current))
+        if trail_price <= p_sl_final:
+            trail_price = None
+        return {"trail": (float(trail_price) if trail_price is not None else None), "sl": float(p_sl_final)}
+
+    # SHORT
+    p_sl = entry / (1.0 - 0.05 / L)
+    p_sl_cap = entry + (0.05 / q)
+    p_sl_final = min(p_sl, p_sl_cap)
+
+    roi = (entry / current) - 1.0 if current > 0 else 0.0
+    levered_roi = roi * L
+    adjusted = levered_roi - margin
+    factor = (adjusted / L) + 1.0
+    trail_price = current * factor
+    trail_price = max(current, trail_price)
+    if trail_price >= p_sl_final:
+        trail_price = None
+    return {"trail": (float(trail_price) if trail_price is not None else None), "sl": float(p_sl_final)}
+
+
+
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
-# Lê credenciais fixas/env (recomendado definir a chave privada via variável de ambiente)
-WALLET_TRADINGV4 = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
-_wallet_env = WALLET_TRADINGV4
+# Lê credenciais da env (recomendado) com fallback seguro para dev local
+_wallet_env = os.getenv("WALLET_ADDRESS")
 _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-if not _priv_env:
-    msg = (
-        "Credenciais da Hyperliquid ausentes: HYPERLIQUID_PRIVATE_KEY. "
-        "Defina a variável de ambiente obrigatória antes de executar."
-    )
-    _log_global("DEX", msg, level="ERROR")
-    raise RuntimeError(msg)
-
 dex = ccxt.hyperliquid({
-    "walletAddress": _wallet_env,
-    "privateKey": _priv_env,
+    "walletAddress": _wallet_env or "0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
+    "privateKey": _priv_env or "0x5d0d62a9eff697dd31e491ec34597b06021f88de31f56372ae549231545f0872",
     "enableRateLimit": True,
     "timeout": dex_timeout,
     "options": {"timeout": dex_timeout},
 })
+
 
 # Segundo DEX (racional inverso) com credenciais distintas
 if dex:
@@ -1482,7 +1005,7 @@ if dex:
 # 🔔 LOGGER (CSV + XLSX em DBFS com workaround /tmp → dbutils.fs.cp)
 # =========================
 import os
-import pandas as pd
+
 from datetime import datetime, timezone
 now = datetime.now(timezone.utc)
 try:
@@ -1710,11 +1233,6 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime, timezone
 now = datetime.now(timezone.utc)
-import numpy as np
-import pandas as pd
-
-# Vault Address para operações na subconta
-VAULT_ADDRESS = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
 
 @dataclass
 class GradientConfig:
@@ -1738,9 +1256,8 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop inicial
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.20   # take profit máximo em 20% da margem
-    MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
+    STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop
+    TRAILING_ROI_MARGIN: float = 0.10    # trailing stop mantém 10% do ROI alavancado
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -1753,7 +1270,6 @@ class GradientConfig:
     STOP_ATR_MULT: float    = 0.0         # desativado (uso por % da margem)
     TAKEPROFIT_ATR_MULT: float = 0.0      # desativado
     TRAILING_ATR_MULT: float   = 0.0      # desativado
-    ENABLE_TRAILING_STOP: bool = False    # trailing stop desativado
 
     # Breakeven trailing legado (mantido opcionalmente)
     BE_TRIGGER_PCT: float   = 0.0
@@ -1767,7 +1283,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.05
-    take_pct: float = 0.15
+    trailing_margin: float = 0.10
     usd_env: Optional[str] = None
 
 
@@ -1831,141 +1347,161 @@ class EMAGradientStrategy:
 
         # Controle das ordens de proteção
         self._last_stop_order_id: Optional[str] = None
-        self._last_take_order_id: Optional[str] = None
-        self._trail_max_gain_pct: Optional[float] = None
-        self._last_stop_order_px: Optional[float] = None
-        self._last_take_order_px: Optional[float] = None
-        self._last_price_snapshot: Optional[float] = None
-        
-        # Sistema de aprendizado
-        self._learner_context: Optional[dict] = None
+        self._last_trailing_order_id: Optional[str] = None
 
     def _log(self, message: str, level: str = "INFO") -> None:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
         print(f"[{level}] [{prefix}] {message}", flush=True)
 
-    def _protection_prices(self, entry_price: float, side: str, position: Optional[Dict[str, Any]] = None) -> Tuple[float, float]:
+    def _protection_prices(self, entry_price: float, side: str, current_price: Optional[float] = None, position: Optional[Dict[str, Any]] = None) -> Tuple[float, Optional[float]]:
         if entry_price <= 0:
             raise ValueError("entry_price deve ser positivo")
         norm_side = self._norm_side(side)
         if norm_side not in ("buy", "sell"):
             raise ValueError("side inválido para proteção")
+
+        try:
+            lev = float(self.cfg.LEVERAGE)
+        except Exception:
+            lev = 1.0
+        lev = max(lev, 1.0)
+
+        risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / lev
+        ref_price = float(current_price) if current_price not in (None, 0) else float(entry_price)
+
+        if norm_side == "buy":
+            stop_px = entry_price * (1.0 - risk_ratio)
+        else:
+            stop_px = entry_price * (1.0 + risk_ratio)
+
+        trailing_px = self._compute_trailing_stop(entry_price, ref_price, norm_side, lev, position)
+
+        if self.debug:
+            self._log(
+                f"DEBUG protection_prices: stop_px={stop_px:.6f} trailing_px={trailing_px} "
+                f"side={norm_side}", 
+                level="DEBUG"
+            )
+
+        if trailing_px is not None:
+            # Trailing já foi validado em _compute_trailing_stop para ser melhor que stop normal
+            if self.debug:
+                self._log(
+                    f"DEBUG trailing ATIVADO: trailing_px={trailing_px:.6f} vs stop_px={stop_px:.6f} "
+                    f"({'LONG' if norm_side == 'buy' else 'SHORT'})", 
+                    level="DEBUG"
+                )
+        return stop_px, trailing_px
+
+    def _compute_trailing_stop(self, entry_price: float, current_price: float, norm_side: str, leverage: float, position: Optional[Dict[str, Any]] = None) -> Optional[float]:
+        """
+        Trailing Stop Simples e Efetivo:
+        - ROI máximo alcançado - 5% = novo stop limit
+        - Limite mínimo: nunca pior que -5% (stop loss original)  
+        - Sempre ajustar para cima: nunca voltar o stop para trás
         
-        # Calcular ROI atual se posição disponível (usando mesma fórmula do trading.py)
-        current_roi_pct = 0.0
+        Exemplos:
+        - ROI máximo 1% → stop em -4% (1% - 5%)
+        - ROI máximo 12% → stop em 7% (12% - 5%) 
+        - ROI máximo 36% → stop em 31% (36% - 5%)
+        """
+        if entry_price <= 0 or current_price <= 0 or leverage <= 0:
+            return None
+
+        # Calcular ROI atual
+        try:
+            if norm_side == "buy":
+                current_roi = (current_price / entry_price) - 1.0
+            else:
+                current_roi = (entry_price / current_price) - 1.0
+        except Exception:
+            return None
+
+        current_roi_pct = current_roi * 100  # Converter para percentual
+        
+        # Calcular ROI real via PnL se posição disponível (mais preciso)
         if position:
             try:
                 unrealized_pnl = float(position.get("unrealizedPnl", 0))
                 position_value = position.get("positionValue") or position.get("notional") or position.get("size")
-                leverage = float(position.get("leverage", self.cfg.LEVERAGE))
-                
                 if position_value is None:
                     # Calcular position_value manualmente se necessário
                     contracts = float(position.get("contracts", 0))
-                    current_px = self._preco_atual()
-                    if contracts > 0 and current_px > 0:
-                        position_value = abs(contracts * current_px)
+                    if contracts > 0:
+                        position_value = abs(contracts * current_price)
                 
-                if position_value and position_value > 0 and leverage > 0:
-                    # Mesma fórmula do trading.py: (PnL / (position_value / leverage)) * 100
-                    capital_real = position_value / leverage
+                if position_value and position_value > 0:
+                    capital_real = abs(float(position_value)) / leverage
                     current_roi_pct = (unrealized_pnl / capital_real) * 100
-                    
-                    # *** TRAILING STOP VERDADEIRO: Usar High Water Mark ***
-                    trailing_roi_pct = _update_high_water_mark(self.symbol, current_roi_pct)
-                    
-                    self._log(
-                        f"DEBUG trailing: unrealized_pnl={unrealized_pnl:.4f} position_value={position_value:.4f} "
-                        f"leverage={leverage:.1f} capital_real=${capital_real:.4f} ROI={current_roi_pct:.2f}% "
-                        f"HWM={trailing_roi_pct:.2f}%", 
-                        level="DEBUG"
-                    )
-                    
-                    # Usar o ROI máximo (High Water Mark) para determinar o trailing stop
-                    current_roi_pct = trailing_roi_pct
-            except Exception as e:
-                self._log(f"Erro ao calcular ROI atual: {e}", level="WARN")
+            except Exception:
+                pass
         
-        # Calcular stop loss dinâmico baseado no ROI
-        base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
+        # *** TRAILING STOP COM HIGH WATER MARK ***
+        # Usar o ROI máximo histórico (nunca piora)
+        max_roi_pct = _update_high_water_mark(f"trailing_{self.symbol}", current_roi_pct)
         
-        # Trailing stop dinâmico granular expandido (USANDO HIGH WATER MARK):
-        # ROI < 2.5%: stop em -5%
-        # ROI >= 2.5%: stop em -2.5%
-        # ROI >= 5%: stop em 0% (breakeven)
-        # ROI >= 7.5%: stop em +2.5%
-        # ROI >= 10%: stop em +5%
-        # ROI >= 12.5%: stop em +7.5%
-        # ROI >= 15%: stop em +10%
-        # ROI >= 17.5%: stop em +12.5%
-        if current_roi_pct >= 17.5:
-            # ROI >= 17.5%: stop em +12.5%
-            trailing_stop_pct = 0.125 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 🚀 TRAILING L8: ROI {current_roi_pct:.1f}% >= 17.5% → stop +12.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 15.0:
-            # ROI >= 15%: stop em +10%
-            trailing_stop_pct = 0.10 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 🎯 TRAILING L7: ROI {current_roi_pct:.1f}% >= 15% → stop +10% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 12.5:
-            # ROI >= 12.5%: stop em +7.5%
-            trailing_stop_pct = 0.075 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L6: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 10.0:
-            # ROI >= 10%: stop em +5%
-            trailing_stop_pct = 0.05 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 7.5:
-            # ROI >= 7.5%: stop em +2.5%
-            trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 5.0:
-            # ROI >= 5%: stop em 0% (breakeven)
-            stop_px = entry_price
-            self._log(f"[DEBUG_CLOSE] ⚖️ TRAILING L3: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 2.5:
-            # ROI >= 2.5%: stop em -2.5%
-            trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📉 TRAILING L2: ROI {current_roi_pct:.1f}% >= 2.5% → stop -2.5% @ {stop_px:.6f}", level="DEBUG")
-        else:
-            # ROI < 2.5%: stop normal em -5%
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 - base_risk_ratio)
-            else:
-                stop_px = entry_price * (1.0 + base_risk_ratio)
-            self._log(f"[DEBUG_CLOSE] ⬇️ TRAILING L1: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
+        # Calcular stop target: ROI máximo - 5%
+        target_roi_pct = max_roi_pct - 5.0
         
-        # Take profit fixo em 20%
-        reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
+        # Limite mínimo: nunca pior que -5% (stop loss original)
+        min_stop_roi_pct = -5.0
+        target_roi_pct = max(target_roi_pct, min_stop_roi_pct)
+        
+        # Ajuste para ficar mais próximo do que Hyperliquid calcula
+        # Usar margem menor para stop mais conservador
+        if target_roi_pct > 20:  # Para ROIs altos, ser mais conservador
+            target_roi_pct = target_roi_pct * 0.85  # Reduzir 15%
+        
+        # Debug: mostrar cálculos do trailing stop
+        if self.debug:
+            self._log(
+                f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} "
+                f"ROI_current={current_roi_pct:.2f}% ROI_max={max_roi_pct:.2f}% "
+                f"target_stop={target_roi_pct:.2f}%", 
+                level="DEBUG"
+            )
+        
+        # Só ativar trailing stop se for melhor que o stop loss normal (-5%)
+        if target_roi_pct <= -5.0:
+            if self.debug:
+                self._log(
+                    f"DEBUG trailing DESATIVADO: target_stop={target_roi_pct:.2f}% <= -5% (usar stop normal)", 
+                    level="DEBUG"
+                )
+            return None
+        
+        # Converter ROI target de volta para preço
+        # CORREÇÃO: O target_roi_pct JÁ É O ROI ALAVANCADO DESEJADO
+        # Não dividir por alavancagem novamente!
+        
         if norm_side == "buy":
-            take_px = entry_price * (1.0 + reward_ratio)
-        else:
-            take_px = entry_price * (1.0 - reward_ratio)
-        
-        return stop_px, take_px
+            # Para LONG: ROI = (price - entry) / entry * leverage
+            # target_roi_pct = (trailing_price - entry_price) / entry_price * leverage
+            # Resolver para trailing_price:
+            # trailing_price = entry_price * (1 + target_roi_pct / leverage / 100)
+            trailing_price = entry_price * (1.0 + (target_roi_pct / leverage / 100))
+            
+            if self.debug:
+                self._log(
+                    f"DEBUG trailing LONG ATIVO: ROI_max={max_roi_pct:.2f}% → stop em {target_roi_pct:.2f}% @ {trailing_price:.6f} "
+                    f"(entry={entry_price:.6f}, leverage={leverage:.1f}x)", 
+                    level="DEBUG"
+                )
+            return trailing_price
+        else:  # SHORT
+            # Para SHORT: ROI = (entry - price) / entry * leverage  
+            # target_roi_pct = (entry_price - trailing_price) / entry_price * leverage
+            # Resolver para trailing_price:
+            # trailing_price = entry_price * (1 - target_roi_pct / leverage / 100)
+            trailing_price = entry_price * (1.0 - (target_roi_pct / leverage / 100))
+            
+            if self.debug:
+                self._log(
+                    f"DEBUG trailing SHORT ATIVO: ROI_max={max_roi_pct:.2f}% → stop em {target_roi_pct:.2f}% @ {trailing_price:.6f} "
+                    f"(entry={entry_price:.6f}, leverage={leverage:.1f}x)", 
+                    level="DEBUG"
+                )
+            return trailing_price
 
 
     # ---------- config → params (reuso dos cálculos do backtest) ----------
@@ -2120,8 +1656,7 @@ class EMAGradientStrategy:
 
     def _wallet_address(self) -> Optional[str]:
         # Busca carteira: env > dex attributes/options > None
-        fixed = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
-        for key in ("WALLET_TRADINGV4", "WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
+        for key in ("WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
             val = os.getenv(key)
             if val:
                 return val
@@ -2138,13 +1673,7 @@ class EMAGradientStrategy:
                 return val
         except Exception:
             pass
-        return fixed
-
-    def _position_quantity(self, pos: Dict[str, Any]) -> float:
-        """Extrai a quantidade (contracts) de uma posição."""
-        if not pos:
-            return 0.0
-        return abs(float(pos.get("contracts", 0)))
+        return None
 
     def _notify_trade(self, kind: str, side: Optional[str], price: Optional[float], amount: Optional[float], note: str = "", include_hl: bool = False):
         base = self.symbol.split("/")[0] if "/" in self.symbol else self.symbol
@@ -2220,7 +1749,7 @@ class EMAGradientStrategy:
             pos = self._posicao_aberta()
             if pos:
                 pos_side = self._norm_side(pos.get("side") or pos.get("positionSide"))
-                qty = self._position_quantity(pos)
+                qty = float(pos.get("contracts") or 0.0)
                 ep = (pos.get("entryPrice") or pos.get("entryPx") or 0.0)
                 entry = float(ep) if ep else None
         except Exception:
@@ -2262,13 +1791,7 @@ class EMAGradientStrategy:
             try:
                 snap = df_for_log.tail(1)
             except Exception:
-                try:
-                    snap = df_for_log.iloc[[-1]]
-                except Exception:
-                    snap = None
-        elif df_for_log is None:
-            # df_for_log é None, criar um DataFrame vazio para evitar erros
-            snap = None
+                snap = df_for_log.iloc[[-1]]
 
         # (C) SEMPRE grava no buffer local
         try:
@@ -2434,30 +1957,19 @@ class EMAGradientStrategy:
                 self._log("_preco_atual não disponível com LIVE_TRADING=0", level="DEBUG")
             raise RuntimeError("LIVE_TRADING desativado")
         try:
+            mkts = self.dex.load_markets()
+            info = mkts[self.symbol]["info"]
+            if info.get("midPx") is not None:
+                return float(info["midPx"])
+        except Exception:
+            pass
+        try:
             t = self.dex.fetch_ticker(self.symbol)
             if t and t.get("last"):
-                price = float(t["last"])
-                self._last_price_snapshot = price
-                return price
-            if t and t.get("info"):
-                info = t["info"] if isinstance(t["info"], dict) else {}
-                px = info.get("indexPx") or info.get("markPx") or info.get("midPx")
-                if px is not None:
-                    price = float(px)
-                    self._last_price_snapshot = price
-                    return price
+                return float(t["last"])
         except Exception as e:
             if self.debug:
                 self._log(f"fetch_ticker falhou: {type(e).__name__}: {e}", level="WARN")
-        try:
-            mkts = self.dex.load_markets(reload=True)
-            info = mkts[self.symbol]["info"]
-            if info.get("midPx") is not None:
-                price = float(info["midPx"])
-                self._last_price_snapshot = price
-                return price
-        except Exception:
-            pass
         raise RuntimeError("Não consegui obter preço atual (midPx/last).")
 
     def _posicao_aberta(self) -> Optional[Dict[str, Any]]:
@@ -2465,7 +1977,7 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
         try:
-            pos = self.dex.fetch_positions([self.symbol], {"vaultAddress": VAULT_ADDRESS})
+            pos = self.dex.fetch_positions([self.symbol])
             if pos and float(pos[0].get("contracts", 0)) > 0:
                 return pos[0]
         except Exception as e:
@@ -2477,7 +1989,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return False
-            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
+            for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -2580,10 +2092,10 @@ class EMAGradientStrategy:
             if candidate is None:
                 continue
             try:
-                return "take", float(candidate)
+                return "trail", float(candidate)
             except (TypeError, ValueError):
                 continue
-        return "take", None
+        return "trail", None
 
     def _is_reduce_only(self, order: Dict[str, Any]) -> bool:
         if not isinstance(order, dict):
@@ -2604,7 +2116,7 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return []
         try:
-            orders = self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS})
+            orders = self.dex.fetch_open_orders(self.symbol)
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao obter open_orders para verificação de proteções: {type(e).__name__}: {e}", level="WARN")
@@ -2622,7 +2134,7 @@ class EMAGradientStrategy:
         target_side = self._norm_side(side)
         if not orders:
             return None
-        tol = max(1e-8, abs(price) * 1e-5)
+        tol = max(1e-8, abs(price) * 1e-3)  # 0.1% tolerância para matching do preço
         for order in orders:
             order_kind, order_price = self._parse_reduce_only_kind_price(order)
             if order_kind != kind:
@@ -2658,34 +2170,18 @@ class EMAGradientStrategy:
                 continue
         return None
 
-    def _classify_protection_price(self, order: Dict[str, Any], price: float, entry: float, norm_side: str) -> str:
-        info = order.get("info") if isinstance(order, dict) else {}
-        if isinstance(info, dict):
-            trigger_meta = info.get("trigger") or {}
-            if isinstance(trigger_meta, dict):
-                tpsl = str(trigger_meta.get("tpsl") or "").lower()
-                if tpsl == "sl":
-                    return "stop"
-                if tpsl == "tp":
-                    return "take"
-        oid = self._extract_order_id(order)
-        if oid and oid == self._last_stop_order_id:
-            return "stop"
-        if oid and oid == self._last_take_order_id:
-            return "take"
+    def _classify_protection_price(self, price: float, entry: float, norm_side: str) -> str:
         if norm_side == "buy":
-            return "stop" if price <= entry else "take"
-        else:
-            return "stop" if price >= entry else "take"
+            return "stop" if price <= entry else "trail"
+        else:  # sell / short
+            return "stop" if price >= entry else "trail"
 
     def _cancel_protective_orders(self, fetch_backup: bool = False):
-        for attr in ("_last_stop_order_id", "_last_take_order_id"):
+        for attr in ("_last_stop_order_id", "_last_trailing_order_id"):
             oid = getattr(self, attr)
             if oid:
                 self._cancel_order_silent(oid)
                 setattr(self, attr, None)
-        self._last_stop_order_px = None
-        self._last_take_order_px = None
 
         if not fetch_backup:
             return
@@ -2693,7 +2189,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return
-            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
+            for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -2735,7 +2231,6 @@ class EMAGradientStrategy:
             existing = self._find_matching_protection_in_orders("stop", side, px, existing_orders)
         if existing is not None:
             self._last_stop_order_id = self._extract_order_id(existing)
-            self._last_stop_order_px = px
             if self.debug:
                 self._log(
                     f"Stop existente reutilizado id={self._last_stop_order_id} price≈{px:.6f}",
@@ -2744,7 +2239,7 @@ class EMAGradientStrategy:
             return existing
         try:
             # Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
+            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)
         except Exception as e:
             msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -2765,7 +2260,6 @@ class EMAGradientStrategy:
             tp = inf.get("triggerPrice") if isinstance(inf, dict) else None
             self._log(f"STOP criado id={oid} type={typ} reduceOnly={ro} stopLoss={sl} trigger={tp}", level="DEBUG")
             self._last_stop_order_id = str(oid) if oid else None
-            self._last_stop_order_px = px
             # Logger opcional
             try:
                 self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
@@ -2775,31 +2269,38 @@ class EMAGradientStrategy:
             pass
         return ret
 
-    def _place_take_profit(self, side: str, amount: float, target_price: float,
-                           df_for_log: Optional[pd.DataFrame] = None,
-                           existing_orders: Optional[List[Dict[str, Any]]] = None):
+    def _place_trailing_stop(self, side: str, amount: float, target_price: float,
+                             df_for_log: Optional[pd.DataFrame] = None,
+                             existing_orders: Optional[List[Dict[str, Any]]] = None):
         amt = self._round_amount(amount)
         px = float(target_price)
-        params = {"reduceOnly": True}
+        params = {
+            "reduceOnly": True,
+            "triggerPrice": px,
+            "stopLossPrice": px,
+            "trigger": "mark",
+        }
         if self.debug:
-            self._log(f"Criando TAKE PROFIT {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+            self._log(f"Criando TRAILING LIMIT {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
         if existing_orders is None:
-            existing = self._find_matching_protection("take", side, px)
+            existing = self._find_matching_protection("trail", side, px)
         else:
-            existing = self._find_matching_protection_in_orders("take", side, px, existing_orders)
+            existing = self._find_matching_protection_in_orders("trail", side, px, existing_orders)
         if existing is not None:
-            self._last_take_order_id = self._extract_order_id(existing)
-            self._last_take_order_px = px
+            self._last_trailing_order_id = self._extract_order_id(existing)
             if self.debug:
                 self._log(
-                    f"Take profit existente reutilizado id={self._last_take_order_id} price≈{px:.6f}",
+                    f"Trailing existente reutilizado id={self._last_trailing_order_id} price≈{px:.6f}",
                     level="DEBUG",
                 )
             return existing
         try:
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
+            # Para trailing stop usar ordem LIMIT com trigger conditions
+            # LONG: SELL abaixo do preço atual quando preço cair
+            # SHORT: BUY acima do preço atual quando preço subir
+            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
         except Exception as e:
-            msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
+            msg = f"Falha ao criar TRAILING LIMIT: {type(e).__name__}: {e}"
             text = str(e).lower()
             if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
                 self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
@@ -2811,11 +2312,10 @@ class EMAGradientStrategy:
             info = ret if isinstance(ret, dict) else {}
             oid = self._extract_order_id(info)
             typ = info.get("type") or (info.get("info", {}) or {}).get("type")
-            self._log(f"Take profit criado id={oid} price={px}", level="DEBUG")
-            self._last_take_order_id = oid
-            self._last_take_order_px = px
+            self._log(f"Trailing limit criado id={oid} price={px}", level="DEBUG")
+            self._last_trailing_order_id = oid
             try:
-                self._safe_log("take_profit_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=oid)
+                self._safe_log("trailing_stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=oid)
             except Exception:
                 pass
         except Exception:
@@ -2823,8 +2323,30 @@ class EMAGradientStrategy:
         return ret
 
     def _ensure_position_protections(self, pos: Dict[str, Any], df_for_log: Optional[pd.DataFrame] = None):
+        # FORÇA FECHAMENTO IMEDIATO PARA AVAX/PUMP COM PREJUÍZO (debug temporário)
+        symbol_check = str(self.symbol).upper()
+        if any(x in symbol_check for x in ['AVAX', 'PUMP']):
+            try:
+                unrealized = float(pos.get("unrealizedPnl", 0) or 0)
+                if unrealized < -0.05:  # Menos que -$0.05
+                    self._log(f"[FORÇA_FECHAMENTO] {self.symbol}: unrealizedPnl={unrealized:.4f} < -0.05 - FORÇANDO FECHAMENTO!", level="ERROR")
+                    self._fechar_posicao(df_for_log or pd.DataFrame())
+                    return
+            except Exception as e:
+                self._log(f"[FORÇA_FECHAMENTO] Erro: {type(e).__name__}: {e}", level="ERROR")
+        
+        # Primeira verificação: guard_close_all para fechar imediatamente se PnL <= -0.05 (prioritário) ou ROI <= -5%
         try:
-            qty = self._position_quantity(pos)
+            current_px = self._preco_atual()
+            if guard_close_all(self.dex, self.symbol, float(current_px)):
+                self._log("Posição fechada imediatamente por PnL <= -0.05 USDC (prioritário) ou ROI <= -5%", level="INFO")
+                return
+        except Exception as e:
+            if self.debug:
+                self._log(f"Falha na verificação de PnL crítico: {type(e).__name__}: {e}", level="WARN")
+        
+        try:
+            qty = float(pos.get("contracts") or 0.0)
             if qty <= 0:
                 return
             entry_price = pos.get("entryPrice") or pos.get("entryPx") or pos.get("entry_price")
@@ -2842,28 +2364,35 @@ class EMAGradientStrategy:
                 lev_type = str(leverage_info.get("type") or "").lower()
                 target_lev = int(self.cfg.LEVERAGE)
                 if lev_type != "isolated" and target_lev > 0:
-                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated", "vaultAddress": VAULT_ADDRESS})
+                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated"})
                     self._log("Leverage ajustada para isolated em posição existente.", level="INFO")
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
-            stop_px, take_px = self._protection_prices(entry, norm_side, position=pos)
-            manage_take = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT or 0.0) > 0.0
-            if not manage_take:
-                take_px = None
-            if self._last_stop_order_px is not None and math.isfinite(self._last_stop_order_px):
-                if norm_side == "buy":
-                    stop_px = max(stop_px, float(self._last_stop_order_px))
-                else:
-                    stop_px = min(stop_px, float(self._last_stop_order_px))
+
+            try:
+                current_px = float(self._preco_atual())
+            except Exception:
+                current_px = entry
+
+            stop_px, trail_px = self._protection_prices(entry, norm_side, current_price=current_px, position=pos)
             close_side = "sell" if norm_side == "buy" else "buy"
 
             orders = self._fetch_reduce_only_orders()
+            if self.debug and orders:
+                self._log(f"DEBUG: Ordens reduceOnly encontradas: {len(orders)}", level="DEBUG")
+                for i, o in enumerate(orders):
+                    price = self._order_effective_price(o)
+                    side = self._norm_order_side(o)
+                    oid = self._extract_order_id(o)
+                    self._log(f"  Ordem {i+1}: side={side} price={price} id={oid}", level="DEBUG")
+            
             remaining_orders: List[Dict[str, Any]] = []
+            trailing_candidates: List[Tuple[Dict[str, Any], float, Optional[str]]] = []
             stop_match = None
-            take_match = None
-            # Aumentar tolerância para trailing stops (0.1% ao invés de 0.001%)
-            tol_stop = max(1e-6, abs(stop_px) * 0.001)  # 0.1% de tolerância
-            tol_take = max(1e-6, abs(take_px) * 0.001) if manage_take and take_px is not None else None
+            existing_trailing_price = None
+            existing_trailing_oid: Optional[str] = None
+            tol_stop = max(1e-8, abs(stop_px) * 1e-3)
+            tol_trail = max(1e-8, abs(trail_px) * 1e-3) if trail_px is not None else 0.0
 
             for order in orders or []:
                 oid = self._extract_order_id(order)
@@ -2875,53 +2404,34 @@ class EMAGradientStrategy:
                 if oside and oside != close_side:
                     remaining_orders.append(order)
                     continue
-                kind_guess = self._classify_protection_price(order, price, entry, norm_side)
+                kind_guess = self._classify_protection_price(price, entry, norm_side)
                 if kind_guess == "stop":
-                    # Verificar se a ordem existente está numa faixa aceitável para trailing stop
-                    price_diff_pct = abs(price - stop_px) / stop_px * 100
-                    if norm_side == "buy":
-                        # Para long: manter ordem se o preço da ordem é maior ou igual ao novo stop (mais conservador)
-                        # OU se a diferença é pequena (< 0.1%)
-                        if price >= stop_px - tol_stop or price_diff_pct < 0.1:
-                            stop_match = order
-                            # Manter o preço mais conservador (maior para long)
-                            if price > stop_px:
-                                stop_px = price
-                            self._last_stop_order_id = oid
-                            self._last_stop_order_px = price
-                            remaining_orders.append(order)
-                            self._log(f"[TRAILING] Mantendo stop existente @ {price:.6f} (calculado: {stop_px:.6f}) - diff: {price_diff_pct:.3f}%", level="DEBUG")
-                        else:
-                            self._log(f"[TRAILING] Cancelando stop desatualizado @ {price:.6f} (novo: {stop_px:.6f}) - diff: {price_diff_pct:.3f}%", level="DEBUG")
-                            self._cancel_order_silent(oid)
-                    else:
-                        # Para short: manter ordem se o preço da ordem é menor ou igual ao novo stop (mais conservador)
-                        # OU se a diferença é pequena (< 0.1%)
-                        if price <= stop_px + tol_stop or price_diff_pct < 0.1:
-                            stop_match = order
-                            # Manter o preço mais conservador (menor para short)
-                            if price < stop_px:
-                                stop_px = price
-                            self._last_stop_order_id = oid
-                            self._last_stop_order_px = price
-                            remaining_orders.append(order)
-                            self._log(f"[TRAILING] Mantendo stop existente @ {price:.6f} (calculado: {stop_px:.6f}) - diff: {price_diff_pct:.3f}%", level="DEBUG")
-                        else:
-                            self._log(f"[TRAILING] Cancelando stop desatualizado @ {price:.6f} (novo: {stop_px:.6f}) - diff: {price_diff_pct:.3f}%", level="DEBUG")
-                            self._cancel_order_silent(oid)
-                elif kind_guess == "take":
-                    if not manage_take:
-                        self._cancel_order_silent(oid)
-                        continue
-                    if take_px is not None and tol_take is not None and abs(price - take_px) <= tol_take:
-                        take_match = order
-                        self._last_take_order_id = oid
-                        self._last_take_order_px = price
+                    if abs(price - stop_px) <= tol_stop:
+                        stop_match = order
+                        self._last_stop_order_id = oid
                         remaining_orders.append(order)
                     else:
-                        self._cancel_order_silent(oid)
+                        roi_existing = _compute_roi_from_price(entry, norm_side, price)
+                        if roi_existing is not None and -0.06 <= roi_existing <= -0.04:
+                            remaining_orders.append(order)
+                        else:
+                            self._cancel_order_silent(oid)
+                elif kind_guess == "trail":
+                    trailing_candidates.append((order, price, oid))
                 else:
                     remaining_orders.append(order)
+
+            trailing_candidates_sorted = []
+            if trailing_candidates:
+                reverse = (norm_side == "buy")
+                trailing_candidates_sorted = sorted(trailing_candidates, key=lambda item: item[1], reverse=reverse)
+                keeper, keep_price, keep_oid = trailing_candidates_sorted[0]
+                existing_trailing_price = keep_price
+                existing_trailing_oid = keep_oid
+                self._last_trailing_order_id = keep_oid
+                remaining_orders.append(keeper)
+                for extra_order, _price, extra_oid in trailing_candidates_sorted[1:]:
+                    self._cancel_order_silent(extra_oid)
 
             orders = remaining_orders
 
@@ -2929,15 +2439,63 @@ class EMAGradientStrategy:
                 stop_order = self._place_stop(close_side, qty, stop_px, df_for_log=df_for_log, existing_orders=orders)
                 if stop_order is not None:
                     orders.append(stop_order)
-            if manage_take and take_match is None and take_px is not None:
-                self._place_take_profit(close_side, qty, take_px, df_for_log=df_for_log, existing_orders=orders)
+
+            create_trailing = False
+            if trail_px is not None:
+                if self.debug:
+                    self._log(f"DEBUG trailing: trail_px={trail_px:.6f}, existing_trailing_price={existing_trailing_price}", level="DEBUG")
+                
+                if existing_trailing_price is None:
+                    create_trailing = True
+                    if self.debug:
+                        self._log("DEBUG trailing: Criando nova ordem trailing (primeira vez)", level="DEBUG")
+                else:
+                    if norm_side == "buy":
+                        if trail_px > existing_trailing_price + tol_trail:
+                            if existing_trailing_oid:
+                                self._cancel_order_silent(existing_trailing_oid)
+                                orders = [o for o in orders if self._extract_order_id(o) != existing_trailing_oid]
+                                self._last_trailing_order_id = None
+                            create_trailing = True
+                            if self.debug:
+                                self._log(f"DEBUG trailing LONG: Atualizando {trail_px:.6f} > {existing_trailing_price:.6f}", level="DEBUG")
+                    else:  # SHORT
+                        # Para SHORT: stop deve subir quando ROI melhora (trailing_px deve AUMENTAR)
+                        if trail_px > existing_trailing_price + tol_trail:
+                            if existing_trailing_oid:
+                                self._cancel_order_silent(existing_trailing_oid)
+                                orders = [o for o in orders if self._extract_order_id(o) != existing_trailing_oid]
+                                self._last_trailing_order_id = None
+                            create_trailing = True
+                            if self.debug:
+                                self._log(f"DEBUG trailing SHORT: Atualizando {trail_px:.6f} > {existing_trailing_price:.6f}", level="DEBUG")
+
+            if create_trailing and trail_px is not None:
+                # Para AVNT, forçar cancelamento de todas as ordens trailing existentes
+                if self.symbol == "AVNT/USDC:USDC":
+                    try:
+                        all_orders = self.dex.fetch_open_orders(self.symbol)
+                        for order in all_orders or []:
+                            price = self._order_effective_price(order)
+                            if price and price < entry:  # Todas as ordens abaixo do entry para SHORT são trailing
+                                oid = self._extract_order_id(order)
+                                if self.debug:
+                                    self._log(f"DEBUG AVNT: Cancelando ordem trailing antiga id={oid} price={price}", level="DEBUG")
+                                self._cancel_order_silent(oid)
+                    except Exception as e:
+                        if self.debug:
+                            self._log(f"DEBUG AVNT: Erro ao limpar ordens antigas: {e}", level="DEBUG")
+                
+                if self.debug:
+                    self._log(f"DEBUG trailing: CRIANDO ordem trail_px={trail_px:.6f} close_side={close_side} qty={qty}", level="DEBUG")
+                trailing_order = self._place_trailing_stop(close_side, qty, trail_px, df_for_log=df_for_log, existing_orders=orders)
+                if trailing_order is not None:
+                    orders.append(trailing_order)
         except Exception as e:
             self._log(f"Falha ao sincronizar proteções: {type(e).__name__}: {e}", level="WARN")
 
     # ---------- ordens ----------
     def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
-        if self._posicao_aberta():
-            self._log("Entrada ignorada: posição já aberta.", level="DEBUG"); return None, None
         if self._tem_ordem_de_entrada_pendente():
             self._log("Entrada ignorada: ordem pendente detectada.", level="WARN"); return None, None
         if not self._anti_spam_ok("open"):
@@ -2949,7 +2507,7 @@ class EMAGradientStrategy:
             lev_int = None
         if lev_int and lev_int > 0:
             try:
-                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated", "vaultAddress": VAULT_ADDRESS})
+                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})
                 if self.debug:
                     self._log(f"Leverage ajustada para {lev_int}x (isolated)", level="DEBUG")
             except Exception as e:
@@ -2966,7 +2524,26 @@ class EMAGradientStrategy:
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
         )
-        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price, {"vaultAddress": VAULT_ADDRESS})
+        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)
+        _tpsl = ensure_tpsl_for_position(self.dex, self.symbol)
+        try:
+            _px_now = self.dex.fetch_ticker(self.symbol).get("last")
+            if _px_now:
+                guard_close_all(self.dex, self.symbol, float(_px_now))
+        except Exception:
+            pass
+        try:
+            avg_px = None
+            if isinstance(ordem_entrada, dict):
+                avg_px = ordem_entrada.get("average") or (
+                    ((ordem_entrada.get("info", {}) or {}).get("filled", {}) or {}).get("avgPx")
+                )
+            px_ref = float(avg_px) if avg_px else float(price)
+            tpsl = _place_tp_sl_orders_idempotent(self.dex, self.symbol, side, px_ref, amount)
+            self._log(f"TP/SL criados | TP={tpsl['tp']:.6f} SL={tpsl['sl']:.6f}", level="DEBUG");
+            guard_close_all(self.dex, self.symbol, float(self._preco_atual()))
+        except Exception as e:
+            self._log(f"Falha ao criar TP/SL: {type(e).__name__}: {e}", level="WARN")
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
 
         oid = None
@@ -3046,56 +2623,30 @@ class EMAGradientStrategy:
         except Exception:
             pass
 
-        # Integração com sistema de aprendizado
-        learner_context = None
-        try:
-            learner = get_learner()
-            learner_context = learner.record_entry(
-                symbol=self.symbol,
-                side=self._norm_side(side),
-                price=fill_price,
-                df=df_for_log
-            )
-            # Armazenar contexto para usar no fechamento
-            self._learner_context = learner_context
-        except Exception as e:
-            self._log(f"Erro no sistema de aprendizado (entrada): {e}", level="WARN")
-            self._learner_context = None
-
         self._last_stop_order_id = None
-        self._last_stop_order_px = None
-        self._last_take_order_id = None
-        self._last_take_order_px = None
-        self._trail_max_gain_pct = 0.0
+        self._last_trailing_order_id = None
 
         norm_side = self._norm_side(side)
-        sl_price, tp_price = self._protection_prices(fill_price, norm_side)
-        manage_take = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT or 0.0) > 0.0
-        if not manage_take:
-            tp_price = None
+        sl_price, trail_price = self._protection_prices(fill_price, norm_side, current_price=price)
         sl_side = "sell" if norm_side == "buy" else "buy"
-        tp_side = sl_side
+        trail_side = sl_side
 
         if self.debug:
-            if manage_take and tp_price is not None:
-                self._log(
-                    f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) "
-                    f"take={tp_price:.6f} (+{self.cfg.TAKE_PROFIT_CAPITAL_PCT*100:.1f}% margem)",
-                    level="DEBUG",
-                )
-            else:
-                self._log(
-                    f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) | take=standby",
-                    level="DEBUG",
-                )
+            trail_info = (
+                f", trailing={trail_price:.6f} (roi_margin={getattr(self.cfg, 'TRAILING_ROI_MARGIN', 0.10)*100:.1f}% alav)"
+                if trail_price is not None else ""
+            )
+            self._log(
+                f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem){trail_info}",
+                level="DEBUG",
+            )
 
         ordem_stop = self._place_stop(sl_side, fill_amount, sl_price, df_for_log=df_for_log)
         self._last_stop_order_id = self._extract_order_id(ordem_stop)
 
-        self._last_take_order_id = None
-        if manage_take and tp_price is not None:
-            ordem_take = self._place_take_profit(tp_side, fill_amount, tp_price, df_for_log=df_for_log)
-            self._last_take_order_id = self._extract_order_id(ordem_take)
+        if trail_price is not None:
+            ordem_trailing = self._place_trailing_stop(trail_side, fill_amount, trail_price, df_for_log=df_for_log)
+            self._last_trailing_order_id = self._extract_order_id(ordem_trailing)
 
         self._safe_log(
             "stop_inicial", df_for_log,
@@ -3104,18 +2655,18 @@ class EMAGradientStrategy:
             exec_amount=amount
         )
 
-        if manage_take and tp_price is not None:
+        if trail_price is not None:
             self._safe_log(
-                "take_profit_inicial", df_for_log,
+                "trailing_stop_inicial", df_for_log,
                 tipo=("long" if norm_side == "buy" else "short"),
-                exec_price=tp_price,
+                exec_price=trail_price,
                 exec_amount=amount
             )
 
         # Diagnóstico: listar ordens abertas reduceOnly
         try:
             if os.getenv("LIVE_TRADING", "0") in ("1", "true", "True"):
-                open_orders = self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS})
+                open_orders = self.dex.fetch_open_orders(self.symbol)
                 if open_orders:
                     self._log("Ordens reduceOnly ativas:", level="DEBUG")
                     for o in open_orders:
@@ -3139,7 +2690,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return None, None, None
-            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
+            for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -3163,7 +2714,7 @@ class EMAGradientStrategy:
             if order_id:
                 if self.debug:
                     self._log(f"Cancelando ordem reduceOnly id={order_id}", level="DEBUG")
-                self.dex.cancel_order(order_id, self.symbol, {"vaultAddress": VAULT_ADDRESS})
+                self.dex.cancel_order(order_id, self.symbol)
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao cancelar ordem {order_id}: {e}", level="WARN")
@@ -3175,17 +2726,17 @@ class EMAGradientStrategy:
         params = {"reduceOnly": True}
         if self.debug:
             self._log(f"Fechando posição via MARKET reduceOnly {side.upper()} qty={amt} px_ref={px:.6f}", level="DEBUG")
-        return self.dex.create_order(self.symbol, "market", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
+        return self.dex.create_order(self.symbol, "market", side, amt, px, params)
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()
-        if not pos or self._position_quantity(pos) == 0:
+        if not pos or float(pos.get("contracts", 0)) == 0:
             self._log("Fechamento ignorado: posição ausente.", level="DEBUG"); return
         if not self._anti_spam_ok("close"):
             self._log("Fechamento bloqueado pelo anti-spam.", level="DEBUG"); return
 
         lado_atual = self._norm_side(pos.get("side") or pos.get("positionSide"))
-        qty        = self._position_quantity(pos)
+        qty        = float(pos.get("contracts") or 0.0)
         price_now  = self._preco_atual()
         if self.debug:
             self._log(f"Fechando posição {lado_atual.upper()} qty={qty} px={price_now:.6f}", level="DEBUG")
@@ -3213,10 +2764,9 @@ class EMAGradientStrategy:
                 self._marcar_cooldown_barras(df_for_log)
             except Exception:
                 pass
-            self._trail_max_gain_pct = None
 
             # *** TRAILING STOP: Limpar High Water Mark ***
-            _clear_high_water_mark(self.symbol)
+            _clear_high_water_mark(f"trailing_{self.symbol}")
 
             # Notificação de fechamento (inclui tentativa de PnL/valor conta)
             try:
@@ -3231,122 +2781,97 @@ class EMAGradientStrategy:
             except Exception:
                 pass
 
-            # Integração com sistema de aprendizado
-            try:
-                if hasattr(self, '_learner_context') and self._learner_context:
-                    learner = get_learner()
-                    learner.record_close(
-                        context=self._learner_context,
-                        close_price=price_now,
-                        close_kind="close_external"  # Fechamento manual/por trigger
-                    )
-                    self._learner_context = None
-            except Exception as e:
-                self._log(f"Erro no sistema de aprendizado (fechamento): {e}", level="WARN")
-
     # ---------- trailing BE± ----------
     def _maybe_trailing_breakeven_plus(self, pos: Dict[str, Any], df_for_log: pd.DataFrame):
-        if not getattr(self.cfg, "ENABLE_TRAILING_STOP", False):
+        if not pos:
             return
-        if not pos or self.cfg.STOP_LOSS_CAPITAL_PCT <= 0:
-            return
-        side = self._norm_side(pos.get("side") or pos.get("positionSide"))
+        side  = self._norm_side(pos.get("side") or pos.get("positionSide"))
         entry = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
-        amt = self._position_quantity(pos)
-        if side not in ("buy", "sell") or entry <= 0 or amt <= 0:
+        amt   = float(pos.get("contracts") or 0.0)
+        if entry <= 0 or amt <= 0:
             return
 
-        try:
-            px_now = self._preco_atual()
-        except Exception:
-            return
-        if px_now <= 0:
-            return
+        px_now = self._preco_atual()
+        trg, off = self.cfg.BE_TRIGGER_PCT, self.cfg.BE_OFFSET_PCT
 
-        lev_meta = ((pos.get("info") or {}).get("position") or {}).get("leverage") or {}
-        try:
-            lev_val = float(lev_meta.get("value") or pos.get("leverage") or self.cfg.LEVERAGE)
-        except Exception:
-            lev_val = float(self.cfg.LEVERAGE)
-        if lev_val <= 0:
-            lev_val = float(self.cfg.LEVERAGE)
-        if lev_val == 0:
-            return
-
-        if side == "buy":
-            gain_pct_inst = ((px_now - entry) / entry) * lev_val * 100.0
-        else:
-            gain_pct_inst = ((entry - px_now) / entry) * lev_val * 100.0
-        if not math.isfinite(gain_pct_inst):
-            return
-
-        if self._trail_max_gain_pct is None:
-            self._trail_max_gain_pct = max(0.0, gain_pct_inst)
-        else:
-            self._trail_max_gain_pct = max(self._trail_max_gain_pct, gain_pct_inst)
-        max_gain = self._trail_max_gain_pct
-
-        tol = max(1e-8, entry * 1e-5)
-        risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(lev_val)
-
-        if side == "buy":
-            # Cálculo solicitado: ((preço atual / preço entrada) - 1) * alavancagem, ajustado em -10%,
-            # normalizado pela alavancagem e convertido novamente para preço.
-            variation = (px_now / entry) - 1.0
-            leveraged_variation = variation * lev_val
-            adjusted_leveraged = leveraged_variation - float(self.cfg.STOP_LOSS_CAPITAL_PCT)
-            normalized_adjusted = adjusted_leveraged / lev_val if lev_val != 0 else 0.0
-            target_stop = entry * (1.0 + normalized_adjusted)
-            stop_side = "sell"
-        else:
-            base_loss_pct = self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0
-            stop_roi = max(-base_loss_pct, max_gain - base_loss_pct)
-            target_stop = entry * (1.0 - (stop_roi / (lev_val * 100.0)))
-            stop_side = "buy"
-
-        if target_stop <= 0:
-            return
-
-        existing_stop_id = self._last_stop_order_id
-        existing_stop_px = self._last_stop_order_px
-        if existing_stop_px is None or existing_stop_id is None:
-            found_id, found_px, found_is_sell = self._find_existing_stop()
-            if found_px is not None:
-                existing_stop_id = found_id
-                existing_stop_px = found_px
-
-        baseline_stop = None
-        if side == "buy":
-            baseline_stop = entry * (1.0 - risk_ratio)
-        else:
-            baseline_stop = entry * (1.0 + risk_ratio)
-
-        reference_stop = existing_stop_px if existing_stop_px is not None else baseline_stop
-        if reference_stop is not None:
-            if side == "buy" and target_stop <= reference_stop + tol:
-                return
-            if side == "sell" and target_stop >= reference_stop - tol:
-                return
-
-        if not self._anti_spam_ok("adjust"):
-            return
-
-        ret = self._place_stop(stop_side, amt, target_stop, df_for_log=df_for_log)
-        if ret is not None:
-            new_stop_id = self._last_stop_order_id
-            if existing_stop_id and existing_stop_id != new_stop_id:
-                self._cancel_order_silent(existing_stop_id)
-            self._last_stop_order_px = target_stop
+        if self.debug:
+            trig_mult = (1.0 + trg) if side == "buy" else (1.0 - trg)
+            off_mult  = (1.0 + off) if side == "buy" else (1.0 - off)
             self._log(
-                f"Trailing capital: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f}, max_gain={max_gain:.2f}%)",
-                level="INFO",
+                f"Verificando BE± side={side.upper()} entry={entry:.6f} px={px_now:.6f} "
+                f"trigger_mult={trig_mult:.6f} off_mult={off_mult:.6f}",
+                level="DEBUG",
             )
-            self._safe_log(
-                "ajuste_stop", df_for_log,
-                tipo=("long" if side == "buy" else "short"),
-                exec_price=px_now,
-                exec_amount=amt
+
+        if side == "buy":
+            if px_now < entry * (1.0 + trg):
+                if self.debug:
+                    self._log(
+                        f"BE não acionado (LONG). px_now {px_now:.6f} < {entry*(1+trg):.6f}",
+                        level="DEBUG",
+                    )
+                return
+            target_stop = entry * (1.0 + off)
+            stop_side   = "sell"
+            better      = lambda new, cur: (cur is None) or (new > cur)
+        elif side == "sell":
+            if px_now > entry * (1.0 - trg):
+                if self.debug:
+                    self._log(
+                        f"BE não acionado (SHORT). px_now {px_now:.6f} > {entry*(1-trg):.6f}",
+                        level="DEBUG",
+                    )
+                return
+            target_stop = entry * (1.0 - off)
+            stop_side   = "buy"
+            better      = lambda new, cur: (cur is None) or (new < cur)
+        else:
+            return
+
+        oid, cur_stop, cur_is_sell = self._find_existing_stop()
+        if self.debug:
+            self._log(
+                f"Stop atual id={oid} px={cur_stop} is_sell={cur_is_sell} target={target_stop:.6f}",
+                level="DEBUG",
             )
+
+        # stop do lado errado? remove
+        if cur_stop is not None:
+            if (side == "buy" and not cur_is_sell) or (side == "sell" and cur_is_sell):
+                if self.debug:
+                    self._log("Stop do lado incorreto detectado. Cancelando para recriar.", level="DEBUG")
+                self._cancel_order_silent(oid)
+                cur_stop, oid = None, None
+
+        if not better(target_stop, cur_stop):
+            if self.debug:
+                self._log("Ajuste de stop ignorado (não melhora preço).", level="DEBUG")
+            return
+        if not self._anti_spam_ok("adjust"):
+            if self.debug:
+                self._log("Ajuste bloqueado pelo anti-spam.", level="DEBUG")
+            return
+
+        existing = self._find_matching_protection('stop', stop_side, target_stop)
+        if existing is not None:
+            # Já existe um STOP equivalente; não cancelar nem recriar
+            if self.debug:
+                self._log(f"Trailing BE±: stop existente @ {target_stop:.6f}; nada a fazer", level="DEBUG")
+            return
+        if oid:
+            self._cancel_order_silent(oid)
+        ret = self._place_stop(stop_side, amt, target_stop, df_for_log=df_for_log)
+        self._log(
+            f"Trailing BE±: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f})",
+            level="INFO",
+        )
+
+        self._safe_log(
+            "ajuste_stop", df_for_log,
+            tipo=("long" if side == "buy" else "short"),
+            exec_price=px_now,
+            exec_amount=amt
+        )
 
     # ---------- loop principal ----------
     def step(self, df: pd.DataFrame, usd_to_spend: float, rsi_df_hourly: Optional[pd.DataFrame] = None):
@@ -3356,29 +2881,11 @@ class EMAGradientStrategy:
         else:
             df = df.copy()
 
-        self._last_price_snapshot = None
-
         # indicadores e gradiente em %/barra
         df = self._compute_indicators_live(df)
         last = df.iloc[-1]
         last_idx = len(df) - 1
         self._last_seen_bar_idx = last_idx
-
-        price_snapshot = None
-        live_enabled = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-        if live_enabled:
-            try:
-                price_snapshot = self._preco_atual()
-            except Exception:
-                price_snapshot = None
-        if price_snapshot is None:
-            fallback_price = None
-            try:
-                fallback_price = float(last.valor_fechamento)
-            except Exception:
-                fallback_price = None
-            if fallback_price is not None and math.isfinite(fallback_price):
-                self._last_price_snapshot = fallback_price
 
         # helpers de consistência do gradiente
         g = df["ema_short_grad_pct"].tail(self.cfg.GRAD_CONSISTENCY)
@@ -3403,105 +2910,67 @@ class EMAGradientStrategy:
 
         prev_side = self._last_pos_side
         pos = self._posicao_aberta()
-        pos_info = 'None' if pos is None else f'size={pos.get("contracts", 0)}'
-        self._log(f"[DEBUG_CLOSE] prev_side={prev_side} | pos={pos_info}", level="DEBUG")
-        self._log(f"Snapshot posição atual: {pos}", level="DEBUG")
 
         # Verificar e cancelar ordens triggered, criar price below se necessário
         try:
             current_price = self._preco_atual()
-            vault_address = VAULT_ADDRESS  # Usar a subconta configurada
-            cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price, vault=vault_address)
+            cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price)
         except Exception as e:
-            self._log(f"Erro ao processar ordens triggered (vault): {type(e).__name__}: {e}", level="WARN")
+            self._log(f"Erro ao processar ordens triggered: {type(e).__name__}: {e}", level="WARN")
 
-        # Verificar stop loss por PnL/ROI para fechamento imediato (PnL tem prioridade)
         if pos:
             emergency_closed = False
             try:
-                # PRIORITÁRIO: Verificar unrealized PnL primeiro
-                unrealized_pnl = pos.get("unrealizedPnl")
-                if unrealized_pnl is not None:
-                    unrealized_pnl = float(unrealized_pnl)
-                    if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                        try:
-                            qty = abs(float(pos.get("contracts", 0)))
-                            side = self._norm_side(pos.get("side") or pos.get("positionSide"))
-                            exit_side = "sell" if side in ("buy", "long") else "buy"
-                            vault_address = VAULT_ADDRESS
-                            
-                            # Buscar preço atual para ordem market
-                            ticker = self.dex.fetch_ticker(self.symbol)
-                            current_price = float(ticker.get("last", 0) or 0)
-                            if current_price <= 0:
-                                self._log("Erro: preço atual inválido para fechamento de emergência por PnL", level="ERROR")
-                                raise ValueError("Preço atual inválido")
-                                
-                            # Ajustar preço para garantir execução
-                            if exit_side == "sell":
-                                order_price = current_price * 0.995  # Ligeiramente abaixo para long
-                            else:
-                                order_price = current_price * 1.005  # Ligeiramente acima para short
-                            
-                            self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
-                            emergency_closed = True
-                            _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
-                            self._log(f"[DEBUG_CLOSE] 🚨 FECHAMENTO POR PNL: {unrealized_pnl:.2f} <= {UNREALIZED_PNL_HARD_STOP}", level="ERROR")
-                            self._log(f"Emergência acionada (vault): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
-                        except Exception as e:
-                            self._log(f"Erro ao fechar posição por PnL (vault): {e}", level="ERROR")
-                
-                # Se não fechou por PnL, verificar ROI
-                if not emergency_closed:
-                    roi_value = None
-                    try:
-                        roi_value = pos.get("returnOnEquity")
-                        if roi_value is None:
-                            roi_value = pos.get("returnOnInvestment") 
-                        if roi_value is None:
-                            roi_value = pos.get("roi")
-                    except Exception:
-                        pass
-                    
-                    if roi_value is not None:
-                        try:
-                            roi_f = float(roi_value)
-                            if roi_f <= ROI_HARD_STOP:
-                                qty = abs(float(pos.get("contracts", 0)))
-                                side = self._norm_side(pos.get("side") or pos.get("positionSide"))
-                                exit_side = "sell" if side in ("buy", "long") else "buy"
-                                vault_address = VAULT_ADDRESS
-                                
-                                # Buscar preço atual para ordem market
-                                ticker = self.dex.fetch_ticker(self.symbol)
-                                current_price = float(ticker.get("last", 0) or 0)
-                                if current_price <= 0:
-                                    self._log("Erro: preço atual inválido para fechamento de emergência por ROI", level="ERROR")
-                                    raise ValueError("Preço atual inválido")
-                                    
-                                # Ajustar preço para garantir execução
-                                if exit_side == "sell":
-                                    order_price = current_price * 0.995  # Ligeiramente abaixo para long
-                                else:
-                                    order_price = current_price * 1.005  # Ligeiramente acima para short
-                                
-                                self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
-                                emergency_closed = True
-                                _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
-                                self._log(f"[DEBUG_CLOSE] 🚨 FECHAMENTO POR ROI: {roi_f:.4f} <= {ROI_HARD_STOP}", level="ERROR")
-                                self._log(f"Emergência acionada (vault): ROI <= {ROI_HARD_STOP}%, posição fechada imediatamente.", level="ERROR")
-                        except Exception as e:
-                            self._log(f"Erro ao fechar posição por ROI (vault): {e}", level="ERROR")
-                        
+                if close_if_unrealized_pnl_breaches(self.dex, self.symbol, threshold=-0.50):
+                    emergency_closed = True
             except Exception as e:
-                self._log(f"Falha ao avaliar emergência de PnL/ROI (vault): {type(e).__name__}: {e}", level="WARN")
-            
+                self._log(f"Falha ao avaliar emergência de PnL: {type(e).__name__}: {e}", level="WARN")
+
             if emergency_closed:
+                norm_side = self._norm_side(pos.get("side") or pos.get("positionSide"))
+                try:
+                    price_emg = self._preco_atual()
+                except Exception:
+                    try:
+                        price_emg = float(df["valor_fechamento"].iloc[-1])
+                    except Exception:
+                        price_emg = None
+                self._log("[DEBUG_CLOSE] 🚨 FECHAMENTO POR PNL: unrealizedPnL <= -0.05", level="ERROR")
+                self._log("Emergência acionada: unrealizedPnL <= -0.05, posição fechada imediatamente.", level="ERROR")
+                try:
+                    self._safe_log(
+                        "emergencia_unrealized",
+                        df_for_log=df,
+                        tipo=("long" if norm_side == "buy" else "short"),
+                        exec_price=price_emg,
+                        exec_amount=float(pos.get("contracts") or 0.0),
+                    )
+                except Exception:
+                    pass
                 self._cancel_protective_orders(fetch_backup=True)
+                
+                # *** TRAILING STOP: Limpar High Water Mark ***
+                _clear_high_water_mark(f"trailing_{self.symbol}")
+                
                 self._last_pos_side = None
                 self._last_stop_order_id = None
-                self._last_take_order_id = None
+                self._last_trailing_order_id = None
+                self._last_close_at = datetime.now(timezone.utc)
+                try:
+                    self._notify_trade(
+                        kind="close_emergency",
+                        side=norm_side,
+                        price=price_emg,
+                        amount=float(pos.get("contracts") or 0.0),
+                        note="fechamento emergencial por unrealizedPnL",
+                        include_hl=True,
+                    )
+                except Exception:
+                    pass
                 return
+
+        pos = self._posicao_aberta()
+        self._log(f"Snapshot posição atual: {pos}", level="DEBUG")
 
         # se havia posição e agora não há → stop/saída ocorreu fora
         if prev_side and not pos:
@@ -3519,12 +2988,13 @@ class EMAGradientStrategy:
             self._cancel_protective_orders(fetch_backup=True)
             # aplica cooldown por barras para evitar reversão imediata
             self._marcar_cooldown_barras(df)
+            
+            # *** TRAILING STOP: Limpar High Water Mark ***
+            _clear_high_water_mark(f"trailing_{self.symbol}")
+            
             self._last_pos_side = None
             self._last_stop_order_id = None
-            self._last_take_order_id = None
-            self._trail_max_gain_pct = None
-            self._last_stop_order_px = None
-            self._last_take_order_px = None
+            self._last_trailing_order_id = None
 
             # Notificação de fechamento externo (provável stop)
             try:
@@ -3593,74 +3063,16 @@ class EMAGradientStrategy:
                     self._pending_after_cd = {"side": "SHORT", "reason": "cooldown_intent_short", "created_idx": last_idx}
             return
 
-        lado = None
         if pos:
             lado = self._norm_side(pos.get("side") or pos.get("positionSide"))
             self._ensure_position_protections(pos, df_for_log=df)
-            if getattr(self.cfg, "ENABLE_TRAILING_STOP", False):
-                self._maybe_trailing_breakeven_plus(pos, df_for_log=df)
-        # Contenção adicional: fecha se perda > limite configurado
-        try:
-            entry_px = float(pos.get("entryPrice") or pos.get("entryPx") or 0.0)
-            qty_pos = self._position_quantity(pos)
-            contract_sz = float(pos.get("contractSize") or 1.0)
-            px_now = self._preco_atual()
-            lev_meta = ((pos.get("info") or {}).get("position") or {}).get("leverage") or {}
-            lev_val = float(lev_meta.get("value") or pos.get("leverage") or self.cfg.LEVERAGE)
-        except Exception:
-            entry_px = 0.0; qty_pos = 0.0; contract_sz = 1.0; px_now = 0.0; lev_val = float(self.cfg.LEVERAGE)
-        if lev_val <= 0:
-            lev_val = float(self.cfg.LEVERAGE)
-        loss_trigger_pct = -abs(self.cfg.STOP_LOSS_CAPITAL_PCT * 100.0)
-        pnl_abs = None
-        if pos:
-            raw_abs = pos.get("unrealizedPnl")
-            if raw_abs is None:
-                raw_abs = ((pos.get("info") or {}).get("position") or {}).get("unrealizedPnl")
-            try:
-                pnl_abs = float(raw_abs)
-            except Exception:
-                pnl_abs = None
-            if pnl_abs is None or not math.isfinite(pnl_abs):
-                if entry_px > 0 and qty_pos > 0 and px_now > 0:
-                    qvalue = qty_pos * contract_sz
-                    if qvalue > 0:
-                        if lado == "buy":
-                            pnl_abs = (px_now - entry_px) * qvalue
-                        else:
-                            pnl_abs = (entry_px - px_now) * qvalue
-        if entry_px > 0 and qty_pos > 0 and px_now > 0:
-            if lado == "buy":
-                pnl_pct = ((px_now - entry_px) / entry_px) * lev_val * 100.0
-                pnl_abs = pnl_abs if pnl_abs is not None else (px_now - entry_px) * qty_pos * contract_sz
-            else:
-                pnl_pct = ((entry_px - px_now) / entry_px) * lev_val * 100.0
-                pnl_abs = pnl_abs if pnl_abs is not None else (entry_px - px_now) * qty_pos * contract_sz
-            if self.debug:
-                self._log(f"Drawdown atual={pnl_pct:.2f}% | limite={loss_trigger_pct:.2f}%", level="DEBUG")
-            max_loss_abs = float(getattr(self.cfg, "MAX_LOSS_ABS_USD", 0.0) or 0.0)
-            if max_loss_abs > 0 and pnl_abs is not None and math.isfinite(pnl_abs):
-                if pnl_abs <= -abs(max_loss_abs):
-                    self._log(
-                        f"Perda de {pnl_abs:.4f} USDC excedeu limite -{abs(max_loss_abs):.2f}. Fechando posição imediatamente.",
-                        level="WARN",
-                    )
-                    self._fechar_posicao(df_for_log=df)
-                    return
-            if pnl_pct <= loss_trigger_pct:
-                self._log(
-                    f"Perda de {pnl_pct:.2f}% excedeu limite {loss_trigger_pct:.2f}%. Fechando posição imediatamente.",
-                    level="WARN",
-                )
-                self._fechar_posicao(df_for_log=df)
-                return
-            self._log("Posição aberta: aguardando execução de TP/SL.", level="DEBUG")
+            self._log("Posição aberta: aguardando execução de TP/SL. (safety-kill verificado)", level="DEBUG")
             self._safe_log("decisao", df_for_log=df, tipo="info")
             self._last_pos_side = lado if lado in ("buy", "sell") else None
-            return
+        allow_scale_in = True
 
-        # entradas (sem posição), respeitando no-trade zone e intenção pós-cooldown
-        if not pos:
+        # Entradas (permitidas mesmo com posição), respeitando no-trade zone e intenção pós-cooldown
+        if not pos or allow_scale_in:
             # Diagnóstico das variáveis de gatilho (apenas quando sem posição)
             try:
                 g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
@@ -3706,7 +3118,7 @@ class EMAGradientStrategy:
             if not live:
                 self._log("LIVE_TRADING=0: avaliando sinais sem enviar ordens.", level="INFO")
                 self._safe_log("paper_mode", df_for_log=df, tipo="info")
-                self._last_pos_side = None
+                self._last_pos_side = self._norm_side(pos.get("side")) if pos else None
                 return
             # RSI força (ignora no-trade zone se disparar)
             rsi_val = float('nan')
@@ -3750,7 +3162,7 @@ class EMAGradientStrategy:
                         reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
                     self._log("No-Trade Zone ativa: " + "; ".join(reasons_nt), level="INFO")
                     self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
-                    self._last_pos_side = None
+                    self._last_pos_side = self._norm_side(pos.get("side")) if pos else None
                     return
 
             # intenção pós-cooldown: exigir confirmação adicional
@@ -3789,7 +3201,7 @@ class EMAGradientStrategy:
                         return
                 self._log("Entrada descartada: confirmação pós-cooldown perdida.", level="INFO")
                 self._pending_after_cd = None
-                self._last_pos_side = None
+                self._last_pos_side = self._norm_side(pos.get("side")) if pos else None
                 return
 
             # Entradas normais
@@ -3854,9 +3266,13 @@ class EMAGradientStrategy:
                 self._log("SHORT rejeitado: " + ("; ".join(reasons_short) if reasons_short else "sem motivos"), level="DEBUG")
             except Exception:
                 pass
-            self._log("Sem posição: critérios de entrada não atendidos.", level="DEBUG")
+            context = "Sem posição" if not pos else "Com posição"
+            self._log(f"{context}: critérios de entrada não atendidos.", level="DEBUG")
             self._safe_log("decisao", df_for_log=df, tipo="info")
-            self._last_pos_side = None
+            if pos:
+                self._last_pos_side = self._norm_side(pos.get("side")) if pos else None
+            else:
+                self._last_pos_side = None
             return
 
 
@@ -4329,12 +3745,385 @@ def backtest_ema_gradient(df: pd.DataFrame, params: Optional[BacktestParams] = N
 # 🔧 INSTÂNCIA E EXECUÇÃO
 # =========================
 
+
+
+# ===== SAFETY UTILS (inseridos antes do __main__ para evitar NameError) =====
+
+def _get_position_for_vault(dex, symbol, vault=None):
+    """
+    Tenta obter a posição atual (conta principal) para o símbolo.
+    Retorna dict com chaves padrão: contracts, entryPrice, side, leverage, info
+    """
+    try:
+        # Sempre opera na conta mãe (sem vault)
+        poss = dex.fetch_positions([symbol]) or []
+    except Exception as e:
+        print(f"[POS][{symbol}] fetch_positions falhou: {type(e).__name__}: {e}")
+        poss = []
+
+    best = None
+    for p in poss:
+        try:
+            contracts = float(p.get("contracts") or p.get("amount") or 0.0)
+            if contracts > 0:
+                best = p
+                break
+            # alguns conectores reportam posição com side mesmo zerada
+            if p.get("side"):
+                best = p
+        except Exception:
+            continue
+
+    if not best and poss:
+        best = poss[0]
+
+    if not isinstance(best, dict):
+        return None
+
+    # normaliza campos
+    try:
+        if "contracts" not in best:
+            c = best.get("amount") or 0.0
+            best["contracts"] = float(c)
+    except Exception:
+        pass
+    try:
+        if "entryPrice" not in best:
+            ep = (best.get("entry") or best.get("avgEntryPrice") or 0.0)
+            if ep: best["entryPrice"] = float(ep)
+    except Exception:
+        pass
+    return best
+
+
+def _get_pos_size_and_leverage(dex, symbol, *, vault=None):
+    # Sempre opera na conta mãe (ignora parâmetro vault)
+    p = _get_position_for_vault(dex, symbol, None)
+    if not p:
+        return 0.0, 1.0, None, None
+    qty = float(p.get("contracts") or 0.0)
+    entry = float(p.get("entryPrice") or 0.0) or None
+    side = p.get("side") or None
+    lev = p.get("leverage")
+    if isinstance(lev, dict):
+        lev = lev.get("value")
+    if lev is None:
+        info = p.get("info") or {}
+        lev = ((info.get("position") or {}).get("leverage") or {}).get("value")
+    if lev is None:
+        lev = 1.0
+    return float(qty), float(lev), entry, side
+
+
+def ensure_tpsl_for_position(dex, symbol, *, retries: int = 2, price_tol_pct: float = 0.001):
+    """
+    Garante stop-loss e trailing-stop reduceOnly para a posição atual, sem degradar trailing existente.
+    price_tol_pct = 0.001 => 0,1% de tolerância na comparação de preço.
+    """
+    qty, lev, entry, side = _get_pos_size_and_leverage(dex, symbol)
+    if qty <= 0 or not entry or not side:
+        print(f"[TPSL][{symbol}] Sem posição; nada a fazer.")
+        return {"ok": False, "reason": "no_position", "qty": qty, "lev": lev, "entry": entry}
+
+    try:
+        ticker = dex.fetch_ticker(symbol) or {}
+        current = float(ticker.get("last") or ticker.get("info", {}).get("markPx") or entry)
+    except Exception:
+        current = entry
+
+    targets = compute_tp_sl_leveraged(entry, side, lev, qty, current_px=current)
+    trail = targets.get("trail")
+    sl = float(targets["sl"])
+    exit_side = "sell" if (str(side).lower() in ("long", "buy")) else "buy"
+    print(f"[TPSL][{symbol}] entry={entry:.6f} side={side} lev={lev} qty={qty} -> trailing={trail if trail is not None else 'n/a'} SL={sl:.6f}")
+
+    def _approx_equal(a, b, tol):
+        a = float(a)
+        b = float(b)
+        ref = max(1e-12, abs(b))
+        return abs(a - b) <= ref * tol + 1e-9
+
+    def _is_reduce_only(o):
+        try:
+            p = o.get("params") or o.get("info") or {}
+            if isinstance(p, dict) and p.get("reduceOnly") is True:
+                return True
+            if o.get("reduceOnly") is True:
+                return True
+        except Exception:
+            pass
+        return False
+
+    try:
+        open_ords = dex.fetch_open_orders(symbol) or []
+    except Exception as e:
+        print(f"[TPSL][{symbol}] Falha ao ler open orders: {type(e).__name__}: {e}")
+        open_ords = []
+
+    has_stop = False
+    best_trail_price: Optional[float] = None
+    best_trail_oid: Optional[str] = None
+
+    for o in open_ords:
+        try:
+            if not _is_reduce_only(o):
+                continue
+            info = o.get("params") or o.get("info") or {}
+            trig = (info.get("triggerPrice") or info.get("stopLossPrice") or info.get("stopPrice")
+                    or info.get("takeProfitPrice") or info.get("tpPrice") or o.get("price"))
+            if trig is None:
+                continue
+            trig = float(trig)
+            if _approx_equal(trig, sl, price_tol_pct):
+                has_stop = True
+                continue
+            
+            # Verificar se o stop loss existente está no range de -4% a -6%
+            # Se estiver, manter; se não estiver, será cancelado e recriado
+            roi_existing = _compute_roi_from_price(entry, side, trig)
+            if roi_existing is not None and -0.06 <= roi_existing <= -0.04:
+                has_stop = True  # Considera como válido se estiver no range
+                continue
+            
+            if trail is None:
+                continue
+            if _approx_equal(trig, trail, price_tol_pct):
+                best_trail_price = trig if best_trail_price is None else (
+                    max(best_trail_price, trig) if exit_side == "sell" else min(best_trail_price, trig)
+                )
+                best_trail_oid = o.get("id") or (o.get("info", {}) or {}).get("oid") or best_trail_oid
+                continue
+            # Direcional: mantém o melhor trailing visto
+            if best_trail_price is None:
+                best_trail_price = trig
+                best_trail_oid = o.get("id") or (o.get("info", {}) or {}).get("oid")
+            else:
+                if exit_side == "sell" and trig > best_trail_price:
+                    best_trail_price = trig
+                    best_trail_oid = o.get("id") or (o.get("info", {}) or {}).get("oid")
+                if exit_side == "buy" and trig < best_trail_price:
+                    best_trail_price = trig
+                    best_trail_oid = o.get("id") or (o.get("info", {}) or {}).get("oid")
+        except Exception:
+            continue
+
+    print(
+        f"[TPSL][{symbol}] Já existem? stop={has_stop} trailing={'OK' if best_trail_price is not None else 'MISSING'} "
+        f"(tol={price_tol_pct*100:.3f}%)"
+    )
+
+    def _create_stop_try():
+        base = {"reduceOnly": True, "timeInForce": "GTC"}
+        # Usar ordens LIMIT ao invés de MARKET para evitar erro de slippage
+        for v in ({"type": "limit", "triggerPrice": sl, "stopLossPrice": sl},
+                  {"triggerPrice": sl},
+                  {"stopPrice": sl}):
+            try:
+                print(f"[TPSL][{symbol}] Criando STOP {v}")
+                return dex.create_order(symbol, "limit", exit_side, qty, sl, dict(base, **v))
+            except Exception as e:
+                print(f"[TPSL][{symbol}] Falha STOP {v}: {type(e).__name__}: {e}")
+        return None
+
+    def _create_trail_try():
+        if trail is None:
+            return None
+        base = {"reduceOnly": True, "timeInForce": "GTC", "trigger": "mark"}
+        params = {"triggerPrice": trail, "stopLossPrice": trail}
+        try:
+            print(f"[TPSL][{symbol}] Criando TRAILING {params}")
+            return dex.create_order(symbol, "limit", exit_side, qty, trail, dict(base, **params))
+        except Exception as e:
+            print(f"[TPSL][{symbol}] Falha TRAILING {params}: {type(e).__name__}: {e}")
+            return None
+
+    created_stop = created_trail = None
+    for _ in range(max(1, int(retries))):
+        if not has_stop and created_stop is None:
+            created_stop = _create_stop_try()
+        need_trail = trail is not None and created_trail is None
+        if trail is not None and best_trail_price is not None:
+            if exit_side == "sell" and trail > best_trail_price * (1 + price_tol_pct):
+                if best_trail_oid:
+                    try:
+                        dex.cancel_order(best_trail_oid, symbol)
+                        print(f"[TPSL][{symbol}] Cancelando trailing antigo id={best_trail_oid}")
+                    except Exception as e:
+                        print(f"[TPSL][{symbol}] Falha ao cancelar trailing antigo: {type(e).__name__}: {e}")
+                best_trail_price = None
+                need_trail = True
+            if exit_side == "buy" and trail < best_trail_price * (1 - price_tol_pct):
+                if best_trail_oid:
+                    try:
+                        dex.cancel_order(best_trail_oid, symbol)
+                        print(f"[TPSL][{symbol}] Cancelando trailing antigo id={best_trail_oid}")
+                    except Exception as e:
+                        print(f"[TPSL][{symbol}] Falha ao cancelar trailing antigo: {type(e).__name__}: {e}")
+                best_trail_price = None
+                need_trail = True
+        if need_trail and trail is not None:
+            created_trail = _create_trail_try()
+
+        try:
+            cur = dex.fetch_open_orders(symbol) or []
+        except Exception as e:
+            print(f"[TPSL][{symbol}] Releitura open orders falhou: {type(e).__name__}: {e}")
+            cur = []
+        hs = has_stop
+        ht = best_trail_price is not None or created_trail is not None or trail is None
+        for o in cur:
+            try:
+                if not _is_reduce_only(o):
+                    continue
+                info = o.get("params") or o.get("info") or {}
+                trig = (info.get("triggerPrice") or info.get("stopLossPrice") or info.get("stopPrice")
+                        or info.get("takeProfitPrice") or info.get("tpPrice") or o.get("price"))
+                if trig is None:
+                    continue
+                trig = float(trig)
+                if not hs and _approx_equal(trig, sl, price_tol_pct):
+                    hs = True
+                if trail is not None and not ht and _approx_equal(trig, trail, price_tol_pct):
+                    ht = True
+            except Exception:
+                continue
+        if hs and (ht or trail is None):
+            print(f"[TPSL][{symbol}] OK => proteções presentes.")
+            return {
+                "ok": True,
+                "created_stop": created_stop is not None,
+                "created_trailing": created_trail is not None,
+                "trail": trail,
+                "sl": sl,
+            }
+
+    print(
+        f"[TPSL][{symbol}] Resultado final: stop={'OK' if has_stop else 'MISSING'} "
+        f"trailing={'OK' if (best_trail_price is not None or created_trail is not None or trail is None) else 'MISSING'}"
+    )
+    return {
+        "ok": has_stop or (trail is not None and (best_trail_price is not None or created_trail is not None)),
+        "created_stop": created_stop is not None,
+        "created_trailing": created_trail is not None,
+        "trail": trail,
+        "sl": sl,
+    }
+
+# ===== FIM SAFETY UTILS =====
+
+def _approx_equal(a: float, b: float, tol_abs: float = None, tol_pct: float = 0.001) -> bool:
+    if a is None or b is None:
+        return False
+    ref = max(abs(a), abs(b), 1e-12)
+    bound = max((tol_abs or 0.0), ref * tol_pct)
+    return abs(a - b) <= bound
+
+
+def _get_current_contracts(dex, symbol, *, vault=None) -> float:
+    # Sempre opera na conta mãe (ignora parâmetro vault)
+    try:
+        poss = dex.fetch_positions([symbol]) or []
+        for p in poss:
+            contracts = p.get("contracts") or p.get("amount") or 0
+            if contracts and float(contracts) > 0:
+                return float(contracts)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _place_tp_sl_orders_idempotent(dex, symbol, side, entry_px, amount):
+    contracts_now = _get_current_contracts(dex, symbol)
+    qty = contracts_now if contracts_now > 0 else float(amount)
+
+    qty_target, lev, _, _ = _get_pos_size_and_leverage(dex, symbol)
+    leverage = lev if lev else 1.0
+    qty_for_calc = qty_target if qty_target > 0 else qty
+
+    try:
+        ticker = dex.fetch_ticker(symbol) or {}
+        current = float(ticker.get("last") or ticker.get("info", {}).get("markPx") or entry_px)
+    except Exception:
+        current = entry_px
+
+    targets = compute_tp_sl_leveraged(entry_px, side, leverage, qty_for_calc, current_px=current)
+    trail = targets.get("trail")
+    sl = float(targets["sl"])
+    exit_side = "sell" if side.lower() in ("long", "buy") else "buy"
+
+    try:
+        open_orders = dex.fetch_open_orders(symbol) or []
+    except Exception:
+        open_orders = []
+
+    has_stop = False
+    best_trail_price: Optional[float] = None
+    params_base = {"reduceOnly": True, "timeInForce": "GTC", "trigger": "mark"}
+
+    for o in open_orders:
+        try:
+            o_side = (o.get("side") or "").lower()
+            if o_side != exit_side:
+                continue
+            info = o.get("info") or {}
+            ro_flag = bool(o.get("reduceOnly")) or bool(info.get("reduceOnly"))
+            if not ro_flag:
+                continue
+            trig = (
+                o.get("triggerPrice")
+                or info.get("triggerPrice")
+                or info.get("stopLossPrice")
+                or info.get("stopPrice")
+            )
+            if trig is None:
+                continue
+            trig = float(trig)
+            if _approx_equal(trig, sl):
+                has_stop = True
+                continue
+            if trail is not None:
+                if best_trail_price is None:
+                    best_trail_price = trig
+                else:
+                    if exit_side == "sell" and trig > best_trail_price:
+                        best_trail_price = trig
+                    if exit_side == "buy" and trig < best_trail_price:
+                        best_trail_price = trig
+        except Exception:
+            continue
+
+    results = {"trail": trail, "sl": sl, "created_stop": None, "created_trailing": None, "qty_used": qty}
+
+    if not has_stop and qty > 0:
+        stop_params = dict(params_base)
+        stop_params.update({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl})
+        try:
+            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params)
+        except Exception:
+            stop_params_fb = dict(params_base)
+            stop_params_fb.update({"triggerPrice": sl})
+            results["created_stop"] = dex.create_order(symbol, "market", exit_side, qty, None, stop_params_fb)
+
+    if trail is not None and qty > 0 and best_trail_price is None:
+        # Para trailing stop usar ordem LIMIT simples (não market com trigger)
+        try:
+            results["created_trailing"] = dex.create_order(symbol, "limit", exit_side, qty, trail, {"reduceOnly": True})
+        except Exception:
+            try:
+                results["created_trailing"] = dex.create_order(symbol, "limit", exit_side, qty, trail, {"reduceOnly": True})
+            except Exception:
+                results["created_trailing"] = None
+
+    return results
+
 if __name__ == "__main__":
     # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
     EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
-    def check_all_trailing_stops_v4(dex_in, asset_state, vault_address: str) -> None:
-        """Verifica e ajusta trailing stops dinâmicos para TODAS as posições abertas."""
+    def fast_safety_check(dex_in, asset_state: Dict[str, Dict[str, Any]]) -> None:
+        """Executa verificações rápidas de segurança (PnL, ROI, guard_close_all) para todos os ativos."""
+        open_positions = []
+        
         for asset in ASSET_SETUPS:
             state = asset_state.get(asset.name)
             if state is None:
@@ -4343,161 +4132,181 @@ if __name__ == "__main__":
             strategy: EMAGradientStrategy = state["strategy"]
             
             try:
-                # Verificar se há posição aberta no vault
-                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": vault_address})
+                # Verificar se há posição aberta
+                positions = dex_in.fetch_positions([asset.hl_symbol])
                 if not positions or float(positions[0].get("contracts", 0)) == 0:
                     continue
-                    
-                pos = positions[0]
                 
-                # Executar trailing stop dinâmico para esta posição
-                try:
-                    strategy._ensure_position_protections(pos)
-                except Exception as e:
-                    _log_global("TRAILING_CHECK", f"{asset.name}: Erro no trailing stop - {e}", level="WARN")
-                    
-            except Exception as e:
-                _log_global("TRAILING_CHECK", f"Erro verificando {asset.name}: {type(e).__name__}: {e}", level="WARN")
-
-    def fast_safety_check_v4(dex_in, asset_state, vault_address: str) -> None:
-        """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos no vault."""
-        open_positions = []
-        
-        # Debug: verificar quantos assets estão no asset_state
-        _log_global("FAST_SAFETY_V4", f"Asset_state contém {len(asset_state)} assets: {list(asset_state.keys())}", level="DEBUG")
-        
-        for asset in ASSET_SETUPS:
-            state = asset_state.get(asset.name)
-            
-            try:
-                # Verificar se há posição aberta no vault (independente do asset_state)
-                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": vault_address})
-                if not positions or float(positions[0].get("contracts", 0)) == 0:
-                    continue
-                    
                 pos = positions[0]
-                emergency_closed = False
-                
-                # Se não tem strategy no asset_state, pular o trailing stop mas ainda mostrar no log
-                if state is None:
-                    _log_global("FAST_SAFETY_V4", f"{asset.name}: Posição encontrada mas asset não inicializado", level="DEBUG")
-                else:
-                    strategy: EMAGradientStrategy = state["strategy"]
+                current_px = float(pos.get("markPrice", 0) or 0)
+                if current_px <= 0:
+                    # Fallback para ticker
+                    ticker = dex_in.fetch_ticker(asset.hl_symbol)
+                    current_px = float(ticker.get("last", 0))
+                    if current_px <= 0:
+                        continue
                 
                 # Coletar informações da posição
                 side = pos.get("side") or pos.get("positionSide", "")
                 contracts = float(pos.get("contracts", 0))
                 unrealized_pnl = float(pos.get("unrealizedPnl", 0))
+                position_value = abs(float(pos.get("positionValue", 0)))
+                leverage = float(pos.get("leverage", 1)) or 1.0  # Default 1x se não encontrar
                 
-                # Calcular ROI real usando mesma fórmula do trailing stop
+                # Calcular ROI com alavancagem: (PnL / (position_value / leverage)) * 100
+                # O capital real investido = position_value / leverage
                 roi_pct = 0.0
-                try:
-                    position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
-                    leverage = float(pos.get("leverage", 10))
-                    
-                    if position_value is None:
-                        # Calcular position_value manualmente se necessário
-                        current_px = 0
-                        if state is not None:
-                            current_px = state["strategy"]._preco_atual()
-                        else:
-                            # Fallback: usar ticker se não temos strategy
-                            try:
-                                ticker = dex_in.fetch_ticker(asset.hl_symbol)
-                                current_px = float(ticker.get("last", 0) or 0)
-                            except Exception:
-                                current_px = 0
-                        
-                        if contracts > 0 and current_px > 0:
-                            position_value = abs(contracts * current_px)
-                    
-                    if position_value and position_value > 0 and leverage > 0:
-                        # Mesma fórmula: (PnL / (position_value / leverage)) * 100
-                        capital_real = position_value / leverage
-                        roi_pct = (unrealized_pnl / capital_real) * 100
-                except Exception as e:
-                    _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro calculando ROI - {e}", level="WARN")
+                if position_value > 0 and leverage > 0:
+                    capital_real = position_value / leverage
+                    roi_pct = (unrealized_pnl / capital_real) * 100
                 
-                # Adicionar à lista de posições abertas com status
+                # Adicionar à lista de posições abertas
                 status = "OK"
                 if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                    status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.3f} (será fechado!)"
+                    status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.2f}"
                 elif roi_pct <= ROI_HARD_STOP:
-                    status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}% (será fechado!)"
-                elif unrealized_pnl < -0.01:  # Alertar perdas > -1 cent
-                    status = f"📉 PnL: ${unrealized_pnl:.3f} ROI: {roi_pct:.1f}%"
-                elif unrealized_pnl > 0.01:   # Alertar lucros > +1 cent
-                    status = f"📈 PnL: +${unrealized_pnl:.3f} ROI: +{roi_pct:.1f}%"
+                    status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}%"
+                elif unrealized_pnl < -0.01:
+                    status = f"📉 PnL: ${unrealized_pnl:.2f} ROI: {roi_pct:.1f}%"
+                elif unrealized_pnl > 0.01:
+                    status = f"📈 PnL: +${unrealized_pnl:.2f} ROI: +{roi_pct:.1f}%"
                 
                 open_positions.append(f"{asset.name} {side.upper()}: {status}")
-                
-                # PRIORITÁRIO: Verificar unrealized PnL primeiro
-                if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 TESTE PNL: {unrealized_pnl:.4f} <= {UNREALIZED_PNL_HARD_STOP} = True", level="ERROR")
-                    try:
-                        qty = abs(contracts)
-                        side_norm = strategy._norm_side(side)
-                        exit_side = "sell" if side_norm in ("buy", "long") else "buy"
-                        
-                        # Buscar preço atual para ordem market
-                        ticker = dex_in.fetch_ticker(asset.hl_symbol)
-                        current_price = float(ticker.get("last", 0) or 0)
-                        if current_price <= 0:
-                            continue
-                            
-                        # Ajustar preço para garantir execução
-                        if exit_side == "sell":
-                            order_price = current_price * 0.995  # Ligeiramente abaixo para long
-                        else:
-                            order_price = current_price * 1.005  # Ligeiramente acima para short
-                        
-                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
-                        emergency_closed = True
-                        _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
-                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
-                    except Exception as e:
-                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por PnL - {e}", level="WARN")
-                else:
-                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ PNL OK: {unrealized_pnl:.4f} > {UNREALIZED_PNL_HARD_STOP}", level="DEBUG")
-                
-                # Se não fechou por PnL, verificar ROI
-                if not emergency_closed and roi_pct <= ROI_HARD_STOP:
-                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 TESTE ROI: {roi_pct:.4f} <= {ROI_HARD_STOP} = True", level="ERROR")
-                    try:
-                        qty = abs(contracts)
-                        side_norm = strategy._norm_side(side)
-                        exit_side = "sell" if side_norm in ("buy", "long") else "buy"
-                        
-                        # Buscar preço atual para ordem market
-                        ticker = dex_in.fetch_ticker(asset.hl_symbol)
-                        current_price = float(ticker.get("last", 0) or 0)
-                        if current_price <= 0:
-                            continue
-                            
-                        # Ajustar preço para garantir execução
-                        if exit_side == "sell":
-                            order_price = current_price * 0.995
-                        else:
-                            order_price = current_price * 1.005
-                        
-                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
-                        emergency_closed = True
-                        _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
-                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
-                    except Exception as e:
-                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por ROI - {e}", level="WARN")
-                else:
-                    if not emergency_closed:
-                        _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ ROI OK: {roi_pct:.4f} > {ROI_HARD_STOP}", level="DEBUG")
+                    
+                # Executa guard_close_all (todas as verificações de segurança críticas)
+                closed = guard_close_all(dex_in, asset.hl_symbol, current_px)
+                if closed:
+                    _log_global("FAST_SAFETY", f"{asset.name}: Posição fechada por safety check", level="WARN")
                     
             except Exception as e:
-                _log_global("FAST_SAFETY_V4", f"Erro no safety check {asset.name}: {type(e).__name__}: {e}", level="WARN")
+                _log_global("FAST_SAFETY", f"Erro no safety check {asset.name}: {type(e).__name__}: {e}", level="WARN")
         
         # Log resumo das posições abertas
         if open_positions:
-            _log_global("FAST_SAFETY_V4", f"Posições monitoradas: {' | '.join(open_positions)}", level="INFO")
+            _log_global("FAST_SAFETY", f"Posições monitoradas: {' | '.join(open_positions)}", level="INFO")
         else:
-            _log_global("FAST_SAFETY_V4", "Nenhuma posição aberta para monitorar", level="DEBUG")
+            _log_global("FAST_SAFETY", "Nenhuma posição aberta para monitorar", level="DEBUG")
+
+    def trailing_stop_check(dex_in, asset_state: Dict[str, Dict[str, Any]]) -> None:
+        """Executa verificações e ajustes de trailing stop para todos os ativos."""
+        active_positions = []
+        
+        for asset in ASSET_SETUPS:
+            state = asset_state.get(asset.name)
+            if state is None:
+                continue  # Asset ainda não foi inicializado
+                
+            strategy: EMAGradientStrategy = state["strategy"]
+            
+            try:
+                # Verificar se há posição aberta
+                positions = dex_in.fetch_positions([asset.hl_symbol])
+                if not positions or float(positions[0].get("contracts", 0)) == 0:
+                    continue
+
+                pos = positions[0]
+                side = pos.get("side") or pos.get("positionSide", "")
+                contracts = float(pos.get("contracts", 0))
+                unrealized_pnl = float(pos.get("unrealizedPnl", 0))
+                
+                # Tentar múltiplos campos para position_value
+                position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
+                
+                # SEMPRE buscar preço atual em tempo real via strategy._preco_atual() (prioridade)
+                mark_price = None
+                try:
+                    current_price = strategy._preco_atual()
+                    if current_price and current_price > 0:
+                        mark_price = current_price
+                        _log_global("TRAILING_CHECK", f"DEBUG {asset.name}: preço atualizado via _preco_atual = {current_price}", level="DEBUG")
+                except Exception as e:
+                    _log_global("TRAILING_CHECK", f"Erro ao buscar preço atual para {asset.name}: {e}", level="WARN")
+                    # Fallback para campos da API se _preco_atual() falhar
+                    mark_price = pos.get("markPrice") or pos.get("price") or pos.get("avgPrice")
+                
+                if position_value is None:
+                    # Calcular position_value manualmente: contracts × markPrice
+                    if mark_price and contracts:
+                        position_value = abs(float(contracts) * float(mark_price))
+                    else:
+                        position_value = 0
+                else:
+                    position_value = abs(float(position_value))
+                
+                leverage = float(pos.get("leverage", 1)) or 1.0  # Default 1x se não encontrar
+                
+                # DEBUG: Mostrar valores brutos da API e calculados
+                _log_global("TRAILING_CHECK", 
+                    f"DEBUG {asset.name}: unrealized_pnl_raw={pos.get('unrealizedPnl')} "
+                    f"position_value_raw={pos.get('positionValue')} mark_price_raw={pos.get('markPrice')} "
+                    f"mark_price_LIVE={mark_price} calculated_pos_value={position_value:.4f} leverage_raw={pos.get('leverage')}", 
+                    level="DEBUG")
+                
+                # Calcular ROI com alavancagem: (PnL / (position_value / leverage)) * 100
+                # O capital real investido = position_value / leverage
+                roi_pct = 0.0
+                if position_value > 0 and leverage > 0:
+                    capital_real = position_value / leverage
+                    roi_pct = (unrealized_pnl / capital_real) * 100
+                    _log_global("TRAILING_CHECK",
+                        f"DEBUG {asset.name}: capital_real=${capital_real:.4f} "
+                        f"pnl=${unrealized_pnl:.4f} roi_calc={roi_pct:.4f}%", 
+                        level="DEBUG")
+                
+                # Verificar se trailing stop está ativo consultando as ordens
+                trailing_active = False
+                trailing_price = None
+                try:
+                    orders = dex_in.fetch_open_orders(asset.hl_symbol)
+                    for order in orders:
+                        if order.get("type") in ["limit", "stop", "stop_limit"] and order.get("reduceOnly"):
+                            trailing_active = True
+                            trailing_price = float(order.get("stopPrice") or order.get("triggerPrice") or order.get("price", 0))
+                            break
+                except Exception:
+                    pass
+                
+                # Status do trailing stop
+                if trailing_active and trailing_price:
+                    # Usar o mark_price que já foi determinado acima
+                    if mark_price is not None and float(mark_price) > 0:
+                        distance_pct = abs((trailing_price - float(mark_price)) / float(mark_price)) * 100
+                        trailing_status = f"🎯 TS@${trailing_price:.4f} (-{distance_pct:.1f}%)"
+                    else:
+                        trailing_status = f"🎯 TS@${trailing_price:.4f} (sem preço)"
+                elif roi_pct >= 5.0:  # ROI suficiente para trailing
+                    trailing_status = "⚠️ TS não criado"
+                else:
+                    trailing_status = "⏳ TS pendente (ROI<5%)"
+                
+                # Coletar info da posição
+                position_info = f"{asset.name} {side.upper()}: ROI {roi_pct:+.1f}% | {trailing_status}"
+                active_positions.append(position_info)
+                
+                # Executar verificação de proteções da posição (inclui trailing stop)
+                # Usar o markPrice atual que foi determinado acima
+                dummy_df = pd.DataFrame({"close": [0]})  # Valor padrão
+                if mark_price and float(mark_price) > 0:
+                    # Sobrescrever temporariamente o método _preco_atual com markPrice
+                    original_preco_atual = strategy._preco_atual
+                    strategy._preco_atual = lambda: float(mark_price)
+                    try:
+                        strategy._ensure_position_protections(pos, df_for_log=dummy_df)
+                    finally:
+                        # Restaurar método original
+                        strategy._preco_atual = original_preco_atual
+                else:
+                    # Usar método original se não tiver markPrice válido
+                    strategy._ensure_position_protections(pos, df_for_log=dummy_df)
+                
+            except Exception as e:
+                _log_global("TRAILING_CHECK", f"Erro no trailing check {asset.name}: {type(e).__name__}: {e}", level="WARN")
+        
+        # Log resumo dos trailing stops
+        if active_positions:
+            _log_global("TRAILING_CHECK", f"Trailing Stops: {' | '.join(active_positions)}", level="INFO")
+        else:
+            _log_global("TRAILING_CHECK", "Nenhuma posição para trailing stop", level="DEBUG")
 
     def executar_estrategia(
         df_in: pd.DataFrame,
@@ -4520,8 +4329,8 @@ if __name__ == "__main__":
         default_cols = df_in.columns if isinstance(df_in, pd.DataFrame) else pd.Index([])
 
         # Configuração dos loops
-        fast_sleep = 5  # Fast safety loop: 5 segundos  
-        trailing_sleep = 15  # Trailing stop check: 15 segundos (placeholder - não implementado ainda)
+        fast_sleep = 5  # Fast safety loop: 5 segundos
+        trailing_sleep = 15  # Trailing stop check: 15 segundos
         slow_sleep = sleep_seconds  # Full analysis loop: 60 segundos (ou env var)
         try:
             env_sleep = os.getenv("SLEEP_SECONDS")
@@ -4533,8 +4342,9 @@ if __name__ == "__main__":
         # Contadores
         iter_count = 0
         last_full_analysis = 0
+        last_trailing_check = 0
         
-        _log_global("ENGINE", f"Iniciando per-asset safety V4: FAST_SAFETY=após_cada_ativo FULL_ANALYSIS={slow_sleep}s")
+        _log_global("ENGINE", f"Iniciando per-asset loop: FAST_SAFETY=após_cada_ativo TRAILING={trailing_sleep}s FULL_ANALYSIS={slow_sleep}s")
 
         while True:
             iter_count += 1
@@ -4544,7 +4354,7 @@ if __name__ == "__main__":
                 live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
                 # Heartbeat menos frequente
                 if iter_count % 12 == 1:  # A cada ~1min considerando que cada ativo demora ~5s
-                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} per_asset_v4=True")
+                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} per_asset_loop=True")
             except Exception:
                 pass
 
@@ -4553,34 +4363,22 @@ if __name__ == "__main__":
             should_run_full_analysis = (time_since_analysis >= slow_sleep) or (iter_count == 1)
 
             if should_run_full_analysis:
-                _log_global("ENGINE", f"Executando análise completa V4 (última há {time_since_analysis:.1f}s)")
+                _log_global("ENGINE", f"Executando análise completa (última há {time_since_analysis:.1f}s)")
                 last_full_analysis = current_time
 
-                # FULL ANALYSIS LOOP - processar todos os assets
+                # PROCESSAR CADA ASSET COM SAFETY CHECKS APÓS CADA UM
                 for asset in ASSET_SETUPS:
-                    _log_global("ASSET", f"Análise completa: {asset.name}")
+                    _log_global("ASSET", f"Processando {asset.name}")
+                    
+                    # 1. ANÁLISE TÉCNICA DO ASSET
                     try:
                         df_asset = build_df(asset.data_symbol, INTERVAL, debug=True)
-                    except MarketDataUnavailable as e:
-                        _log_global(
-                            "ASSET",
-                            f"Sem dados recentes para {asset.name} ({asset.data_symbol}) {INTERVAL}: {e}",
-                            level="WARN",
-                        )
-                        continue
                     except Exception as e:
                         _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
                         continue
 
                     try:
                         df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
-                    except MarketDataUnavailable:
-                        _log_global(
-                            "ASSET",
-                            f"Sem dados 1h para {asset.name} ({asset.data_symbol}); seguindo sem rsi_aux.",
-                            level="WARN",
-                        )
-                        df_asset_hour = pd.DataFrame()
                     except Exception as e:
                         _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
                         df_asset_hour = pd.DataFrame()
@@ -4595,7 +4393,16 @@ if __name__ == "__main__":
                         cfg = GradientConfig()
                         cfg.LEVERAGE = asset.leverage
                         cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
-                        cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
+                        cfg.TRAILING_ROI_MARGIN = asset.trailing_margin
+                        safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
+                        csv_path = f"trade_log_{safe_suffix}.csv"
+                        xlsx_path = f"trade_log_{safe_suffix}.xlsx"
+                        cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
+                        logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
+                        cfg = GradientConfig()
+                        cfg.LEVERAGE = asset.leverage
+                        cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
+                        cfg.TRAILING_ROI_MARGIN = asset.trailing_margin
                         safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
                         csv_path = f"trade_log_{safe_suffix}.csv"
                         xlsx_path = f"trade_log_{safe_suffix}.xlsx"
@@ -4628,23 +4435,37 @@ if __name__ == "__main__":
                     # Executar análise técnica completa
                     try:
                         strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
-                        price_seen = getattr(strategy, "_last_price_snapshot", None)
-                        if price_seen is not None and math.isfinite(price_seen):
-                            try:
-                                strategy._log(f"Preço atual: {price_seen:.6f}", level="INFO")
-                            except Exception:
-                                pass
                     except Exception as e:
                         _log_global("ASSET", f"Erro na análise completa {asset.name}: {type(e).__name__}: {e}", level="ERROR")
                     
-                    # FAST SAFETY CHECK IMEDIATAMENTE APÓS O ASSET
+                    # 2. FAST SAFETY CHECK IMEDIATAMENTE APÓS O ASSET
                     _log_global("ASSET", f"Fast safety check pós-{asset.name}")
-                    fast_safety_check_v4(dex_in, asset_state, VAULT_ADDRESS)
+                    fast_safety_check(dex_in, asset_state)
                     
-                    # TRAILING STOP CHECK PARA TODAS AS POSIÇÕES APÓS CADA ASSET
-                    check_all_trailing_stops_v4(dex_in, asset_state, VAULT_ADDRESS)
+                    # 3. TRAILING STOP CHECK (SE NECESSÁRIO)
+                    current_time_post_asset = _time.time()
+                    time_since_trailing = current_time_post_asset - last_trailing_check
+                    should_run_trailing = (time_since_trailing >= trailing_sleep) or (iter_count == 1)
+                    
+                    if should_run_trailing:
+                        _log_global("ASSET", f"Trailing check pós-{asset.name} (último há {time_since_trailing:.1f}s)")
+                        last_trailing_check = current_time_post_asset
+                        trailing_stop_check(dex_in, asset_state)
                     
                     _time.sleep(0.25)
+
+            else:
+                # Se não é hora de análise completa, só executa fast safety e trailing periodicamente
+                fast_safety_check(dex_in, asset_state)
+                
+                current_time_safety = _time.time()
+                time_since_trailing = current_time_safety - last_trailing_check
+                should_run_trailing = (time_since_trailing >= trailing_sleep)
+                
+                if should_run_trailing:
+                    _log_global("ENGINE", f"Trailing check standalone (último há {time_since_trailing:.1f}s)")
+                    last_trailing_check = current_time_safety
+                    trailing_stop_check(dex_in, asset_state)
 
             if not loop:
                 break

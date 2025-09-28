@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-09-28T18:58:06.177539",
+  "strategy": "EMA21_RSI_Volume",
+  "live_trading": false,
+  "symbols": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "AVAX/USDT",
+    "DOGE/USDT"
+  ],
+  "performance": {
+    "total_trades": 0,
+    "winning_trades": 0,
+    "losing_trades": 0,
+    "win_rate": 0,
+    "total_pnl": 0,
+    "roi": 0.0,
+    "final_capital": 10.0,
+    "initial_capital": 10.0,
+    "avg_win": 0,
+    "avg_loss": 0
+  },
+  "trades": []
+}

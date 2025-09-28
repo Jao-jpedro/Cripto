@@ -1,0 +1,103 @@
+{
+  "summary": {
+    "best_strategy": "Volatility Breakout",
+    "best_roi": 0.0,
+    "total_strategies": 10,
+    "profitable_strategies": 0
+  },
+  "detailed_results": {
+    "Scalping RSI+BB": {
+      "metrics": "StrategyMetrics(name='Scalping RSI+BB', total_trades=50, winning_trades=34, losing_trades=16, win_rate=68.0, total_pnl=-0.0362279682396163, max_drawdown=1.3335071363042137, sharpe_ratio=-0.4852564818643539, profit_factor=0.9067500969205778, avg_win=0.010361062247378173, avg_loss=0.024281505290654638, largest_win=0.0275096932957199, largest_loss=-0.11076855003403696, recovery_factor=-0.027167434844046903)",
+      "final_balance": 9.963772031760383,
+      "roi_percent": -0.362279682396163,
+      "trades_per_day": 0.136986301369863,
+      "avg_trade_size": 5.0
+    },
+    "Breakout EMA Golden": {
+      "metrics": "StrategyMetrics(name='Breakout EMA Golden', total_trades=5, winning_trades=2, losing_trades=3, win_rate=40.0, total_pnl=-0.029705447417860013, max_drawdown=0.29705447417859077, sharpe_ratio=-10.0421633771982, profit_factor=0.19471117274889663, avg_win=0.0035912472072325533, avg_loss=0.01229598061077504, largest_win=0.004685379534240705, largest_loss=-0.020498607242339914, recovery_factor=-0.10000000000000316)",
+      "final_balance": 9.97029455258214,
+      "roi_percent": -0.29705447417860015,
+      "trades_per_day": 0.0136986301369863,
+      "avg_trade_size": 5.0
+    },
+    "Mean Reversion VP": {
+      "metrics": "StrategyMetrics(name='Mean Reversion VP', total_trades=73, winning_trades=30, losing_trades=43, win_rate=41.0958904109589, total_pnl=-0.1393099943035314, max_drawdown=2.121613831852801, sharpe_ratio=-1.4204541766756027, profit_factor=0.7367741537246435, avg_win=0.012997710851818495, avg_loss=0.012307937671118284, largest_win=0.05127077977720646, largest_loss=-0.11004753791105745, recovery_factor=-0.06566227661792357)",
+      "final_balance": 9.860690005696469,
+      "roi_percent": -1.3930999430353137,
+      "trades_per_day": 0.2,
+      "avg_trade_size": 5.0
+    },
+    "Trend Following MACD": {
+      "metrics": "StrategyMetrics(name='Trend Following MACD', total_trades=42, winning_trades=15, losing_trades=27, win_rate=35.714285714285715, total_pnl=-0.08514522591584513, max_drawdown=2.0191825409312405, sharpe_ratio=-1.15100486621071, profit_factor=0.8109251701125557, avg_win=0.02434535464122217, avg_loss=0.016678723908673247, largest_win=0.0755864332603937, largest_loss=-0.05468467568245386, recovery_factor=-0.042168166666385905)",
+      "final_balance": 9.914854774084155,
+      "roi_percent": -0.8514522591584512,
+      "trades_per_day": 0.11506849315068493,
+      "avg_trade_size": 5.0
+    },
+    "Grid Trading Fib": {
+      "metrics": "StrategyMetrics(name='Grid Trading Fib', total_trades=5, winning_trades=2, losing_trades=3, win_rate=40.0, total_pnl=-0.03518890510889325, max_drawdown=0.3898348638515951, sharpe_ratio=-6.375459797856522, profit_factor=0.3176508030383672, avg_win=0.008190662505102461, avg_loss=0.017190076706366058, largest_win=0.01565497896213195, largest_loss=-0.03709106052193297, recovery_factor=-0.09026618286836754)",
+      "final_balance": 9.964811094891108,
+      "roi_percent": -0.3518890510889325,
+      "trades_per_day": 0.0136986301369863,
+      "avg_trade_size": 5.0
+    },
+    "Momentum Squeeze": {
+      "metrics": "StrategyMetrics(name='Momentum Squeeze', total_trades=27, winning_trades=10, losing_trades=17, win_rate=37.03703703703704, total_pnl=-0.03142180078191175, max_drawdown=0.5508305644906087, sharpe_ratio=-3.2743822882388116, profit_factor=0.5484852869552613, avg_win=0.0038170174571498946, avg_loss=0.004093645609024159, largest_win=0.017164849514135664, largest_loss=-0.009700191404210901, recovery_factor=-0.05704440313868507)",
+      "final_balance": 9.968578199218088,
+      "roi_percent": -0.3142180078191175,
+      "trades_per_day": 0.07397260273972603,
+      "avg_trade_size": 5.0
+    },
+    "Support/Resistance": {
+      "metrics": "StrategyMetrics(name='Support/Resistance', total_trades=1, winning_trades=0, losing_trades=1, win_rate=0.0, total_pnl=-0.1493553747032889, max_drawdown=1.4935537470328875, sharpe_ratio=0, profit_factor=0.0, avg_win=0, avg_loss=0.1493553747032889, largest_win=-0.1493553747032889, largest_loss=-0.1493553747032889, recovery_factor=-0.10000000000000012)",
+      "final_balance": 9.850644625296711,
+      "roi_percent": -1.493553747032889,
+      "trades_per_day": 0.0027397260273972603,
+      "avg_trade_size": 5.0
+    },
+    "Volatility Breakout": {
+      "metrics": "StrategyMetrics(name='', total_trades=0, winning_trades=0, losing_trades=0, win_rate=0, total_pnl=0, max_drawdown=0, sharpe_ratio=0, profit_factor=0, avg_win=0, avg_loss=0, largest_win=0, largest_loss=0, recovery_factor=0)",
+      "final_balance": 10.0,
+      "roi_percent": 0.0,
+      "trades_per_day": 0.0,
+      "avg_trade_size": 5.0
+    },
+    "News Impact": {
+      "metrics": "StrategyMetrics(name='News Impact', total_trades=11, winning_trades=6, losing_trades=5, win_rate=54.54545454545454, total_pnl=-0.025221601612165075, max_drawdown=0.5156733789551363, sharpe_ratio=-3.747915832427116, profit_factor=0.5422357726802536, avg_win=0.004979293495868121, avg_loss=0.01101947251747476, largest_win=0.00848766603415551, largest_loss=-0.023889114954222072, recovery_factor=-0.0489100322829722)",
+      "final_balance": 9.974778398387835,
+      "roi_percent": -0.25221601612165073,
+      "trades_per_day": 0.030136986301369864,
+      "avg_trade_size": 5.0
+    },
+    "ML Pattern Recognition": {
+      "metrics": "StrategyMetrics(name='ML Pattern Recognition', total_trades=62, winning_trades=20, losing_trades=42, win_rate=32.25806451612903, total_pnl=-0.03910565202453588, max_drawdown=1.231979707593308, sharpe_ratio=-0.539899044551911, profit_factor=0.8839937127985991, avg_win=0.014899688352478338, avg_loss=0.008026176644621488, largest_win=0.09963003150157468, largest_loss=-0.05173959408324748, recovery_factor=-0.031742123497252556)",
+      "final_balance": 9.960894347975463,
+      "roi_percent": -0.3910565202453588,
+      "trades_per_day": 0.16986301369863013,
+      "avg_trade_size": 5.0
+    }
+  },
+  "best_strategies": {
+    "Volatility Breakout": {
+      "metrics": "StrategyMetrics(name='', total_trades=0, winning_trades=0, losing_trades=0, win_rate=0, total_pnl=0, max_drawdown=0, sharpe_ratio=0, profit_factor=0, avg_win=0, avg_loss=0, largest_win=0, largest_loss=0, recovery_factor=0)",
+      "final_balance": 10.0,
+      "roi_percent": 0.0,
+      "trades_per_day": 0.0,
+      "avg_trade_size": 5.0
+    },
+    "News Impact": {
+      "metrics": "StrategyMetrics(name='News Impact', total_trades=11, winning_trades=6, losing_trades=5, win_rate=54.54545454545454, total_pnl=-0.025221601612165075, max_drawdown=0.5156733789551363, sharpe_ratio=-3.747915832427116, profit_factor=0.5422357726802536, avg_win=0.004979293495868121, avg_loss=0.01101947251747476, largest_win=0.00848766603415551, largest_loss=-0.023889114954222072, recovery_factor=-0.0489100322829722)",
+      "final_balance": 9.974778398387835,
+      "roi_percent": -0.25221601612165073,
+      "trades_per_day": 0.030136986301369864,
+      "avg_trade_size": 5.0
+    },
+    "Breakout EMA Golden": {
+      "metrics": "StrategyMetrics(name='Breakout EMA Golden', total_trades=5, winning_trades=2, losing_trades=3, win_rate=40.0, total_pnl=-0.029705447417860013, max_drawdown=0.29705447417859077, sharpe_ratio=-10.0421633771982, profit_factor=0.19471117274889663, avg_win=0.0035912472072325533, avg_loss=0.01229598061077504, largest_win=0.004685379534240705, largest_loss=-0.020498607242339914, recovery_factor=-0.10000000000000316)",
+      "final_balance": 9.97029455258214,
+      "roi_percent": -0.29705447417860015,
+      "trades_per_day": 0.0136986301369863,
+      "avg_trade_size": 5.0
+    }
+  }
+}
