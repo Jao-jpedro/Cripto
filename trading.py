@@ -2921,7 +2921,7 @@ class EMAGradientStrategy:
         if pos:
             emergency_closed = False
             try:
-                if close_if_unrealized_pnl_breaches(self.dex, self.symbol, threshold=-0.05):
+                if close_if_unrealized_pnl_breaches(self.dex, self.symbol, threshold=-0.50):
                     emergency_closed = True
             except Exception as e:
                 self._log(f"Falha ao avaliar emergência de PnL: {type(e).__name__}: {e}", level="WARN")
@@ -3914,12 +3914,13 @@ def ensure_tpsl_for_position(dex, symbol, *, retries: int = 2, price_tol_pct: fl
 
     def _create_stop_try():
         base = {"reduceOnly": True, "timeInForce": "GTC"}
-        for v in ({"type": "stop", "triggerPrice": sl, "stopLossPrice": sl},
+        # Usar ordens LIMIT ao invés de MARKET para evitar erro de slippage
+        for v in ({"type": "limit", "triggerPrice": sl, "stopLossPrice": sl},
                   {"triggerPrice": sl},
                   {"stopPrice": sl}):
             try:
                 print(f"[TPSL][{symbol}] Criando STOP {v}")
-                return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **v))
+                return dex.create_order(symbol, "limit", exit_side, qty, sl, dict(base, **v))
             except Exception as e:
                 print(f"[TPSL][{symbol}] Falha STOP {v}: {type(e).__name__}: {e}")
         return None
@@ -3931,7 +3932,7 @@ def ensure_tpsl_for_position(dex, symbol, *, retries: int = 2, price_tol_pct: fl
         params = {"triggerPrice": trail, "stopLossPrice": trail}
         try:
             print(f"[TPSL][{symbol}] Criando TRAILING {params}")
-            return dex.create_order(symbol, "market", exit_side, qty, None, dict(base, **params))
+            return dex.create_order(symbol, "limit", exit_side, qty, trail, dict(base, **params))
         except Exception as e:
             print(f"[TPSL][{symbol}] Falha TRAILING {params}: {type(e).__name__}: {e}")
             return None
