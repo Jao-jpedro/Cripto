@@ -1,7 +1,8 @@
+ccxt
 pandas
 numpy
+ta
 requests
-ccxt
 flask
 PyJWT
 PyYAML
