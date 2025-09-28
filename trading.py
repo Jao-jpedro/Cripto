@@ -1471,47 +1471,34 @@ class EMAGradientStrategy:
             return None
         
         # Converter ROI target de volta para preço
-        target_roi = target_roi_pct / 100.0  # Converter de volta para decimal
+        # CORREÇÃO: O target_roi_pct JÁ É O ROI ALAVANCADO DESEJADO
+        # Não dividir por alavancagem novamente!
         
         if norm_side == "buy":
-            # Para LONG com alavancagem: target_roi_pct = ((trailing_price - entry_price) / entry_price) * leverage
+            # Para LONG: ROI = (price - entry) / entry * leverage
+            # target_roi_pct = (trailing_price - entry_price) / entry_price * leverage
             # Resolver para trailing_price:
-            # target_roi_pct / leverage = (trailing_price - entry_price) / entry_price
-            # trailing_price = entry_price + (target_roi_pct / leverage / 100) * entry_price
             # trailing_price = entry_price * (1 + target_roi_pct / leverage / 100)
-            
-            target_roi_decimal = target_roi_pct / 100.0  # Converter % para decimal
-            roi_without_leverage = target_roi_decimal / leverage  # Dividir pela alavancagem
-            trailing_price = entry_price * (1.0 + roi_without_leverage)
+            trailing_price = entry_price * (1.0 + (target_roi_pct / leverage / 100))
             
             if self.debug:
                 self._log(
                     f"DEBUG trailing LONG ATIVO: ROI_max={max_roi_pct:.2f}% → stop em {target_roi_pct:.2f}% @ {trailing_price:.6f} "
-                    f"(entry={entry_price:.6f}, leverage={leverage:.1f}x, roi_no_lev={roi_without_leverage:.4f})", 
+                    f"(entry={entry_price:.6f}, leverage={leverage:.1f}x)", 
                     level="DEBUG"
                 )
             return trailing_price
         else:  # SHORT
-            # Para SHORT com alavancagem: queremos que o preço possa subir até um ponto que ainda preserve o target ROI
-            # ROI alavancado = ((entry_price - stop_price) / entry_price) * leverage
-            # target_roi_pct = ((entry_price - stop_price) / entry_price) * leverage
-            # Resolver para stop_price:
-            # target_roi_pct / leverage = (entry_price - stop_price) / entry_price
-            # stop_price = entry_price - (target_roi_pct / leverage) * entry_price
-            # stop_price = entry_price * (1 - target_roi_pct / leverage / 100)
-            
-            target_roi_decimal = target_roi_pct / 100.0  # Converter % para decimal
-            roi_without_leverage = target_roi_decimal / leverage  # Dividir pela alavancagem
-            trailing_price = entry_price * (1.0 - roi_without_leverage)
-            
-            # Para SHORT: stop deve estar ACIMA do preço atual (protege contra subida)
-            # Se trailing_price < current_price, significa que o ROI deteriorou demais
-            # Neste caso, manter o trailing_price calculado (não forçar acima do atual)
+            # Para SHORT: ROI = (entry - price) / entry * leverage  
+            # target_roi_pct = (entry_price - trailing_price) / entry_price * leverage
+            # Resolver para trailing_price:
+            # trailing_price = entry_price * (1 - target_roi_pct / leverage / 100)
+            trailing_price = entry_price * (1.0 - (target_roi_pct / leverage / 100))
             
             if self.debug:
                 self._log(
                     f"DEBUG trailing SHORT ATIVO: ROI_max={max_roi_pct:.2f}% → stop em {target_roi_pct:.2f}% @ {trailing_price:.6f} "
-                    f"(entry={entry_price:.6f}, leverage={leverage:.1f}x, roi_no_lev={roi_without_leverage:.4f})", 
+                    f"(entry={entry_price:.6f}, leverage={leverage:.1f}x)", 
                     level="DEBUG"
                 )
             return trailing_price
