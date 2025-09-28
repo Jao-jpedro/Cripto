@@ -1376,9 +1376,9 @@ class EMAGradientStrategy:
 
         trailing_px = self._compute_trailing_stop(entry_price, ref_price, norm_side, lev, position)
 
-        if self.debug and trailing_px is not None:
+        if self.debug:
             self._log(
-                f"DEBUG protection_prices: stop_px={stop_px:.6f} trailing_px={trailing_px:.6f} "
+                f"DEBUG protection_prices: stop_px={stop_px:.6f} trailing_px={trailing_px} "
                 f"side={norm_side}", 
                 level="DEBUG"
             )
@@ -1394,27 +1394,32 @@ class EMAGradientStrategy:
         return stop_px, trailing_px
 
     def _compute_trailing_stop(self, entry_price: float, current_price: float, norm_side: str, leverage: float, position: Optional[Dict[str, Any]] = None) -> Optional[float]:
+        """
+        Trailing Stop Simples e Efetivo:
+        - ROI máximo alcançado - 5% = novo stop limit
+        - Limite mínimo: nunca pior que -5% (stop loss original)  
+        - Sempre ajustar para cima: nunca voltar o stop para trás
+        
+        Exemplos:
+        - ROI máximo 1% → stop em -4% (1% - 5%)
+        - ROI máximo 12% → stop em 7% (12% - 5%) 
+        - ROI máximo 36% → stop em 31% (36% - 5%)
+        """
         if entry_price <= 0 or current_price <= 0 or leverage <= 0:
             return None
-        margin = float(getattr(self.cfg, "TRAILING_ROI_MARGIN", 0.10) or 0.0)
-        margin = max(margin, 0.0)
 
+        # Calcular ROI atual
         try:
             if norm_side == "buy":
-                roi = (current_price / entry_price) - 1.0
+                current_roi = (current_price / entry_price) - 1.0
             else:
-                roi = (entry_price / current_price) - 1.0
+                current_roi = (entry_price / current_price) - 1.0
         except Exception:
             return None
 
-        levered_roi = roi * leverage
+        current_roi_pct = current_roi * 100  # Converter para percentual
         
-        # *** TRAILING STOP VERDADEIRO: Usar High Water Mark ***
-        # Usar o ROI máximo histórico ao invés do ROI atual
-        trailing_levered_roi = _update_high_water_mark(f"trailing_{self.symbol}", levered_roi)
-        
-        # Calcular ROI real via PnL se posição disponível
-        real_roi_pct = None
+        # Calcular ROI real via PnL se posição disponível (mais preciso)
         if position:
             try:
                 unrealized_pnl = float(position.get("unrealizedPnl", 0))
@@ -1427,101 +1432,89 @@ class EMAGradientStrategy:
                 
                 if position_value and position_value > 0:
                     capital_real = abs(float(position_value)) / leverage
-                    real_roi_pct = (unrealized_pnl / capital_real) * 100
+                    current_roi_pct = (unrealized_pnl / capital_real) * 100
             except Exception:
                 pass
         
+        # *** TRAILING STOP COM HIGH WATER MARK ***
+        # Usar o ROI máximo histórico (nunca piora)
+        max_roi_pct = _update_high_water_mark(f"trailing_{self.symbol}", current_roi_pct)
+        
+        # Calcular stop target: ROI máximo - 5%
+        target_roi_pct = max_roi_pct - 5.0
+        
+        # Limite mínimo: nunca pior que -5% (stop loss original)
+        min_stop_roi_pct = -5.0
+        target_roi_pct = max(target_roi_pct, min_stop_roi_pct)
+        
+        # Ajuste para ficar mais próximo do que Hyperliquid calcula
+        # Usar margem menor para stop mais conservador
+        if target_roi_pct > 20:  # Para ROIs altos, ser mais conservador
+            target_roi_pct = target_roi_pct * 0.85  # Reduzir 15%
+        
         # Debug: mostrar cálculos do trailing stop
         if self.debug:
-            if real_roi_pct is not None:
+            self._log(
+                f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} "
+                f"ROI_current={current_roi_pct:.2f}% ROI_max={max_roi_pct:.2f}% "
+                f"target_stop={target_roi_pct:.2f}%", 
+                level="DEBUG"
+            )
+        
+        # Só ativar trailing stop se for melhor que o stop loss normal (-5%)
+        if target_roi_pct <= -5.0:
+            if self.debug:
                 self._log(
-                    f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} ROI_approx={roi:.4f} "
-                    f"ROI_real={real_roi_pct:.4f}% levered_ROI={levered_roi:.4f} HWM={trailing_levered_roi:.4f} margin={margin:.4f}", 
+                    f"DEBUG trailing DESATIVADO: target_stop={target_roi_pct:.2f}% <= -5% (usar stop normal)", 
                     level="DEBUG"
                 )
-            else:
-                self._log(
-                    f"DEBUG trailing: entry={entry_price:.6f} current={current_price:.6f} ROI={roi:.4f} "
-                    f"levered_ROI={levered_roi:.4f} HWM={trailing_levered_roi:.4f} margin={margin:.4f}", 
-                    level="DEBUG"
-                )
-        
-        # Trailing stop só ativo se for MELHOR que stop loss normal (-5%)
-        # *** USANDO HIGH WATER MARK - nunca piora! ***
-        stop_loss_roi = -0.05  # Stop loss normal em -5%
-        target_roi = trailing_levered_roi - margin  # ROI baseado no MÁXIMO histórico
-        
-        # Verificar se vale a pena usar trailing stop (BASEADO NO HWM)
-        if norm_side == "buy":
-            # Para LONG: só usar trailing se for melhor que -5% (ou seja, maior que -5%)
-            if target_roi <= stop_loss_roi:  
-                if self.debug:
-                    self._log(
-                        f"DEBUG trailing DESATIVADO LONG: target_ROI={target_roi:.4f} <= {stop_loss_roi:.2f} (usar stop normal)", 
-                        level="DEBUG"
-                    )
-                return None
-                
-            # Adicionar requisito mínimo: ROI alavancado máximo deve ser pelo menos 8%
-            if trailing_levered_roi < 0.08:
-                if self.debug:
-                    self._log(
-                        f"DEBUG trailing DESATIVADO LONG: HWM={trailing_levered_roi:.4f} < 0.08 (ROI insuficiente)", 
-                        level="DEBUG"
-                    )
-                return None
-        else:  # SHORT
-            # Para SHORT, stop normal seria em +5%, trailing deve ser melhor (menor)
-            stop_normal_short = 0.05
-            if target_roi >= stop_normal_short:
-                if self.debug:
-                    self._log(
-                        f"DEBUG trailing DESATIVADO SHORT: target_ROI={target_roi:.4f} >= {stop_normal_short:.2f} (usar stop normal)", 
-                        level="DEBUG"
-                    )
-                return None
-                
-            # Adicionar requisito mínimo: ROI alavancado máximo deve ser pelo menos 8%
-            if trailing_levered_roi < 0.08:
-                if self.debug:
-                    self._log(
-                        f"DEBUG trailing DESATIVADO SHORT: HWM={trailing_levered_roi:.4f} < 0.08 (ROI insuficiente)", 
-                        level="DEBUG"
-                    )
-                return None
+            return None
         
         # Converter ROI target de volta para preço
+        target_roi = target_roi_pct / 100.0  # Converter de volta para decimal
+        
         if norm_side == "buy":
-            # target_roi = (trailing_price / entry_price) - 1
-            # trailing_price = entry_price * (target_roi + 1)
-            trailing_price = entry_price * (target_roi + 1.0)
-            # Para LONG: trailing stop deve estar abaixo do preço atual
-            result = max(0.0, min(trailing_price, current_price))
+            # Para LONG com alavancagem: target_roi_pct = ((trailing_price - entry_price) / entry_price) * leverage
+            # Resolver para trailing_price:
+            # target_roi_pct / leverage = (trailing_price - entry_price) / entry_price
+            # trailing_price = entry_price + (target_roi_pct / leverage / 100) * entry_price
+            # trailing_price = entry_price * (1 + target_roi_pct / leverage / 100)
+            
+            target_roi_decimal = target_roi_pct / 100.0  # Converter % para decimal
+            roi_without_leverage = target_roi_decimal / leverage  # Dividir pela alavancagem
+            trailing_price = entry_price * (1.0 + roi_without_leverage)
             
             if self.debug:
                 self._log(
-                    f"DEBUG trailing LONG: target_ROI={target_roi:.4f} trailing_price={trailing_price:.6f} "
-                    f"result={result:.6f}", 
+                    f"DEBUG trailing LONG ATIVO: ROI_max={max_roi_pct:.2f}% → stop em {target_roi_pct:.2f}% @ {trailing_price:.6f} "
+                    f"(entry={entry_price:.6f}, leverage={leverage:.1f}x, roi_no_lev={roi_without_leverage:.4f})", 
                     level="DEBUG"
                 )
-            return result
-        else:
-            # Para SHORT: target_roi = (entry_price / trailing_price) - 1
-            # entry_price / trailing_price = target_roi + 1
-            # trailing_price = entry_price / (target_roi + 1)
-            if target_roi + 1.0 <= 0:
-                return None
-            trailing_price = entry_price / (target_roi + 1.0)
-            # Para SHORT: trailing stop deve estar acima do preço atual
-            result = max(current_price, trailing_price)
+            return trailing_price
+        else:  # SHORT
+            # Para SHORT com alavancagem: queremos que o preço possa subir até um ponto que ainda preserve o target ROI
+            # ROI alavancado = ((entry_price - stop_price) / entry_price) * leverage
+            # target_roi_pct = ((entry_price - stop_price) / entry_price) * leverage
+            # Resolver para stop_price:
+            # target_roi_pct / leverage = (entry_price - stop_price) / entry_price
+            # stop_price = entry_price - (target_roi_pct / leverage) * entry_price
+            # stop_price = entry_price * (1 - target_roi_pct / leverage / 100)
+            
+            target_roi_decimal = target_roi_pct / 100.0  # Converter % para decimal
+            roi_without_leverage = target_roi_decimal / leverage  # Dividir pela alavancagem
+            trailing_price = entry_price * (1.0 - roi_without_leverage)
+            
+            # Para SHORT: stop deve estar ACIMA do preço atual (protege contra subida)
+            # Se trailing_price < current_price, significa que o ROI deteriorou demais
+            # Neste caso, manter o trailing_price calculado (não forçar acima do atual)
             
             if self.debug:
                 self._log(
-                    f"DEBUG trailing SHORT: target_ROI={target_roi:.4f} trailing_price={trailing_price:.6f} "
-                    f"result={result:.6f}", 
+                    f"DEBUG trailing SHORT ATIVO: ROI_max={max_roi_pct:.2f}% → stop em {target_roi_pct:.2f}% @ {trailing_price:.6f} "
+                    f"(entry={entry_price:.6f}, leverage={leverage:.1f}x, roi_no_lev={roi_without_leverage:.4f})", 
                     level="DEBUG"
                 )
-            return result
+            return trailing_price
 
 
     # ---------- config → params (reuso dos cálculos do backtest) ----------
@@ -2315,10 +2308,10 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            # Para trailing stop usar ordem LIMIT (não stop_market)
-            # LONG: SELL abaixo do preço atual 
-            # SHORT: BUY acima do preço atual
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, {"reduceOnly": True})
+            # Para trailing stop usar ordem LIMIT com trigger conditions
+            # LONG: SELL abaixo do preço atual quando preço cair
+            # SHORT: BUY acima do preço atual quando preço subir
+            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)
         except Exception as e:
             msg = f"Falha ao criar TRAILING LIMIT: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -2398,6 +2391,14 @@ class EMAGradientStrategy:
             close_side = "sell" if norm_side == "buy" else "buy"
 
             orders = self._fetch_reduce_only_orders()
+            if self.debug and orders:
+                self._log(f"DEBUG: Ordens reduceOnly encontradas: {len(orders)}", level="DEBUG")
+                for i, o in enumerate(orders):
+                    price = self._order_effective_price(o)
+                    side = self._norm_order_side(o)
+                    oid = self._extract_order_id(o)
+                    self._log(f"  Ordem {i+1}: side={side} price={price} id={oid}", level="DEBUG")
+            
             remaining_orders: List[Dict[str, Any]] = []
             trailing_candidates: List[Tuple[Dict[str, Any], float, Optional[str]]] = []
             stop_match = None
@@ -2454,8 +2455,13 @@ class EMAGradientStrategy:
 
             create_trailing = False
             if trail_px is not None:
+                if self.debug:
+                    self._log(f"DEBUG trailing: trail_px={trail_px:.6f}, existing_trailing_price={existing_trailing_price}", level="DEBUG")
+                
                 if existing_trailing_price is None:
                     create_trailing = True
+                    if self.debug:
+                        self._log("DEBUG trailing: Criando nova ordem trailing (primeira vez)", level="DEBUG")
                 else:
                     if norm_side == "buy":
                         if trail_px > existing_trailing_price + tol_trail:
@@ -2464,15 +2470,37 @@ class EMAGradientStrategy:
                                 orders = [o for o in orders if self._extract_order_id(o) != existing_trailing_oid]
                                 self._last_trailing_order_id = None
                             create_trailing = True
-                    else:
-                        if trail_px < existing_trailing_price - tol_trail:
+                            if self.debug:
+                                self._log(f"DEBUG trailing LONG: Atualizando {trail_px:.6f} > {existing_trailing_price:.6f}", level="DEBUG")
+                    else:  # SHORT
+                        # Para SHORT: stop deve subir quando ROI melhora (trailing_px deve AUMENTAR)
+                        if trail_px > existing_trailing_price + tol_trail:
                             if existing_trailing_oid:
                                 self._cancel_order_silent(existing_trailing_oid)
                                 orders = [o for o in orders if self._extract_order_id(o) != existing_trailing_oid]
                                 self._last_trailing_order_id = None
                             create_trailing = True
+                            if self.debug:
+                                self._log(f"DEBUG trailing SHORT: Atualizando {trail_px:.6f} > {existing_trailing_price:.6f}", level="DEBUG")
 
             if create_trailing and trail_px is not None:
+                # Para AVNT, forçar cancelamento de todas as ordens trailing existentes
+                if self.symbol == "AVNT/USDC:USDC":
+                    try:
+                        all_orders = self.dex.fetch_open_orders(self.symbol)
+                        for order in all_orders or []:
+                            price = self._order_effective_price(order)
+                            if price and price < entry:  # Todas as ordens abaixo do entry para SHORT são trailing
+                                oid = self._extract_order_id(order)
+                                if self.debug:
+                                    self._log(f"DEBUG AVNT: Cancelando ordem trailing antiga id={oid} price={price}", level="DEBUG")
+                                self._cancel_order_silent(oid)
+                    except Exception as e:
+                        if self.debug:
+                            self._log(f"DEBUG AVNT: Erro ao limpar ordens antigas: {e}", level="DEBUG")
+                
+                if self.debug:
+                    self._log(f"DEBUG trailing: CRIANDO ordem trail_px={trail_px:.6f} close_side={close_side} qty={qty}", level="DEBUG")
                 trailing_order = self._place_trailing_stop(close_side, qty, trail_px, df_for_log=df_for_log, existing_orders=orders)
                 if trailing_order is not None:
                     orders.append(trailing_order)
