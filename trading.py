@@ -1901,6 +1901,8 @@ class EMAGradientStrategy:
                     
         except Exception as e:
             self._log(f"Erro verificando fechamento externo: {e}", level="WARN")
+
+    def _log(self, message: str, level: str = "INFO") -> None:
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
         print(f"[{level}] [{prefix}] {message}", flush=True)
 
