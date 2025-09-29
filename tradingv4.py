@@ -4450,7 +4450,7 @@ if __name__ == "__main__":
             
             try:
                 # Verificar se há posição aberta no vault (independente do asset_state)
-                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": vault_address})
+                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": VAULT_ADDRESS})
                 if not positions or float(positions[0].get("contracts", 0)) == 0:
                     continue
                     
