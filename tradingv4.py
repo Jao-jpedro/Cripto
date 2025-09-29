@@ -619,7 +619,7 @@ class TradingLearner:
         """Determina se o fechamento foi por stop loss"""
         try:
             # Se o close_kind indica stop externo
-            if close_kind in ["close_external", "stop_loss"]:
+            if close_kind in ["close_external", "external_stop", "stop_loss"]:
                 return True
                 
             # Calcular se bateu no nível de stop baseado na configuração
