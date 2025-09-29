@@ -4456,7 +4456,10 @@ if __name__ == "__main__":
                 
                 # Executar trailing stop dinâmico para esta posição
                 try:
-                    strategy._ensure_position_protections(pos)
+                    # Criar um DataFrame dummy para o log
+                    import pandas as pd
+                    dummy_df = pd.DataFrame()
+                    strategy._ensure_position_protections(pos, df_for_log=dummy_df)
                 except Exception as e:
                     _log_global("TRAILING_CHECK", f"{asset.name}: Erro no trailing stop - {e}", level="WARN")
                     
@@ -4464,7 +4467,6 @@ if __name__ == "__main__":
                 _log_global("TRAILING_CHECK", f"Erro verificando {asset.name}: {type(e).__name__}: {e}", level="WARN")
 
     def fast_safety_check_v4(dex_in, asset_state) -> None:
-        """Verifica emergencialmente todas as posições na carteira mãe por PnL e ROI críticos."""
         """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos na carteira mãe."""
         open_positions = []
         
@@ -4736,7 +4738,7 @@ if __name__ == "__main__":
                         price_seen = getattr(strategy, "_last_price_snapshot", None)
                         if price_seen is not None and math.isfinite(price_seen):
                             try:
-                                strategy._log(f"Preço atual: {price_seen:.6f}", level="INFO")
+                                _log_global("ASSET", f"{asset.name}: Preço atual: {price_seen:.6f}", level="INFO")
                             except Exception:
                                 pass
                     except Exception as e:
