@@ -565,7 +565,10 @@ class TradingLearner:
             
     def record_close(self, context: dict, close_price: float, close_kind: str = "unknown"):
         """Registra fechamento e atualiza estatísticas"""
+        _log_global("LEARNER", f"🔍 DEBUG RECORD_CLOSE: context={bool(context)}, close_kind={close_kind}, close_price={close_price}", "INFO")
+        
         if not context:
+            _log_global("LEARNER", "🔍 DEBUG: context vazio, retornando", "INFO")
             return
             
         try:
@@ -573,11 +576,16 @@ class TradingLearner:
             entry_price = context.get("entry_price")
             features_binned = context.get("features_binned", {})
             
+            _log_global("LEARNER", f"🔍 DEBUG: event_id={event_id}, entry_price={entry_price}", "INFO")
+            
             if not event_id or not entry_price:
+                _log_global("LEARNER", "🔍 DEBUG: event_id ou entry_price ausentes, retornando", "INFO")
                 return
                 
             # Determinar se foi STOP
             is_stop = self._determine_if_stop(entry_price, close_price, close_kind, features_binned)
+            
+            _log_global("LEARNER", f"🔍 DEBUG: is_stop={is_stop} para close_kind={close_kind}", "INFO")
             
             label = "close_STOP" if is_stop else "close_NONSTOP"
             
@@ -618,8 +626,11 @@ class TradingLearner:
     def _determine_if_stop(self, entry_price: float, close_price: float, close_kind: str, features_binned: dict) -> bool:
         """Determina se o fechamento foi por stop loss"""
         try:
+            _log_global("LEARNER", f"🔍 DEBUG DETERMINE_STOP: close_kind={close_kind}, entry_price={entry_price}, close_price={close_price}", "INFO")
+            
             # Se o close_kind indica stop externo
             if close_kind in ["close_external", "external_stop", "stop_loss"]:
+                _log_global("LEARNER", f"🔍 DEBUG: close_kind {close_kind} identificado como STOP", "INFO")
                 return True
                 
             # Calcular se bateu no nível de stop baseado na configuração
@@ -643,6 +654,8 @@ class TradingLearner:
     def _update_stats(self, features_binned: dict, is_stop: bool):
         """Atualiza estatísticas para diferentes níveis de granularidade"""
         try:
+            _log_global("LEARNER", f"🔍 DEBUG UPDATE_STATS: is_stop={is_stop}, features={len(features_binned)} fields", "INFO")
+            
             # Gerar chaves para diferentes níveis
             keys_to_update = []
             
@@ -703,19 +716,23 @@ class TradingLearner:
             # Check por intervalo de trades
             if self.report_interval_trades:
                 with self.lock:
-                    if (self.trade_counter - self.last_report_trade) >= self.report_interval_trades:
+                    trade_diff = self.trade_counter - self.last_report_trade
+                    _log_global("LEARNER", f"🔍 DEBUG: trade_counter={self.trade_counter}, last_report_trade={self.last_report_trade}, diff={trade_diff}, interval={self.report_interval_trades}", "INFO")
+                    if trade_diff >= self.report_interval_trades:
                         should_report = True
                         
             # Check por horário (cron daily)
             elif self.report_cron_daily:
                 current_time = self.get_current_brt_time()
                 target_hour, target_min = map(int, self.report_cron_daily.split(':'))
+                _log_global("LEARNER", f"🔍 DEBUG: current_time={current_time.strftime('%H:%M')}, target={target_hour:02d}:{target_min:02d}", "INFO")
                 
                 # Janela de ±2 minutos
                 if (current_time.hour == target_hour and 
                     abs(current_time.minute - target_min) <= 2):
                     should_report = True
                     
+            _log_global("LEARNER", f"🔍 DEBUG: should_report={should_report}", "INFO")
             if should_report:
                 self._send_discord_report()
                 
@@ -724,6 +741,8 @@ class TradingLearner:
             
     def _send_discord_report(self):
         """Envia relatório para Discord com mutex anti-duplicata"""
+        _log_global("LEARNER", f"🔍 DEBUG: _send_discord_report() iniciada. webhook={bool(self.discord_webhook)}", "INFO")
+        
         if not self.discord_webhook:
             _log_global("LEARNER", "Discord webhook not configured, skipping report", "DEBUG")
             return
@@ -734,6 +753,8 @@ class TradingLearner:
                 period_key = f"trades_{self.trade_counter // self.report_interval_trades}"
             else:
                 period_key = self.get_current_brt_time().strftime("%Y-%m-%d")
+                
+            _log_global("LEARNER", f"🔍 DEBUG: period_key={period_key}, trade_counter={self.trade_counter}", "INFO")
                 
             # Tentar adquirir lock
             def _try_acquire_lock():
@@ -1739,7 +1760,7 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop inicial
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.20   # take profit máximo em 20% da margem
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.05   # take profit máximo em 5% da margem
     MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
@@ -1753,7 +1774,7 @@ class GradientConfig:
     STOP_ATR_MULT: float    = 0.0         # desativado (uso por % da margem)
     TAKEPROFIT_ATR_MULT: float = 0.0      # desativado
     TRAILING_ATR_MULT: float   = 0.0      # desativado
-    ENABLE_TRAILING_STOP: bool = False    # trailing stop desativado
+    ENABLE_TRAILING_STOP: bool = True     # trailing stop ativado
 
     # Breakeven trailing legado (mantido opcionalmente)
     BE_TRIGGER_PCT: float   = 0.0
@@ -1850,6 +1871,11 @@ class EMAGradientStrategy:
         try:
             current_size = float(current_pos.get("contracts", 0)) if current_pos else 0.0
             
+            # Debug detalhado
+            self._log(f"🔍 DEBUG STOP: position_was_active={self._position_was_active}, "
+                     f"learner_context={bool(self._learner_context)}, "
+                     f"current_size={current_size}", level="INFO")
+            
             # Se tínhamos uma posição ativa com contexto de learner e agora não temos mais
             if (self._position_was_active and 
                 self._learner_context and 
@@ -1942,76 +1968,26 @@ class EMAGradientStrategy:
         # Calcular stop loss dinâmico baseado no ROI
         base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         
-        # Trailing stop dinâmico granular expandido (USANDO HIGH WATER MARK):
+        # Trailing stop dinâmico simplificado:
         # ROI < 2.5%: stop em -5%
         # ROI >= 2.5%: stop em -2.5%
-        # ROI >= 5%: stop em 0% (breakeven)
-        # ROI >= 7.5%: stop em +2.5%
-        # ROI >= 10%: stop em +5%
-        # ROI >= 12.5%: stop em +7.5%
-        # ROI >= 15%: stop em +10%
-        # ROI >= 17.5%: stop em +12.5%
-        if current_roi_pct >= 17.5:
-            # ROI >= 17.5%: stop em +12.5%
-            trailing_stop_pct = 0.125 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 🚀 TRAILING L8: ROI {current_roi_pct:.1f}% >= 17.5% → stop +12.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 15.0:
-            # ROI >= 15%: stop em +10%
-            trailing_stop_pct = 0.10 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 🎯 TRAILING L7: ROI {current_roi_pct:.1f}% >= 15% → stop +10% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 12.5:
-            # ROI >= 12.5%: stop em +7.5%
-            trailing_stop_pct = 0.075 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L6: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 10.0:
-            # ROI >= 10%: stop em +5%
-            trailing_stop_pct = 0.05 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 7.5:
-            # ROI >= 7.5%: stop em +2.5%
-            trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 5.0:
-            # ROI >= 5%: stop em 0% (breakeven)
-            stop_px = entry_price
-            self._log(f"[DEBUG_CLOSE] ⚖️ TRAILING L3: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 2.5:
+        if current_roi_pct >= 2.5:
             # ROI >= 2.5%: stop em -2.5%
             trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📉 TRAILING L2: ROI {current_roi_pct:.1f}% >= 2.5% → stop -2.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] � TRAILING: ROI {current_roi_pct:.1f}% >= 2.5% → stop -2.5% @ {stop_px:.6f}", level="DEBUG")
         else:
             # ROI < 2.5%: stop normal em -5%
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 - base_risk_ratio)
             else:
                 stop_px = entry_price * (1.0 + base_risk_ratio)
-            self._log(f"[DEBUG_CLOSE] ⬇️ TRAILING L1: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] ⬇️ TRAILING: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
         
-        # Take profit fixo em 20%
+        # Take profit fixo em 5%
         reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         if norm_side == "buy":
             take_px = entry_price * (1.0 + reward_ratio)
@@ -4444,7 +4420,7 @@ if __name__ == "__main__":
             
             try:
                 # Verificar se há posição aberta no vault
-                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": vault_address})
+                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": VAULT_ADDRESS})
                 if not positions or float(positions[0].get("contracts", 0)) == 0:
                     continue
                     

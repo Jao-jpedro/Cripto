@@ -574,7 +574,10 @@ class TradingLearner:
             
     def record_close(self, context: dict, close_price: float, close_kind: str = "unknown"):
         """Registra fechamento e atualiza estatísticas"""
+        _log_global("LEARNER", f"🔍 DEBUG RECORD_CLOSE: context={bool(context)}, close_kind={close_kind}, close_price={close_price}", "INFO")
+        
         if not context:
+            _log_global("LEARNER", "🔍 DEBUG: context vazio, retornando", "INFO")
             return
             
         try:
@@ -582,11 +585,16 @@ class TradingLearner:
             entry_price = context.get("entry_price")
             features_binned = context.get("features_binned", {})
             
+            _log_global("LEARNER", f"🔍 DEBUG: event_id={event_id}, entry_price={entry_price}", "INFO")
+            
             if not event_id or not entry_price:
+                _log_global("LEARNER", "🔍 DEBUG: event_id ou entry_price ausentes, retornando", "INFO")
                 return
                 
             # Determinar se foi STOP
             is_stop = self._determine_if_stop(entry_price, close_price, close_kind, features_binned)
+            
+            _log_global("LEARNER", f"🔍 DEBUG: is_stop={is_stop} para close_kind={close_kind}", "INFO")
             
             label = "close_STOP" if is_stop else "close_NONSTOP"
             
@@ -627,8 +635,11 @@ class TradingLearner:
     def _determine_if_stop(self, entry_price: float, close_price: float, close_kind: str, features_binned: dict) -> bool:
         """Determina se o fechamento foi por stop loss"""
         try:
+            _log_global("LEARNER", f"🔍 DEBUG DETERMINE_STOP: close_kind={close_kind}, entry_price={entry_price}, close_price={close_price}", "INFO")
+            
             # Se o close_kind indica stop externo
             if close_kind in ["close_external", "external_stop", "stop_loss"]:
+                _log_global("LEARNER", f"🔍 DEBUG: close_kind {close_kind} identificado como STOP", "INFO")
                 return True
                 
             # Calcular se bateu no nível de stop baseado na configuração
@@ -652,6 +663,8 @@ class TradingLearner:
     def _update_stats(self, features_binned: dict, is_stop: bool):
         """Atualiza estatísticas para diferentes níveis de granularidade"""
         try:
+            _log_global("LEARNER", f"🔍 DEBUG UPDATE_STATS: is_stop={is_stop}, features={len(features_binned)} fields", "INFO")
+            
             # Gerar chaves para diferentes níveis
             keys_to_update = []
             
@@ -1858,6 +1871,11 @@ class EMAGradientStrategy:
         """Detecta se uma posição foi fechada externamente (por stop/TP da Hyperliquid) e registra no learner"""
         try:
             current_size = float(current_pos.get("contracts", 0)) if current_pos else 0.0
+            
+            # Debug detalhado
+            self._log(f"🔍 DEBUG STOP: position_was_active={self._position_was_active}, "
+                     f"learner_context={bool(self._learner_context)}, "
+                     f"current_size={current_size}", level="INFO")
             
             # Se tínhamos uma posição ativa com contexto de learner e agora não temos mais
             if (self._position_was_active and 
