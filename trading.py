@@ -546,8 +546,9 @@ class TradingLearner:
                                if v is not None}
             
             if self.observe_only:
+                p_stop_str = f"{p_stop:.3f}" if p_stop is not None else "N/A"
                 _log_global("LEARNER", 
-                    f"observe_only | {symbol} {side} | Pstop={p_stop:.3f if p_stop else 'N/A'}, "
+                    f"observe_only | {symbol} {side} | Pstop={p_stop_str}, "
                     f"n={n_samples}, core_bins={core_bins_summary}", "INFO")
             
             # Incrementar contador de trades
@@ -1056,16 +1057,16 @@ except NameError:  # pragma: no cover
 import time as _time
 
 
-def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: float, *, vault) -> bool:
+def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: float) -> bool:
     """
-    Cancela ordens com status 'Triggered' e cria uma nova ordem 'price below' se necessário (versão vault).
+    Cancela ordens com status 'Triggered' e cria uma nova ordem 'price below' se necessário (carteira mãe).
     """
     print(f"[DEBUG_CLOSE] 🔍 cancel_triggered_orders_and_create_price_below: {symbol} @ {current_px:.4f}", flush=True)
     try:
         orders_cancelled = 0
         
-        # Buscar ordens abertas
-        open_orders = dex.fetch_open_orders(symbol, None, None, {"vaultAddress": vault})
+        # Buscar ordens abertas (carteira mãe)
+        open_orders = dex.fetch_open_orders(symbol)
         print(f"[DEBUG_CLOSE] 📋 Encontradas {len(open_orders)} ordens abertas para {symbol}", flush=True)
         
         for order in open_orders:
@@ -1078,18 +1079,18 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
                 try:
                     # Cancelar a ordem triggered
                     print(f"[DEBUG_CLOSE] ⚠️ CANCELANDO ordem triggered: {order['id']} - status:{order_status} type:{order_type}", flush=True)
-                    dex.cancel_order(order['id'], symbol, {"vaultAddress": vault})
+                    dex.cancel_order(order['id'], symbol)  # Carteira mãe
                     orders_cancelled += 1
-                    print(f"[INFO] Ordem Triggered cancelada (vault): {order['id']}", flush=True)
+                    print(f"[INFO] Ordem Triggered cancelada: {order['id']}", flush=True)
                 except Exception as e:
-                    print(f"[WARN] Erro ao cancelar ordem (vault) {order['id']}: {e}", flush=True)
+                    print(f"[WARN] Erro ao cancelar ordem {order['id']}: {e}", flush=True)
         
         # Se cancelou alguma ordem triggered, criar uma ordem price below/above correta
         if orders_cancelled > 0:
             print(f"[DEBUG_CLOSE] 🔄 Cancelamos {orders_cancelled} ordens triggered - criando nova ordem de stop", flush=True)
             try:
                 # Verificar se há posição aberta para determinar o lado
-                positions = dex.fetch_positions([symbol], {"vaultAddress": vault})
+                positions = dex.fetch_positions([symbol])  # Carteira mãe
                 print(f"[DEBUG_CLOSE] 📊 Verificando posições para {symbol}: {len(positions)} encontradas", flush=True)
                 
                 if positions and float(positions[0].get("contracts", 0)) > 0:
@@ -1114,31 +1115,31 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
                             order_type = "price_above"
                             print(f"[DEBUG_CLOSE] 📈 SHORT: criando BUY stop @ {order_price:.4f} (5% acima de {current_px:.4f})", flush=True)
                         
-                        # Criar ordem limit para saída (com vault)
+                        # Criar ordem limit para saída (carteira mãe)
                         order = dex.create_order(
                             symbol, 
                             "limit", 
                             exit_side, 
                             qty, 
                             order_price,
-                            {"reduceOnly": True, "vaultAddress": vault}
+                            {"reduceOnly": True}  # Carteira mãe
                         )
                         print(f"[DEBUG_CLOSE] ✅ ORDEM STOP CRIADA: {order.get('id')} - {exit_side.upper()} {qty:.4f} @ {order_price:.4f}", flush=True)
-                        print(f"[INFO] Ordem {order_type} criada (vault): {order.get('id')} - {side.upper()} exit @ {order_price:.4f}", flush=True)
+                        print(f"[INFO] Ordem {order_type} criada: {order.get('id')} - {side.upper()} exit @ {order_price:.4f}", flush=True)
                         return True
                 else:
                     print(f"[DEBUG_CLOSE] ❌ Nenhuma posição válida encontrada para criar stop", flush=True)
                         
             except Exception as e:
                 print(f"[DEBUG_CLOSE] ⛔ ERRO ao criar ordem stop: {e}", flush=True)
-                print(f"[WARN] Erro ao criar ordem stop (vault): {e}", flush=True)
+                print(f"[WARN] Erro ao criar ordem stop: {e}", flush=True)
         else:
             print(f"[DEBUG_CLOSE] ℹ️ Nenhuma ordem triggered cancelada - saindo", flush=True)
         
         return orders_cancelled > 0
         
     except Exception as e:
-        print(f"[ERROR] Erro na função cancel_triggered_orders_and_create_price_below (vault): {e}", flush=True)
+        print(f"[ERROR] Erro na função cancel_triggered_orders_and_create_price_below: {e}", flush=True)
         return False
 
 def _binance_bases():
@@ -1721,8 +1722,8 @@ now = datetime.now(timezone.utc)
 import numpy as np
 import pandas as pd
 
-# Vault Address para operações na subconta
-VAULT_ADDRESS = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
+# Sistema INVERSO - Opera diretamente na carteira mãe (sem vault)
+# Carteira mãe configurada via env vars WALLET_ADDRESS + HYPERLIQUID_PRIVATE_KEY
 
 @dataclass
 class GradientConfig:
@@ -2473,7 +2474,7 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
         try:
-            pos = self.dex.fetch_positions([self.symbol], {"vaultAddress": VAULT_ADDRESS})
+            pos = self.dex.fetch_positions([self.symbol])  # Opera na carteira mãe
             if pos and float(pos[0].get("contracts", 0)) > 0:
                 return pos[0]
         except Exception as e:
@@ -2485,7 +2486,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return False
-            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
+            for o in self.dex.fetch_open_orders(self.symbol):  # Opera na carteira mãe
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -2612,7 +2613,7 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return []
         try:
-            orders = self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS})
+            orders = self.dex.fetch_open_orders(self.symbol)
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao obter open_orders para verificação de proteções: {type(e).__name__}: {e}", level="WARN")
@@ -2701,7 +2702,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return
-            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
+            for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -2752,7 +2753,7 @@ class EMAGradientStrategy:
             return existing
         try:
             # Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
+            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)  # Carteira mãe
         except Exception as e:
             msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -2805,7 +2806,7 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
+            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)  # Carteira mãe
         except Exception as e:
             msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -2850,7 +2851,7 @@ class EMAGradientStrategy:
                 lev_type = str(leverage_info.get("type") or "").lower()
                 target_lev = int(self.cfg.LEVERAGE)
                 if lev_type != "isolated" and target_lev > 0:
-                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated", "vaultAddress": VAULT_ADDRESS})
+                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated"})
                     self._log("Leverage ajustada para isolated em posição existente.", level="INFO")
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
@@ -2957,7 +2958,7 @@ class EMAGradientStrategy:
             lev_int = None
         if lev_int and lev_int > 0:
             try:
-                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated", "vaultAddress": VAULT_ADDRESS})
+                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})
                 if self.debug:
                     self._log(f"Leverage ajustada para {lev_int}x (isolated)", level="DEBUG")
             except Exception as e:
@@ -2974,7 +2975,7 @@ class EMAGradientStrategy:
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
         )
-        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price, {"vaultAddress": VAULT_ADDRESS})
+        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)  # Carteira mãe
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
 
         oid = None
@@ -3123,7 +3124,7 @@ class EMAGradientStrategy:
         # Diagnóstico: listar ordens abertas reduceOnly
         try:
             if os.getenv("LIVE_TRADING", "0") in ("1", "true", "True"):
-                open_orders = self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS})
+                open_orders = self.dex.fetch_open_orders(self.symbol)
                 if open_orders:
                     self._log("Ordens reduceOnly ativas:", level="DEBUG")
                     for o in open_orders:
@@ -3147,7 +3148,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return None, None, None
-            for o in self.dex.fetch_open_orders(self.symbol, None, None, {"vaultAddress": VAULT_ADDRESS}):
+            for o in self.dex.fetch_open_orders(self.symbol):
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -3171,7 +3172,7 @@ class EMAGradientStrategy:
             if order_id:
                 if self.debug:
                     self._log(f"Cancelando ordem reduceOnly id={order_id}", level="DEBUG")
-                self.dex.cancel_order(order_id, self.symbol, {"vaultAddress": VAULT_ADDRESS})
+                self.dex.cancel_order(order_id, self.symbol)
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao cancelar ordem {order_id}: {e}", level="WARN")
@@ -3183,7 +3184,7 @@ class EMAGradientStrategy:
         params = {"reduceOnly": True}
         if self.debug:
             self._log(f"Fechando posição via MARKET reduceOnly {side.upper()} qty={amt} px_ref={px:.6f}", level="DEBUG")
-        return self.dex.create_order(self.symbol, "market", side, amt, px, {**params, "vaultAddress": VAULT_ADDRESS})
+        return self.dex.create_order(self.symbol, "market", side, amt, px, params)  # Carteira mãe
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()
@@ -3418,10 +3419,9 @@ class EMAGradientStrategy:
         # Verificar e cancelar ordens triggered, criar price below se necessário
         try:
             current_price = self._preco_atual()
-            vault_address = VAULT_ADDRESS  # Usar a subconta configurada
-            cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price, vault=vault_address)
+            cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price)  # Carteira mãe
         except Exception as e:
-            self._log(f"Erro ao processar ordens triggered (vault): {type(e).__name__}: {e}", level="WARN")
+            self._log(f"Erro ao processar ordens triggered: {type(e).__name__}: {e}", level="WARN")
 
         # Verificar stop loss por PnL/ROI para fechamento imediato (PnL tem prioridade)
         if pos:
@@ -3436,7 +3436,6 @@ class EMAGradientStrategy:
                             qty = abs(float(pos.get("contracts", 0)))
                             side = self._norm_side(pos.get("side") or pos.get("positionSide"))
                             exit_side = "sell" if side in ("buy", "long") else "buy"
-                            vault_address = VAULT_ADDRESS
                             
                             # Buscar preço atual para ordem market
                             ticker = self.dex.fetch_ticker(self.symbol)
@@ -3451,13 +3450,13 @@ class EMAGradientStrategy:
                             else:
                                 order_price = current_price * 1.005  # Ligeiramente acima para short
                             
-                            self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
+                            self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Carteira mãe
                             emergency_closed = True
                             _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
                             self._log(f"[DEBUG_CLOSE] 🚨 FECHAMENTO POR PNL: {unrealized_pnl:.2f} <= {UNREALIZED_PNL_HARD_STOP}", level="ERROR")
-                            self._log(f"Emergência acionada (vault): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
+                            self._log(f"Emergência acionada (carteira mãe): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
-                            self._log(f"Erro ao fechar posição por PnL (vault): {e}", level="ERROR")
+                            self._log(f"Erro ao fechar posição por PnL (carteira mãe): {e}", level="ERROR")
                 
                 # Se não fechou por PnL, verificar ROI
                 if not emergency_closed:
@@ -3478,7 +3477,6 @@ class EMAGradientStrategy:
                                 qty = abs(float(pos.get("contracts", 0)))
                                 side = self._norm_side(pos.get("side") or pos.get("positionSide"))
                                 exit_side = "sell" if side in ("buy", "long") else "buy"
-                                vault_address = VAULT_ADDRESS
                                 
                                 # Buscar preço atual para ordem market
                                 ticker = self.dex.fetch_ticker(self.symbol)
@@ -3493,16 +3491,16 @@ class EMAGradientStrategy:
                                 else:
                                     order_price = current_price * 1.005  # Ligeiramente acima para short
                                 
-                                self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
+                                self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Carteira mãe
                                 emergency_closed = True
                                 _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
                                 self._log(f"[DEBUG_CLOSE] 🚨 FECHAMENTO POR ROI: {roi_f:.4f} <= {ROI_HARD_STOP}", level="ERROR")
-                                self._log(f"Emergência acionada (vault): ROI <= {ROI_HARD_STOP}%, posição fechada imediatamente.", level="ERROR")
+                                self._log(f"Emergência acionada (carteira mãe): ROI <= {ROI_HARD_STOP}%, posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
-                            self._log(f"Erro ao fechar posição por ROI (vault): {e}", level="ERROR")
+                            self._log(f"Erro ao fechar posição por ROI (carteira mãe): {e}", level="ERROR")
                         
             except Exception as e:
-                self._log(f"Falha ao avaliar emergência de PnL/ROI (vault): {type(e).__name__}: {e}", level="WARN")
+                self._log(f"Falha ao avaliar emergência de PnL/ROI (carteira mãe): {type(e).__name__}: {e}", level="WARN")
             
             if emergency_closed:
                 self._cancel_protective_orders(fetch_backup=True)
@@ -4341,8 +4339,8 @@ if __name__ == "__main__":
     # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
     EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
-    def check_all_trailing_stops_v4(dex_in, asset_state, vault_address: str) -> None:
-        """Verifica e ajusta trailing stops dinâmicos para TODAS as posições abertas."""
+    def check_all_trailing_stops_v4(dex_in, asset_state) -> None:
+        """Verifica e ajusta trailing stops dinâmicos para TODAS as posições abertas na carteira mãe."""
         for asset in ASSET_SETUPS:
             state = asset_state.get(asset.name)
             if state is None:
@@ -4351,8 +4349,8 @@ if __name__ == "__main__":
             strategy: EMAGradientStrategy = state["strategy"]
             
             try:
-                # Verificar se há posição aberta no vault
-                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": vault_address})
+                # Verificar se há posição aberta na carteira mãe
+                positions = dex_in.fetch_positions([asset.hl_symbol])
                 if not positions or float(positions[0].get("contracts", 0)) == 0:
                     continue
                     
@@ -4367,8 +4365,9 @@ if __name__ == "__main__":
             except Exception as e:
                 _log_global("TRAILING_CHECK", f"Erro verificando {asset.name}: {type(e).__name__}: {e}", level="WARN")
 
-    def fast_safety_check_v4(dex_in, asset_state, vault_address: str) -> None:
-        """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos no vault."""
+    def fast_safety_check_v4(dex_in, asset_state) -> None:
+        """Verifica emergencialmente todas as posições na carteira mãe por PnL e ROI críticos."""
+        """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos na carteira mãe."""
         open_positions = []
         
         # Debug: verificar quantos assets estão no asset_state
@@ -4378,8 +4377,8 @@ if __name__ == "__main__":
             state = asset_state.get(asset.name)
             
             try:
-                # Verificar se há posição aberta no vault (independente do asset_state)
-                positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": vault_address})
+                # Verificar se há posição aberta na carteira mãe (independente do asset_state)
+                positions = dex_in.fetch_positions([asset.hl_symbol])
                 if not positions or float(positions[0].get("contracts", 0)) == 0:
                     continue
                     
@@ -4459,7 +4458,7 @@ if __name__ == "__main__":
                         else:
                             order_price = current_price * 1.005  # Ligeiramente acima para short
                         
-                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
+                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Carteira mãe
                         emergency_closed = True
                         _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
@@ -4488,7 +4487,7 @@ if __name__ == "__main__":
                         else:
                             order_price = current_price * 1.005
                         
-                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
+                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Carteira mãe
                         emergency_closed = True
                         _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
@@ -4647,10 +4646,10 @@ if __name__ == "__main__":
                     
                     # FAST SAFETY CHECK IMEDIATAMENTE APÓS O ASSET
                     _log_global("ASSET", f"Fast safety check pós-{asset.name}")
-                    fast_safety_check_v4(dex_in, asset_state, VAULT_ADDRESS)
+                    fast_safety_check_v4(dex_in, asset_state)
                     
                     # TRAILING STOP CHECK PARA TODAS AS POSIÇÕES APÓS CADA ASSET
-                    check_all_trailing_stops_v4(dex_in, asset_state, VAULT_ADDRESS)
+                    check_all_trailing_stops_v4(dex_in, asset_state)
                     
                     _time.sleep(0.25)
 
