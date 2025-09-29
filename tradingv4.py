@@ -4530,7 +4530,7 @@ if __name__ == "__main__":
                         else:
                             order_price = current_price * 1.005  # Ligeiramente acima para short
                         
-                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
+                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": VAULT_ADDRESS})
                         emergency_closed = True
                         _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
@@ -4559,7 +4559,7 @@ if __name__ == "__main__":
                         else:
                             order_price = current_price * 1.005
                         
-                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": vault_address})
+                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True, "vaultAddress": VAULT_ADDRESS})
                         emergency_closed = True
                         _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
                         _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
