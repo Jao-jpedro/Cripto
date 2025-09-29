@@ -88,7 +88,7 @@ class TradingLearner:
         self.min_n = int(os.getenv("MIN_N", "5"))  # Reduzido para facilitar teste
         self.p_thresh_block = float(os.getenv("P_THRESH_BLOCK", "0.90"))
         self.min_n_watch = int(os.getenv("MIN_N_WATCH", "3"))  # Reduzido para facilitar relatórios
-        self.p_thresh_watch = float(os.getenv("P_THRESH_WATCH", "0.60"))  # Reduzido para capturar mais perfis
+        self.p_thresh_watch = float(os.getenv("P_THRESH_WATCH", "0.85"))  # 85% - configurações realmente perigosas
         self.max_watch_rows = int(os.getenv("MAX_WATCH_ROWS", "15"))
         
         # Reporting - configuração otimizada para envio frequente
@@ -1839,8 +1839,59 @@ class EMAGradientStrategy:
         
         # Sistema de aprendizado
         self._learner_context: Optional[dict] = None
+        
+        # Rastreamento de posição para detectar fechamentos externos
+        self._last_position_size: Optional[float] = None
+        self._last_position_side: Optional[str] = None
+        self._position_was_active: bool = False
 
-    def _log(self, message: str, level: str = "INFO") -> None:
+    def _check_external_position_closure(self, current_pos: Optional[Dict[str, Any]]) -> None:
+        """Detecta se uma posição foi fechada externamente (por stop/TP da Hyperliquid) e registra no learner"""
+        try:
+            current_size = float(current_pos.get("contracts", 0)) if current_pos else 0.0
+            
+            # Se tínhamos uma posição ativa com contexto de learner e agora não temos mais
+            if (self._position_was_active and 
+                self._learner_context and 
+                abs(current_size) < 0.001):  # Posição foi fechada
+                
+                self._log("🎯 Posição fechada externamente detectada - registrando no learner", level="INFO")
+                
+                # Buscar preço atual para registrar o fechamento
+                try:
+                    ticker = self.dex.fetch_ticker(self.symbol)
+                    current_price = float(ticker["last"])
+                    
+                    # Registrar fechamento no learner
+                    learner = get_learner()
+                    learner.record_close(
+                        context=self._learner_context,
+                        close_price=current_price,
+                        close_kind="external_stop"  # Fechamento por stop/TP da Hyperliquid
+                    )
+                    
+                    self._log(f"✅ Fechamento externo registrado no learner: preço={current_price:.4f}", level="INFO")
+                    
+                except Exception as e:
+                    self._log(f"⚠️ Erro ao registrar fechamento externo no learner: {e}", level="WARN")
+                
+                # Limpar contexto
+                self._learner_context = None
+                self._position_was_active = False
+                
+            # Atualizar rastreamento da posição atual
+            if abs(current_size) > 0.001:
+                self._last_position_size = current_size
+                self._last_position_side = current_pos.get("side") if current_pos else None
+                self._position_was_active = True
+            else:
+                self._last_position_size = None
+                self._last_position_side = None
+                if not self._learner_context:  # Só resetar se já não há contexto pendente
+                    self._position_was_active = False
+                    
+        except Exception as e:
+            self._log(f"Erro verificando fechamento externo: {e}", level="WARN")
         prefix = f"{self.symbol}" if self.symbol else "STRAT"
         print(f"[{level}] [{prefix}] {message}", flush=True)
 
@@ -2466,8 +2517,12 @@ class EMAGradientStrategy:
             return None
         try:
             pos = self.dex.fetch_positions([self.symbol], {"vaultAddress": VAULT_ADDRESS})
-            if pos and float(pos[0].get("contracts", 0)) > 0:
-                return pos[0]
+            current_pos = pos[0] if pos and float(pos[0].get("contracts", 0)) > 0 else None
+            
+            # Verificar se posição foi fechada externamente
+            self._check_external_position_closure(current_pos)
+            
+            return current_pos
         except Exception as e:
             if self.debug:
                 self._log(f"fetch_positions falhou: {type(e).__name__}: {e}", level="WARN")
@@ -2935,6 +2990,43 @@ class EMAGradientStrategy:
             self._log(f"Falha ao sincronizar proteções: {type(e).__name__}: {e}", level="WARN")
 
     # ---------- ordens ----------
+    def _entrada_segura_pelo_learner(self, side: str, df_for_log: pd.DataFrame) -> Tuple[bool, float, int]:
+        """
+        Verifica se a entrada é segura baseada no sistema de aprendizado.
+        Retorna: (é_segura, probabilidade_stop, num_amostras)
+        Considera perigosa entradas com P(stop) >= 85%
+        """
+        try:
+            learner = get_learner()
+            
+            # Extrair features da situação atual (similar ao que será feito no record_entry)
+            price_now = self._preco_atual()
+            features_raw = learner.extract_features_raw(self.symbol, side, df_for_log, price_now)
+            features_binned = learner.bin_features(features_raw)
+            
+            # Calcular P(stop) com backoff
+            p_stop, n_samples = learner.get_stop_probability_with_backoff(features_binned)
+            
+            # Limiar de segurança: 85%
+            LIMITE_PERIGOSO = 0.85
+            MIN_AMOSTRAS_CONFIAVEL = 5
+            
+            is_safe = True
+            if n_samples >= MIN_AMOSTRAS_CONFIAVEL and p_stop >= LIMITE_PERIGOSO:
+                is_safe = False
+                self._log(f"🚨 ENTRADA BLOQUEADA pelo learner: P(stop)={p_stop:.1%} >= {LIMITE_PERIGOSO:.0%} (amostras: {n_samples})", level="WARN")
+            elif n_samples >= MIN_AMOSTRAS_CONFIAVEL:
+                self._log(f"✅ Entrada aprovada pelo learner: P(stop)={p_stop:.1%} < {LIMITE_PERIGOSO:.0%} (amostras: {n_samples})", level="INFO")
+            else:
+                # Poucas amostras, permitir entrada mas logar
+                self._log(f"⚠️ Learner com poucas amostras: P(stop)={p_stop:.1%} (amostras: {n_samples}) - entrada permitida", level="INFO")
+            
+            return is_safe, p_stop, n_samples
+            
+        except Exception as e:
+            self._log(f"Erro verificando segurança pelo learner: {e} - permitindo entrada", level="WARN")
+            return True, 0.0, 0
+
     def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
         if self._posicao_aberta():
             self._log("Entrada ignorada: posição já aberta.", level="DEBUG"); return None, None
@@ -2942,6 +3034,12 @@ class EMAGradientStrategy:
             self._log("Entrada ignorada: ordem pendente detectada.", level="WARN"); return None, None
         if not self._anti_spam_ok("open"):
             self._log("Entrada bloqueada pelo anti-spam.", level="DEBUG"); return None, None
+        
+        # Verificação de segurança pelo sistema de aprendizado
+        is_safe, p_stop, n_samples = self._entrada_segura_pelo_learner(side, df_for_log)
+        if not is_safe:
+            self._log(f"🚫 Entrada RECUSADA pelo learner: risco alto P(stop)={p_stop:.1%}", level="ERROR")
+            return None, None
 
         try:
             lev_int = int(self.cfg.LEVERAGE)
