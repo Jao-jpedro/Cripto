@@ -77,9 +77,12 @@ class TradingLearner:
     e reporta perfis problemáticos ao Discord
     """
     
-    def __init__(self):
+    def __init__(self, db_path: str = None):
         # Configurações via environment
-        self.db_path = os.getenv("LEARN_DB_PATH", "/var/data/hl_learn.db")
+        if db_path:
+            self.db_path = db_path
+        else:
+            self.db_path = os.getenv("LEARN_DB_PATH", "/var/data/hl_learn.db")
         # Usar o mesmo webhook das notificações de entrada/saída
         self.discord_webhook = os.getenv("DISCORD_WEBHOOK", 
             "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM")
@@ -539,8 +542,9 @@ class TradingLearner:
                                if v is not None}
             
             if self.observe_only:
+                p_stop_str = f"{p_stop:.3f}" if p_stop is not None else "N/A"
                 _log_global("LEARNER", 
-                    f"observe_only | {symbol} {side} | Pstop={p_stop:.3f if p_stop else 'N/A'}, "
+                    f"observe_only | {symbol} {side} | Pstop={p_stop_str}, "
                     f"n={n_samples}, core_bins={core_bins_summary}", "INFO")
             
             # Incrementar contador de trades
@@ -944,6 +948,7 @@ class TradingLearner:
 
 # Instância global do learner
 _global_learner: Optional[TradingLearner] = None
+_global_learner_inverse: Optional[TradingLearner] = None
 
 def get_learner() -> TradingLearner:
     """Retorna instância global do learner (singleton)"""
@@ -951,6 +956,13 @@ def get_learner() -> TradingLearner:
     if _global_learner is None:
         _global_learner = TradingLearner()
     return _global_learner
+
+def get_learner_inverse() -> TradingLearner:
+    """Retorna instância global do learner inverso (singleton)"""
+    global _global_learner_inverse
+    if _global_learner_inverse is None:
+        _global_learner_inverse = TradingLearner(db_path="hl_learn_inverse.db")
+    return _global_learner_inverse
 
 def test_learner_discord_report():
     """Função para testar o envio de relatório ao Discord"""

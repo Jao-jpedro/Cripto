@@ -84,9 +84,12 @@ class TradingLearner:
     e reporta perfis problemáticos ao Discord
     """
     
-    def __init__(self):
+    def __init__(self, db_path: str = None):
         # Configurações via environment - BD separado para sistema inverso
-        self.db_path = os.getenv("LEARN_DB_PATH", "/var/data/hl_learn_inverse.db")
+        if db_path:
+            self.db_path = db_path
+        else:
+            self.db_path = os.getenv("LEARN_DB_PATH", "/var/data/hl_learn_inverse.db")
         # Usar o mesmo webhook das notificações de entrada/saída
         self.discord_webhook = os.getenv("DISCORD_WEBHOOK", 
             "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM")
@@ -944,6 +947,7 @@ class TradingLearner:
 
 # Instância global do learner
 _global_learner: Optional[TradingLearner] = None
+_global_learner_inverse: Optional[TradingLearner] = None
 
 def get_learner() -> TradingLearner:
     """Retorna instância global do learner (singleton)"""
@@ -951,6 +955,13 @@ def get_learner() -> TradingLearner:
     if _global_learner is None:
         _global_learner = TradingLearner()
     return _global_learner
+
+def get_learner_inverse() -> TradingLearner:
+    """Retorna instância global do learner inverso (singleton)"""
+    global _global_learner_inverse
+    if _global_learner_inverse is None:
+        _global_learner_inverse = TradingLearner(db_path="hl_learn_inverse.db")
+    return _global_learner_inverse
 
 def test_learner_discord_report():
     """Função para testar o envio de relatório ao Discord"""
@@ -1465,39 +1476,58 @@ import ccxt  # type: ignore
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
-# Lê credenciais da carteira MÃE (via env vars do Render)
-WALLET_MAE = os.getenv("WALLET_ADDRESS")  # Carteira mãe do Render
-_wallet_env = WALLET_MAE
-_priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")  # Private key da carteira mãe
-if not _wallet_env or not _priv_env:
-    msg = (
-        "Credenciais da CARTEIRA MÃE ausentes: WALLET_ADDRESS e HYPERLIQUID_PRIVATE_KEY. "
-        "Defina as variáveis de ambiente obrigatórias antes de executar."
-    )
-    _log_global("DEX", msg, level="ERROR")
-    raise RuntimeError(msg)
 
-dex = ccxt.hyperliquid({
-    "walletAddress": _wallet_env,
-    "privateKey": _priv_env,
-    "enableRateLimit": True,
-    "timeout": dex_timeout,
-    "options": {"timeout": dex_timeout},
-})
+# Variáveis globais para lazy initialization
+dex = None
+_wallet_env = None
+_priv_env = None
+
+def _init_dex_if_needed():
+    """Inicializa o DEX apenas quando necessário"""
+    global dex, _wallet_env, _priv_env
+    
+    if dex is not None:
+        return dex
+        
+    # Lê credenciais da carteira MÃE (via env vars do Render)
+    WALLET_MAE = os.getenv("WALLET_ADDRESS")  # Carteira mãe do Render
+    _wallet_env = WALLET_MAE
+    _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")  # Private key da carteira mãe
+    
+    if not _wallet_env or not _priv_env:
+        msg = (
+            "Credenciais da CARTEIRA MÃE ausentes: WALLET_ADDRESS e HYPERLIQUID_PRIVATE_KEY. "
+            "Defina as variáveis de ambiente obrigatórias antes de executar."
+        )
+        _log_global("DEX", msg, level="ERROR")
+        raise RuntimeError(msg)
+
+    dex = ccxt.hyperliquid({
+        "walletAddress": _wallet_env,
+        "privateKey": _priv_env,
+        "enableRateLimit": True,
+        "timeout": dex_timeout,
+        "options": {"timeout": dex_timeout},
+    })
+    
+    return dex
 
 # Sistema INVERSO com credenciais da carteira mãe
-if dex:
-    _log_global("DEX", f"SISTEMA INVERSO Inicializado (Carteira Mãe) | LIVE_TRADING={os.getenv('LIVE_TRADING','0')} | TIMEOUT_MS={dex_timeout}")
-    live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-    if live:
-        _log_global("DEX", "fetch_balance() iniciando…")
-        try:
-            dex.fetch_balance()
-            _log_global("DEX", "fetch_balance() OK")
-        except Exception as e:
-            _log_global("DEX", f"Falha ao buscar saldo: {type(e).__name__}: {e}", level="WARN")
-    else:
-        _log_global("DEX", "LIVE_TRADING=0 ⇒ ignorando fetch_balance()", level="DEBUG")
+def _init_system_if_needed():
+    """Inicializa o sistema apenas quando necessário"""
+    dex_instance = _init_dex_if_needed()
+    if dex_instance:
+        _log_global("DEX", f"SISTEMA INVERSO Inicializado (Carteira Mãe) | LIVE_TRADING={os.getenv('LIVE_TRADING','0')} | TIMEOUT_MS={dex_timeout}")
+        live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+        if live:
+            _log_global("DEX", "fetch_balance() iniciando…")
+            try:
+                dex_instance.fetch_balance()
+                _log_global("DEX", "fetch_balance() OK")
+            except Exception as e:
+                _log_global("DEX", f"Falha ao buscar saldo: {type(e).__name__}: {e}", level="WARN")
+        else:
+            _log_global("DEX", "LIVE_TRADING=0 ⇒ ignorando fetch_balance()", level="DEBUG")
 
 # COMMAND ----------
 # =========================
