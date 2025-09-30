@@ -1,4 +1,5 @@
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
+print("⚠️ SISTEMA INVERSO ATIVO: Sinal LONG → Executa SHORT | Sinal SHORT → Executa LONG", flush=True)
 
 # Constantes para stop loss
 from typing import Optional
@@ -3805,11 +3806,11 @@ class EMAGradientStrategy:
             force_short = False
             if not math.isnan(rsi_val):
                 if rsi_val < 20.0:
-                    force_long = True
-                    self._log(f"RSI Force LONG: RSI14={rsi_val:.2f} < 20", level="INFO")
+                    force_short = True  # INVERSO: RSI oversold → Force SHORT
+                    self._log(f"⚠️ SISTEMA INVERSO - RSI Force: RSI14={rsi_val:.2f} < 20 → Force SHORT", level="INFO")
                 elif rsi_val > 80.0:
-                    force_short = True
-                    self._log(f"RSI Force SHORT: RSI14={rsi_val:.2f} > 80", level="INFO")
+                    force_long = True   # INVERSO: RSI overbought → Force LONG
+                    self._log(f"⚠️ SISTEMA INVERSO - RSI Force: RSI14={rsi_val:.2f} > 80 → Force LONG", level="INFO")
 
             # no-trade zone (desconsiderada se RSI exigir entrada)
             eps_nt = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
@@ -3842,8 +3843,8 @@ class EMAGradientStrategy:
                     can_long = base_long or force_long
 
                     if can_long:
-                        self._log("Confirmação pós-cooldown LONG valida.", level="INFO")
-                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._log("⚠️ SISTEMA INVERSO: Confirmação pós-cooldown LONG → Executando SHORT", level="INFO")
+                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -3857,8 +3858,8 @@ class EMAGradientStrategy:
                     )
                     can_short = base_short or force_short
                     if can_short:
-                        self._log("Confirmação pós-cooldown SHORT valida.", level="INFO")
-                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._log("⚠️ SISTEMA INVERSO: Confirmação pós-cooldown SHORT → Executando LONG", level="INFO")
+                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -3884,14 +3885,14 @@ class EMAGradientStrategy:
             can_long = base_long or force_long
             can_short = base_short or force_short
             if can_long:
-                self._log("Entrada LONG autorizada: critérios atendidos.", level="INFO")
-                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._log("⚠️ SISTEMA INVERSO: Entrada LONG detectada → Executando SHORT", level="INFO")
+                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
             if can_short:
-                self._log("Entrada SHORT autorizada: critérios atendidos.", level="INFO")
-                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._log("⚠️ SISTEMA INVERSO: Entrada SHORT detectada → Executando LONG", level="INFO")
+                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
