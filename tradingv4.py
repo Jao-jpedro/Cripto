@@ -622,8 +622,8 @@ class TradingLearner:
                 """, (
                     f"{event_id}_close",
                     time_module.time(),
-                    features_binned.get("symbol", ""),
-                    features_binned.get("side", ""),
+                    features_binned.get("symbol") or context.get("features_raw", {}).get("symbol", "UNKNOWN"),
+                    features_binned.get("side") or context.get("features_raw", {}).get("side", "UNKNOWN"),
                     close_price,
                     json.dumps(context.get("features_raw", {}), default=str),
                     label
@@ -932,7 +932,8 @@ class TradingLearner:
                         
                         message += f"**{i+1}.** `{symbol}` **{side}** - {stop_rate_profile:.1f}% stops\n"
                         message += f"    • Amostra: {n} trades ({stopped} stops)\n"
-                        message += f"    • P(stop): {p_stop:.1%}\n"
+                        p_stop_str = f"{p_stop:.1%}" if p_stop is not None else "N/A"
+                        message += f"    • P(stop): {p_stop_str}\n"
                         message += f"    • Contexto: {session} | Vol: {vol_regime} | Hora: {hour}\n\n"
                         
                     except Exception:
@@ -3286,14 +3287,15 @@ class EMAGradientStrategy:
             MIN_AMOSTRAS_CONFIAVEL = 5
             
             is_safe = True
-            if n_samples >= MIN_AMOSTRAS_CONFIAVEL and p_stop >= LIMITE_PERIGOSO:
+            if n_samples >= MIN_AMOSTRAS_CONFIAVEL and p_stop is not None and p_stop >= LIMITE_PERIGOSO:
                 is_safe = False
                 self._log(f"🚨 ENTRADA BLOQUEADA pelo learner: P(stop)={p_stop:.1%} >= {LIMITE_PERIGOSO:.0%} (amostras: {n_samples})", level="WARN")
-            elif n_samples >= MIN_AMOSTRAS_CONFIAVEL:
+            elif n_samples >= MIN_AMOSTRAS_CONFIAVEL and p_stop is not None:
                 self._log(f"✅ Entrada aprovada pelo learner: P(stop)={p_stop:.1%} < {LIMITE_PERIGOSO:.0%} (amostras: {n_samples})", level="INFO")
             else:
-                # Poucas amostras, permitir entrada mas logar
-                self._log(f"⚠️ Learner com poucas amostras: P(stop)={p_stop:.1%} (amostras: {n_samples}) - entrada permitida", level="INFO")
+                # Poucas amostras ou p_stop None, permitir entrada mas logar
+                p_stop_str = f"{p_stop:.1%}" if p_stop is not None else "N/A"
+                self._log(f"⚠️ Learner com poucas amostras ou dados insuficientes: P(stop)={p_stop_str} (amostras: {n_samples}) - entrada permitida", level="INFO")
             
             return is_safe, p_stop, n_samples
             
@@ -3312,7 +3314,8 @@ class EMAGradientStrategy:
         # Verificação de segurança pelo sistema de aprendizado
         is_safe, p_stop, n_samples = self._entrada_segura_pelo_learner(side, df_for_log)
         if not is_safe:
-            self._log(f"🚫 Entrada RECUSADA pelo learner: risco alto P(stop)={p_stop:.1%}", level="ERROR")
+            p_stop_str = f"{p_stop:.1%}" if p_stop is not None else "N/A"
+            self._log(f"🚫 Entrada RECUSADA pelo learner: risco alto P(stop)={p_stop_str}", level="ERROR")
             return None, None
 
         try:
