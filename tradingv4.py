@@ -12,7 +12,7 @@ print(f"HYPERLIQUID_PRIVATE_KEY = {private_key_set}", flush=True)
 print("===============================================================", flush=True)
 
 # Constantes para stop loss
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # FUNÇÃO GLOBAL PARA VERIFICAR LIVE_TRADING - CENTRALIZADA
 def _is_live_trading():
