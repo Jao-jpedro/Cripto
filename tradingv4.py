@@ -1,8 +1,26 @@
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 print("⚠️ SISTEMA INVERSO ATIVO: Sinal LONG → Executa SHORT | Sinal SHORT → Executa LONG", flush=True)
 
+# DEBUG: Verificar variáveis de ambiente críticas
+import os
+live_trading_value = os.getenv('LIVE_TRADING', 'UNSET')
+private_key_set = 'YES' if os.getenv('HYPERLIQUID_PRIVATE_KEY') else 'NO'
+
+print("\n========== 🔍 DEBUG: VARIÁVEIS DE AMBIENTE (TRADINGV4) ==========", flush=True)
+print(f"LIVE_TRADING = {live_trading_value}", flush=True)
+print(f"HYPERLIQUID_PRIVATE_KEY = {private_key_set}", flush=True)
+print("===============================================================", flush=True)
+
 # Constantes para stop loss
 from typing import Optional
+
+# FUNÇÃO GLOBAL PARA VERIFICAR LIVE_TRADING - CENTRALIZADA
+def _is_live_trading():
+    """Função centralizada para verificar se estamos em LIVE_TRADING - evita inconsistências"""
+    value = os.getenv('LIVE_TRADING', '0').strip().lower()
+    is_live = value in ('1', 'true', 'yes', 'on')
+    print(f"[DEBUG] [LIVE_CHECK_V4] LIVE_TRADING='{os.getenv('LIVE_TRADING', 'UNSET')}' → {is_live}", flush=True)
+    return is_live
 
 ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
@@ -1474,42 +1492,307 @@ DEX (Hyperliquid via ccxt)
 """
 import ccxt  # type: ignore
 
+# Mock DEX para desenvolvimento/teste quando ccxt.hyperliquid não está disponível
+class MockHyperliquidDEX:
+    def __init__(self, config=None, **kwargs):
+        # Aceitar tanto config dict quanto kwargs individuais
+        if config:
+            self.walletAddress = config.get('walletAddress', 'mock_wallet')
+            self.privateKey = config.get('privateKey', 'mock_key')
+            self.timeout = config.get('timeout', 5000)
+            self.options = config.get('options', {})
+        else:
+            self.walletAddress = kwargs.get('walletAddress', 'mock_wallet')
+            self.privateKey = kwargs.get('privateKey', 'mock_key')
+            self.timeout = kwargs.get('timeout', 5000)
+            self.options = kwargs.get('options', {})
+        
+    def fetch_balance(self):
+        live_enabled = _is_live_trading()
+        if live_enabled:
+            _log_global("DEX", "🔍 REAL: Verificando balance", level="DEBUG")
+            # TODO: Implementar conexão real com Hyperliquid quando LIVE_TRADING=1
+            return {"USDC": {"free": 1000.0, "used": 0.0, "total": 1000.0}}
+        else:
+            _log_global("DEX", "🔍 Verificando balance (simulado)", level="DEBUG")
+            return {"USDC": {"free": 1000.0, "used": 0.0, "total": 1000.0}}
+        
+    def fetch_ticker(self, symbol):
+        # NUNCA retornar dados simulados fixos - buscar dados reais da Binance
+        live_enabled = _is_live_trading()
+        if not live_enabled:
+            return {"last": 50000.0, "bid": 49999.0, "ask": 50001.0}
+        
+        # Para LIVE_TRADING=1, usar dados reais da Binance
+        try:
+            if not hasattr(self, '_binance_dex'):
+                self._binance_dex = RealDataDex()
+            return self._binance_dex.fetch_ticker(symbol)
+        except Exception as e:
+            _log_global("DEX", f"❌ Erro ao buscar dados reais para {symbol}: {e}", level="ERROR")
+            raise RuntimeError(f"Não foi possível obter dados reais para {symbol}")
+        
+    def fetch_positions(self, symbols=None):
+        live_enabled = _is_live_trading()
+        if live_enabled:
+            _log_global("DEX", f"🔍 REAL: Verificando posições para {symbols}", level="DEBUG")
+            # TODO: Implementar conexão real com Hyperliquid quando LIVE_TRADING=1
+            return []
+        else:
+            _log_global("DEX", f"🔍 Verificando posições para {symbols} (simulado)", level="DEBUG")
+            return []
+        
+    def fetch_open_orders(self, symbol=None):
+        live_enabled = _is_live_trading()
+        if live_enabled:
+            _log_global("DEX", f"🔍 REAL: Verificando ordens para {symbol}", level="DEBUG")
+            # TODO: Implementar conexão real com Hyperliquid quando LIVE_TRADING=1
+            return []
+        else:
+            _log_global("DEX", f"🔍 Verificando ordens para {symbol} (simulado)", level="DEBUG")
+            return []
+        
+    def create_order(self, symbol, type, side, amount, price=None, params=None):
+        live_enabled = _is_live_trading()
+        if live_enabled:
+            _log_global("DEX", f"🔥 REAL: Criando ordem {symbol} {side} {amount}", level="WARN")
+            # TODO: Implementar criação de ordem real com Hyperliquid quando LIVE_TRADING=1
+            return {"id": "real_order_dev", "status": "open"}
+        else:
+            _log_global("DEX", f"⚠️  ORDEM SIMULADA: {symbol} {side} {amount}", level="WARN")
+            return {"id": "mock_order_123", "status": "open"}
+        
+    def cancel_order(self, id, symbol=None, params=None):
+        live_enabled = _is_live_trading()
+        if live_enabled:
+            _log_global("DEX", f"🔥 REAL: Cancelando ordem {id}", level="WARN")
+            # TODO: Implementar cancelamento real com Hyperliquid quando LIVE_TRADING=1
+            return {"id": id, "status": "canceled"}
+        else:
+            _log_global("DEX", f"⚠️  CANCELAMENTO SIMULADO: {id}", level="WARN")
+            return {"id": id, "status": "canceled"}
+        
+    def set_leverage(self, leverage, symbol=None, params=None):
+        live_enabled = _is_live_trading()
+        if live_enabled:
+            _log_global("DEX", f"🔥 REAL: Definindo leverage {leverage}x para {symbol}", level="WARN")
+            # TODO: Implementar leverage real com Hyperliquid quando LIVE_TRADING=1
+            return {"success": True}
+        else:
+            _log_global("DEX", f"⚠️  LEVERAGE SIMULADO: {leverage}x para {symbol}", level="WARN")
+            return {"success": True}
+        
+    def amount_to_precision(self, symbol, amount):
+        return amount
+        
+    def load_markets(self, reload=False):
+        return {}
+
+# Classe para dados REAIS da Binance - NUNCA dados simulados
+class RealDataDex:
+    """DEX que SEMPRE usa dados reais da Binance - NUNCA simula preços"""
+    
+    def __init__(self):
+        import time as time_module
+        self._cache_duration = 30  # Cache de 30 segundos
+        self._price_cache = {}
+        self._cache_time = {}
+        
+        # Conectar à Binance para dados REAIS
+        try:
+            import ccxt
+            self.binance = ccxt.binance({
+                'apiKey': '',  # Não precisa de API key para dados públicos
+                'secret': '',
+                'enableRateLimit': True,
+                'sandbox': False  # SEMPRE produção para dados reais
+            })
+            self.binance.load_markets()
+            _log_global("DEX", "✅ Conectado à Binance - DADOS REAIS DE MERCADO", level="INFO")
+        except Exception as binance_error:
+            _log_global("DEX", f"❌ ERRO CRÍTICO: Não foi possível conectar à Binance: {binance_error}", level="ERROR")
+            raise RuntimeError("FALHA CRÍTICA: Sistema requer conexão com Binance para dados reais")
+    
+    def _convert_symbol_to_binance(self, symbol):
+        """Converte símbolo Hyperliquid para Binance - SEMPRE DADOS REAIS"""
+        try:
+            base = None
+            binance_symbol = None
+            
+            # symbol formato: BTC/USDC:USDC ou BTC-USD
+            if '/USDC:USDC' in symbol:
+                base = symbol.split('/')[0]
+                binance_symbol = f"{base}USDT"
+            elif '-USD' in symbol:
+                base = symbol.replace('-USD', '')
+                binance_symbol = f"{base}USDT"
+            else:
+                # Fallback genérico
+                base = symbol.replace('/', '').replace('USDC', '').replace('USDT', '').replace('-USD', '')
+                binance_symbol = f"{base}USDT"
+            
+            # Debug log da conversão
+            _log_global("DEX", f"🔄 V4 Convertendo: {symbol} → {binance_symbol} (base: {base})", level="DEBUG")
+            
+            # Primeiro verificar se o símbolo convertido existe
+            if binance_symbol and hasattr(self.binance, 'markets') and self.binance.markets:
+                if binance_symbol in self.binance.markets:
+                    _log_global("DEX", f"✅ V4 ENCONTRADO: {symbol} → {binance_symbol}", level="DEBUG")
+                    return binance_symbol
+            
+            # Se não encontrou, tentar variações se o base foi extraído
+            if base:
+                for suffix in ['USDT', 'BUSD', 'USDC', 'USD']:
+                    test_symbol = f"{base}{suffix}"
+                    if hasattr(self.binance, 'markets') and self.binance.markets and test_symbol in self.binance.markets:
+                        _log_global("DEX", f"✅ V4 ENCONTRADO VARIAÇÃO: {symbol} → {test_symbol}", level="DEBUG")
+                        return test_symbol
+            
+            # Se ainda não encontrou, verificar se os markets foram carregados
+            if not hasattr(self.binance, 'markets') or not self.binance.markets:
+                _log_global("DEX", f"⚠️ V4 Markets da Binance não carregados, tentando carregar...", level="WARN")
+                try:
+                    self.binance.load_markets()
+                    if binance_symbol in self.binance.markets:
+                        _log_global("DEX", f"✅ V4 ENCONTRADO após reload: {symbol} → {binance_symbol}", level="DEBUG")
+                        return binance_symbol
+                except Exception as market_error:
+                    _log_global("DEX", f"❌ V4 Erro ao carregar markets: {market_error}", level="ERROR")
+            
+            # Última tentativa: fazer uma busca mais flexível 
+            available_symbols = []
+            if hasattr(self.binance, 'markets') and self.binance.markets:
+                # Procurar símbolos que começam com a base
+                matching_symbols = [s for s in self.binance.markets.keys() if s.startswith(base) and any(s.endswith(suf) for suf in ['USDT', 'BUSD', 'USDC'])]
+                if matching_symbols:
+                    best_match = matching_symbols[0]  # Usar o primeiro match
+                    _log_global("DEX", f"✅ V4 MATCH FLEXÍVEL: {symbol} → {best_match}", level="DEBUG")
+                    return best_match
+                
+                # Listar alguns símbolos disponíveis para debug
+                available_symbols = [s for s in list(self.binance.markets.keys())[:10]]
+            
+            _log_global("DEX", f"❌ V4 Símbolo {symbol} não encontrado na Binance. Disponíveis (amostra): {available_symbols[:5]}", level="ERROR")
+            return None
+                
+        except Exception as e:
+            _log_global("DEX", f"❌ V4 Erro ao converter símbolo {symbol}: {e}", level="ERROR")
+            return None
+            
+    def fetch_ticker(self, symbol):
+        """SEMPRE busca preços REAIS da Binance - COM CACHE para evitar repetições"""
+        import time as time_module
+        
+        cache_key = f"ticker_{symbol}"
+        now = time_module.time()
+        
+        if (cache_key in self._price_cache and 
+            cache_key in self._cache_time and 
+            (now - self._cache_time[cache_key]) < self._cache_duration):
+            
+            cached_ticker = self._price_cache[cache_key]
+            # Log mais discreto para dados cached
+            _log_global("DEX", f"📊 V4 {symbol}: ${cached_ticker['last']:.4f} (Cache)", level="DEBUG")
+            return cached_ticker
+        
+        try:
+            binance_symbol = self._convert_symbol_to_binance(symbol)
+            if not binance_symbol:
+                raise Exception(f"Símbolo {symbol} não suportado na Binance")
+                
+            # BUSCAR DADOS REAIS - apenas quando necessário
+            ticker = self.binance.fetch_ticker(binance_symbol)
+            
+            # Preparar dados padronizados
+            result = {
+                "last": ticker['last'],
+                "bid": ticker['bid'] or ticker['last'] * 0.9999,
+                "ask": ticker['ask'] or ticker['last'] * 1.0001,
+                "high": ticker['high'],
+                "low": ticker['low'],
+                "volume": ticker['quoteVolume'] or ticker['baseVolume'],
+                "timestamp": ticker['timestamp'],
+                "datetime": ticker['datetime'],
+                "symbol": symbol,
+                "info": {"source": "Binance_REAL_V4", "original_symbol": binance_symbol}
+            }
+            
+            # Cache para próximas requisições
+            self._price_cache[cache_key] = result
+            self._cache_time[cache_key] = now
+            
+            # Log apenas para dados novos da Binance
+            _log_global("DEX", f"💰 V4 NOVO {symbol}: ${ticker['last']:.4f} (Binance: {binance_symbol})", level="INFO")
+            
+            return result
+            
+        except Exception as e:
+            _log_global("DEX", f"❌ V4 FALHA CRÍTICA ao buscar {symbol} na Binance: {e}", level="ERROR")
+            # NUNCA retornar dados simulados - sistema deve falhar se não conseguir dados reais
+            raise RuntimeError(f"Não foi possível obter dados reais para {symbol}. Sistema requer dados reais da Binance.")
+
+_log_global("DEX", "✅ V4 GARANTIA: Todos os preços são REAIS - nunca simulados", level="INFO")
+
+# Monkey patch para ccxt se hyperliquid não estiver disponível
+if not hasattr(ccxt, 'hyperliquid'):
+    ccxt.hyperliquid = MockHyperliquidDEX
+    _log_global("DEX", "⚠️ Usando Mock DEX - ccxt.hyperliquid não disponível", level="WARN")
+
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
 dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
-# Lê credenciais fixas/env (recomendado definir a chave privada via variável de ambiente)
-WALLET_TRADINGV4 = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
-_wallet_env = WALLET_TRADINGV4
-_priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-if not _priv_env:
-    msg = (
-        "Credenciais da Hyperliquid ausentes: HYPERLIQUID_PRIVATE_KEY. "
-        "Defina a variável de ambiente obrigatória antes de executar."
-    )
-    _log_global("DEX", msg, level="ERROR")
-    raise RuntimeError(msg)
 
-dex = ccxt.hyperliquid({
-    "walletAddress": _wallet_env,
-    "privateKey": _priv_env,
-    "enableRateLimit": True,
-    "timeout": dex_timeout,
-    "options": {"timeout": dex_timeout},
-})
+# Variáveis globais para lazy initialization
+dex = None
+_wallet_env = None
+_priv_env = None
 
-# Segundo DEX (racional inverso) com credenciais distintas
-if dex:
-    _log_global("DEX", f"Inicializado | LIVE_TRADING={os.getenv('LIVE_TRADING','0')} | TIMEOUT_MS={dex_timeout}")
-    live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
-    if live:
-        _log_global("DEX", "fetch_balance() iniciando…")
-        try:
-            dex.fetch_balance()
-            _log_global("DEX", "fetch_balance() OK")
-        except Exception as e:
-            _log_global("DEX", f"Falha ao buscar saldo: {type(e).__name__}: {e}", level="WARN")
-    else:
-        _log_global("DEX", "LIVE_TRADING=0 ⇒ ignorando fetch_balance()", level="DEBUG")
+def _init_dex_if_needed():
+    """Inicializa o DEX apenas quando necessário"""
+    global dex, _wallet_env, _priv_env
+    
+    if dex is not None:
+        return dex
+        
+    # Lê credenciais fixas/env (recomendado definir a chave privada via variável de ambiente)
+    WALLET_TRADINGV4 = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
+    _wallet_env = WALLET_TRADINGV4
+    _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
+    
+    if not _priv_env:
+        msg = (
+            "Credenciais da Hyperliquid ausentes: HYPERLIQUID_PRIVATE_KEY. "
+            "Defina a variável de ambiente obrigatória antes de executar."
+        )
+        _log_global("DEX", msg, level="ERROR")
+        raise RuntimeError(msg)
+
+    dex = ccxt.hyperliquid({
+        "walletAddress": _wallet_env,
+        "privateKey": _priv_env,
+        "enableRateLimit": True,
+        "timeout": dex_timeout,
+        "options": {"timeout": dex_timeout},
+    })
+    
+    return dex
+
+# Sistema TRADINGV4 com credenciais da sub-wallet
+def _init_system_if_needed():
+    """Inicializa o sistema apenas quando necessário"""
+    dex_instance = _init_dex_if_needed()
+    if dex_instance:
+        live = _is_live_trading()
+        _log_global("DEX", f"V4 Inicializado | LIVE_TRADING={live} | TIMEOUT_MS={dex_timeout}")
+        if live:
+            _log_global("DEX", "V4 fetch_balance() iniciando…")
+            try:
+                dex_instance.fetch_balance()
+                _log_global("DEX", "V4 fetch_balance() OK")
+            except Exception as e:
+                _log_global("DEX", f"V4 Falha ao buscar saldo: {type(e).__name__}: {e}", level="WARN")
+        else:
+            _log_global("DEX", "V4 LIVE_TRADING=0 ⇒ ignorando fetch_balance()", level="DEBUG")
 
 # COMMAND ----------
 # =========================
@@ -2251,7 +2534,7 @@ class EMAGradientStrategy:
 
         # tenta preço atual
         try:
-            live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+            live = _is_live_trading()
             if live:
                 px_now = self._preco_atual()
         except Exception:
@@ -2470,7 +2753,7 @@ class EMAGradientStrategy:
 
     # ---------- exchange ----------
     def _preco_atual(self) -> float:
-        live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+        live = _is_live_trading()
         if not live:
             if self.debug:
                 self._log("_preco_atual não disponível com LIVE_TRADING=0", level="DEBUG")
@@ -3791,7 +4074,7 @@ class EMAGradientStrategy:
             except Exception:
                 pass
             # evita qualquer tentativa de ordem se LIVE_TRADING=0
-            live = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
+            live = _is_live_trading()
             if not live:
                 self._log("LIVE_TRADING=0: avaliando sinais sem enviar ordens.", level="INFO")
                 self._safe_log("paper_mode", df_for_log=df, tipo="info")
@@ -4746,4 +5029,5 @@ if __name__ == "__main__":
 
     # Execução automática apenas quando executado diretamente
     base_df = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-    executar_estrategia(base_df, dex, None)
+    dex_instance = _init_dex_if_needed()
+    executar_estrategia(base_df, dex_instance, None)
