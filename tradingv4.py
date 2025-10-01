@@ -244,7 +244,7 @@ class TradingLearner:
         return datetime.now(self.brt_tz)
         
     def extract_features_raw(self, symbol: str, side: str, df: pd.DataFrame, price: float) -> dict:
-        """Extrai features brutas no momento da entrada"""
+        """Extrai features brutas COMPLETAS no momento da entrada - TODOS os indicadores"""
         if df.empty or len(df) < 252:
             return {}
             
@@ -252,109 +252,281 @@ class TradingLearner:
             current_time = self.get_current_brt_time()
             last_row = df.iloc[-1]
             
-            # (A) Preço & Volatilidade
+            # =================== SEÇÃO A: PREÇO & VOLATILIDADE ===================
             atr_series = df.get('atr', pd.Series())
             atr_pct = (atr_series.iloc[-1] / price * 100) if not atr_series.empty else None
             
             atr_252_percentile = None
+            atr_50_percentile = None
+            atr_20_percentile = None
             if not atr_series.empty and len(atr_series) >= 252:
                 atr_252_percentile = (atr_series.iloc[-252:] <= atr_series.iloc[-1]).mean() * 100
+            if not atr_series.empty and len(atr_series) >= 50:
+                atr_50_percentile = (atr_series.iloc[-50:] <= atr_series.iloc[-1]).mean() * 100
+            if not atr_series.empty and len(atr_series) >= 20:
+                atr_20_percentile = (atr_series.iloc[-20:] <= atr_series.iloc[-1]).mean() * 100
                 
-            # (B) Tendência & Momentum  
+            # Volatilidade histórica (diferentes períodos)
+            returns = df['close'].pct_change().fillna(0)
+            vol_hist_20 = returns.rolling(20).std() * 100 if len(returns) >= 20 else None
+            vol_hist_50 = returns.rolling(50).std() * 100 if len(returns) >= 50 else None
+            vol_hist_100 = returns.rolling(100).std() * 100 if len(returns) >= 100 else None
+                
+            # =================== SEÇÃO B: TENDÊNCIA & MOMENTUM ===================
             ema7 = df.get('ema7', pd.Series())
             ema21 = df.get('ema21', pd.Series())
+            ema50 = df.get('ema50', pd.Series()) if 'ema50' in df.columns else df['close'].ewm(span=50).mean()
+            ema100 = df.get('ema100', pd.Series()) if 'ema100' in df.columns else df['close'].ewm(span=100).mean()
+            ema200 = df.get('ema200', pd.Series()) if 'ema200' in df.columns else df['close'].ewm(span=200).mean()
             
+            # Slopes de múltiplas EMAs
             slope_ema7 = None
             slope_ema21 = None
+            slope_ema50 = None
+            slope_ema100 = None
+            slope_ema200 = None
+            
             if not ema7.empty and len(ema7) >= 7:
                 slope_ema7 = (ema7.iloc[-1] - ema7.iloc[-7]) / ema7.iloc[-7] * 100
             if not ema21.empty and len(ema21) >= 21:
                 slope_ema21 = (ema21.iloc[-1] - ema21.iloc[-21]) / ema21.iloc[-21] * 100
+            if not ema50.empty and len(ema50) >= 50:
+                slope_ema50 = (ema50.iloc[-1] - ema50.iloc[-50]) / ema50.iloc[-50] * 100
+            if not ema100.empty and len(ema100) >= 100:
+                slope_ema100 = (ema100.iloc[-1] - ema100.iloc[-100]) / ema100.iloc[-100] * 100
+            if not ema200.empty and len(ema200) >= 200:
+                slope_ema200 = (ema200.iloc[-1] - ema200.iloc[-200]) / ema200.iloc[-200] * 100
                 
-            rsi = df.get('rsi', pd.Series()).iloc[-1] if 'rsi' in df.columns else None
+            # Distâncias das EMAs (em %)
+            dist_ema7_pct = ((price - ema7.iloc[-1]) / ema7.iloc[-1] * 100) if not ema7.empty else None
+            dist_ema21_pct = ((price - ema21.iloc[-1]) / ema21.iloc[-1] * 100) if not ema21.empty else None
+            dist_ema50_pct = ((price - ema50.iloc[-1]) / ema50.iloc[-1] * 100) if not ema50.empty else None
+            dist_ema100_pct = ((price - ema100.iloc[-1]) / ema100.iloc[-1] * 100) if not ema100.empty else None
+            dist_ema200_pct = ((price - ema200.iloc[-1]) / ema200.iloc[-1] * 100) if not ema200.empty else None
             
-            # (C) Volume & Liquidez
+            # RSI e outros oscilladores
+            rsi = df.get('rsi', pd.Series()).iloc[-1] if 'rsi' in df.columns else None
+            rsi_14_slope = None
+            if 'rsi' in df.columns and len(df['rsi']) >= 14:
+                rsi_14_slope = (df['rsi'].iloc[-1] - df['rsi'].iloc[-14])
+                
+            # MACD se disponível
+            macd = df.get('macd', pd.Series()).iloc[-1] if 'macd' in df.columns else None
+            macd_signal = df.get('macd_signal', pd.Series()).iloc[-1] if 'macd_signal' in df.columns else None
+            macd_histogram = df.get('macd_histogram', pd.Series()).iloc[-1] if 'macd_histogram' in df.columns else None
+                
+            # =================== SEÇÃO C: VOLUME & LIQUIDEZ ===================
             volume = df.get('volume', pd.Series())
-            vol_ratio = None
+            vol_ratio_5 = None
+            vol_ratio_20 = None
+            vol_ratio_50 = None
             vol_percentile_252 = None
+            vol_percentile_50 = None
+            vol_percentile_20 = None
             
             if not volume.empty and len(volume) >= 2:
-                vol_ma_20 = volume.rolling(20).mean()
-                if not vol_ma_20.empty:
-                    vol_ratio = volume.iloc[-1] / vol_ma_20.iloc[-1]
+                # Múltiplas médias de volume
+                if len(volume) >= 5:
+                    vol_ma_5 = volume.rolling(5).mean()
+                    if not vol_ma_5.empty:
+                        vol_ratio_5 = volume.iloc[-1] / vol_ma_5.iloc[-1]
+                        
+                if len(volume) >= 20:
+                    vol_ma_20 = volume.rolling(20).mean()
+                    if not vol_ma_20.empty:
+                        vol_ratio_20 = volume.iloc[-1] / vol_ma_20.iloc[-1]
+                        
+                if len(volume) >= 50:
+                    vol_ma_50 = volume.rolling(50).mean()
+                    if not vol_ma_50.empty:
+                        vol_ratio_50 = volume.iloc[-1] / vol_ma_50.iloc[-1]
                     
+                # Percentis de volume
                 if len(volume) >= 252:
                     vol_percentile_252 = (volume.iloc[-252:] <= volume.iloc[-1]).mean() * 100
+                if len(volume) >= 50:
+                    vol_percentile_50 = (volume.iloc[-50:] <= volume.iloc[-1]).mean() * 100
+                if len(volume) >= 20:
+                    vol_percentile_20 = (volume.iloc[-20:] <= volume.iloc[-1]).mean() * 100
                     
-            # (D) Candle / Microestrutura
+            # =================== SEÇÃO D: CANDLE & MICROESTRUTURA ===================
             candle_body_pct = None
-            if 'open' in df.columns and 'close' in df.columns and 'high' in df.columns and 'low' in df.columns:
+            candle_upper_shadow_pct = None
+            candle_lower_shadow_pct = None
+            candle_range_atr = None
+            
+            if all(col in df.columns for col in ['open', 'close', 'high', 'low']):
                 high_low = last_row['high'] - last_row['low']
                 body = abs(last_row['close'] - last_row['open'])
+                upper_shadow = last_row['high'] - max(last_row['open'], last_row['close'])
+                lower_shadow = min(last_row['open'], last_row['close']) - last_row['low']
+                
                 if high_low > 0:
                     candle_body_pct = (body / high_low) * 100
+                    candle_upper_shadow_pct = (upper_shadow / high_low) * 100
+                    candle_lower_shadow_pct = (lower_shadow / high_low) * 100
                     
-            # (E) Níveis & Estrutura
-            high_20 = df['high'].rolling(20).max()
-            low_20 = df['low'].rolling(20).min()
+                if not atr_series.empty:
+                    current_atr = atr_series.iloc[-1]
+                    candle_range_atr = high_low / current_atr if current_atr > 0 else None
+                    
+            # Padrões de velas recentes (última vs penúltima)
+            bullish_candle = last_row['close'] > last_row['open'] if all(col in df.columns for col in ['open', 'close']) else None
+            prev_bullish = None
+            candle_size_ratio = None
             
+            if len(df) >= 2 and all(col in df.columns for col in ['open', 'close', 'high', 'low']):
+                prev_row = df.iloc[-2]
+                prev_bullish = prev_row['close'] > prev_row['open']
+                
+                current_range = last_row['high'] - last_row['low']
+                prev_range = prev_row['high'] - prev_row['low']
+                candle_size_ratio = current_range / prev_range if prev_range > 0 else None
+                    
+            # =================== SEÇÃO E: NÍVEIS & ESTRUTURA ===================
+            # Múltiplos períodos de high/low
+            high_10 = df['high'].rolling(10).max() if len(df) >= 10 else None
+            low_10 = df['low'].rolling(10).min() if len(df) >= 10 else None
+            high_20 = df['high'].rolling(20).max() if len(df) >= 20 else None
+            low_20 = df['low'].rolling(20).min() if len(df) >= 20 else None
+            high_50 = df['high'].rolling(50).max() if len(df) >= 50 else None
+            low_50 = df['low'].rolling(50).min() if len(df) >= 50 else None
+            high_100 = df['high'].rolling(100).max() if len(df) >= 100 else None
+            low_100 = df['low'].rolling(100).min() if len(df) >= 100 else None
+            
+            # Distâncias em ATRs
+            dist_hhv10_atr = None
+            dist_llv10_atr = None
             dist_hhv20_atr = None
             dist_llv20_atr = None
+            dist_hhv50_atr = None
+            dist_llv50_atr = None
+            dist_hhv100_atr = None
+            dist_llv100_atr = None
             
-            if not high_20.empty and not low_20.empty and atr_pct is not None:
-                current_atr = atr_series.iloc[-1] if not atr_series.empty else price * 0.02
-                dist_hhv20_atr = (high_20.iloc[-1] - price) / current_atr
-                dist_llv20_atr = (price - low_20.iloc[-1]) / current_atr
-                
-            # (F) Regime & Calendário
+            if not atr_series.empty:
+                current_atr = atr_series.iloc[-1]
+                if current_atr > 0:
+                    if high_10 is not None and not high_10.empty:
+                        dist_hhv10_atr = (high_10.iloc[-1] - price) / current_atr
+                    if low_10 is not None and not low_10.empty:
+                        dist_llv10_atr = (price - low_10.iloc[-1]) / current_atr
+                    if high_20 is not None and not high_20.empty:
+                        dist_hhv20_atr = (high_20.iloc[-1] - price) / current_atr
+                    if low_20 is not None and not low_20.empty:
+                        dist_llv20_atr = (price - low_20.iloc[-1]) / current_atr
+                    if high_50 is not None and not high_50.empty:
+                        dist_hhv50_atr = (high_50.iloc[-1] - price) / current_atr
+                    if low_50 is not None and not low_50.empty:
+                        dist_llv50_atr = (price - low_50.iloc[-1]) / current_atr
+                    if high_100 is not None and not high_100.empty:
+                        dist_hhv100_atr = (high_100.iloc[-1] - price) / current_atr
+                    if low_100 is not None and not low_100.empty:
+                        dist_llv100_atr = (price - low_100.iloc[-1]) / current_atr
+                        
+            # =================== SEÇÃO F: REGIME & CALENDÁRIO ===================
             hour_brt = current_time.hour
-            dow = current_time.weekday()  # 0=Monday, 6=Sunday
+            day_of_week = current_time.weekday()  # 0=segunda, 6=domingo
+            day_of_month = current_time.day
+            month = current_time.month
             
             session_flag = self._determine_session(hour_brt)
             vol_regime = self._determine_vol_regime(atr_pct) if atr_pct else "UNKNOWN"
             
-            # (G) Risco & Execução 
+            # =================== SEÇÃO G: MOMENTUM MULTI-TIMEFRAME ===================
+            # Momentum em diferentes períodos
+            mom_3 = ((price - df['close'].iloc[-4]) / df['close'].iloc[-4] * 100) if len(df) >= 4 else None
+            mom_5 = ((price - df['close'].iloc[-6]) / df['close'].iloc[-6] * 100) if len(df) >= 6 else None
+            mom_10 = ((price - df['close'].iloc[-11]) / df['close'].iloc[-11] * 100) if len(df) >= 11 else None
+            mom_20 = ((price - df['close'].iloc[-21]) / df['close'].iloc[-21] * 100) if len(df) >= 21 else None
+            mom_50 = ((price - df['close'].iloc[-51]) / df['close'].iloc[-51] * 100) if len(df) >= 51 else None
+            
+            # Risco & Execução 
             leverage_eff = float(os.getenv("LEVERAGE", "5"))
             
-            # Montar features_raw
-            features_raw = {
-                # Metadata
-                "symbol": symbol,
-                "side": side,
-                "price": price,
-                "timestamp": current_time.timestamp(),
+            # =================== CONSOLIDAR TODAS AS FEATURES ===================
+            features = {
+                'symbol': symbol,
+                'side': side,
+                'entry_price': price,
+                'timestamp': current_time.isoformat(),
                 
-                # (A) Preço & Volatilidade
-                "atr_pct": atr_pct,
-                "atr_percentile_252": atr_252_percentile,
+                # A) Volatilidade
+                'atr_pct': atr_pct,
+                'atr_252_percentile': atr_252_percentile,
+                'atr_50_percentile': atr_50_percentile,
+                'atr_20_percentile': atr_20_percentile,
+                'vol_hist_20': vol_hist_20,
+                'vol_hist_50': vol_hist_50,
+                'vol_hist_100': vol_hist_100,
                 
-                # (B) Tendência & Momentum
-                "slope_ema7": slope_ema7,
-                "slope_ema21": slope_ema21,
-                "rsi": rsi,
+                # B) Tendência & Momentum
+                'slope_ema7': slope_ema7,
+                'slope_ema21': slope_ema21,
+                'slope_ema50': slope_ema50,
+                'slope_ema100': slope_ema100,
+                'slope_ema200': slope_ema200,
+                'dist_ema7_pct': dist_ema7_pct,
+                'dist_ema21_pct': dist_ema21_pct,
+                'dist_ema50_pct': dist_ema50_pct,
+                'dist_ema100_pct': dist_ema100_pct,
+                'dist_ema200_pct': dist_ema200_pct,
+                'rsi': rsi,
+                'rsi_14_slope': rsi_14_slope,
+                'macd': macd,
+                'macd_signal': macd_signal,
+                'macd_histogram': macd_histogram,
                 
-                # (C) Volume & Liquidez
-                "vol_ratio": vol_ratio,
-                "vol_percentile_252": vol_percentile_252,
+                # C) Volume
+                'vol_ratio_5': vol_ratio_5,
+                'vol_ratio_20': vol_ratio_20,
+                'vol_ratio_50': vol_ratio_50,
+                'vol_percentile_252': vol_percentile_252,
+                'vol_percentile_50': vol_percentile_50,
+                'vol_percentile_20': vol_percentile_20,
                 
-                # (D) Candle
-                "candle_body_pct": candle_body_pct,
+                # D) Microestrutura
+                'candle_body_pct': candle_body_pct,
+                'candle_upper_shadow_pct': candle_upper_shadow_pct,
+                'candle_lower_shadow_pct': candle_lower_shadow_pct,
+                'candle_range_atr': candle_range_atr,
+                'bullish_candle': bullish_candle,
+                'prev_bullish': prev_bullish,
+                'candle_size_ratio': candle_size_ratio,
                 
-                # (E) Níveis
-                "dist_hhv20_atr": dist_hhv20_atr,
-                "dist_llv20_atr": dist_llv20_atr,
+                # E) Níveis
+                'dist_hhv10_atr': dist_hhv10_atr,
+                'dist_llv10_atr': dist_llv10_atr,
+                'dist_hhv20_atr': dist_hhv20_atr,
+                'dist_llv20_atr': dist_llv20_atr,
+                'dist_hhv50_atr': dist_hhv50_atr,
+                'dist_llv50_atr': dist_llv50_atr,
+                'dist_hhv100_atr': dist_hhv100_atr,
+                'dist_llv100_atr': dist_llv100_atr,
                 
-                # (F) Regime
-                "hour_brt": hour_brt,
-                "dow": dow,
-                "session_flag": session_flag,
-                "vol_regime": vol_regime,
+                # F) Regime temporal
+                'hour_brt': hour_brt,
+                'day_of_week': day_of_week,
+                'day_of_month': day_of_month,
+                'month': month,
+                'session_flag': session_flag,
+                'vol_regime': vol_regime,
                 
-                # (G) Risco
-                "leverage_eff": leverage_eff
+                # G) Momentum multi-timeframe
+                'mom_3': mom_3,
+                'mom_5': mom_5,
+                'mom_10': mom_10,
+                'mom_20': mom_20,
+                'mom_50': mom_50,
+                
+                # H) Risco
+                'leverage_eff': leverage_eff
             }
             
-            return features_raw
+            # Remover valores None para evitar problemas
+            features = {k: v for k, v in features.items() if v is not None}
+            
+            return features
             
         except Exception as e:
             _log_global("LEARNER", f"Error extracting features: {e}", "WARN")
@@ -932,8 +1104,7 @@ class TradingLearner:
                         
                         message += f"**{i+1}.** `{symbol}` **{side}** - {stop_rate_profile:.1f}% stops\n"
                         message += f"    • Amostra: {n} trades ({stopped} stops)\n"
-                        p_stop_str = f"{p_stop:.1%}" if p_stop is not None else "N/A"
-                        message += f"    • P(stop): {p_stop_str}\n"
+                        message += f"    • P(stop): {p_stop:.1%}\n"
                         message += f"    • Contexto: {session} | Vol: {vol_regime} | Hora: {hour}\n\n"
                         
                     except Exception:
@@ -964,6 +1135,167 @@ class TradingLearner:
             
         except Exception as e:
             return f"❌ **Erro ao gerar relatório**: {str(e)[:100]}"
+    
+    # ========================================
+    # SISTEMA DE CLASSIFICAÇÃO DE PADRÕES
+    # ========================================
+    
+    # Classificações baseadas em taxa de vitória
+    PATTERN_CLASSIFICATIONS = {
+        1: {
+            "name": "MUITO BOM",
+            "emoji": "🟢",
+            "min_win_rate": 0.80,  # 80%+ vitórias
+            "description": "Padrão excelente com alta taxa de vitória"
+        },
+        2: {
+            "name": "BOM", 
+            "emoji": "🔵",
+            "min_win_rate": 0.70,  # 70-79% vitórias
+            "description": "Padrão bom com boa taxa de vitória"
+        },
+        3: {
+            "name": "LEGAL",
+            "emoji": "🟡", 
+            "min_win_rate": 0.60,  # 60-69% vitórias
+            "description": "Padrão aceitável com taxa de vitória razoável"
+        },
+        4: {
+            "name": "OK",
+            "emoji": "🟠",
+            "min_win_rate": 0.50,  # 50-59% vitórias
+            "description": "Padrão neutro com taxa de vitória marginal"
+        },
+        5: {
+            "name": "RUIM",
+            "emoji": "🔴",
+            "min_win_rate": 0.40,  # 40-49% vitórias
+            "description": "Padrão problemático com baixa taxa de vitória"
+        },
+        6: {
+            "name": "MUITO RUIM",
+            "emoji": "🟣",
+            "min_win_rate": 0.0,   # <40% vitórias
+            "description": "Padrão péssimo com taxa de vitória muito baixa"
+        }
+    }
+    
+    def classify_pattern_quality(self, win_rate: float, n_samples: int) -> Optional[Dict[str, Any]]:
+        """
+        Classifica a qualidade de um padrão baseado na taxa de vitória.
+        
+        Args:
+            win_rate: Taxa de vitória (0.0 - 1.0)
+            n_samples: Número de amostras
+            
+        Returns:
+            Dict com informações da classificação ou None se insuficiente
+        """
+        try:
+            # Requer mínimo de 5 entradas para classificar
+            MIN_SAMPLES_FOR_CLASSIFICATION = 5
+            
+            if n_samples < MIN_SAMPLES_FOR_CLASSIFICATION:
+                return {
+                    "is_classified": False,
+                    "reason": f"Insuficientes amostras ({n_samples} < {MIN_SAMPLES_FOR_CLASSIFICATION})",
+                    "n_samples": n_samples
+                }
+            
+            # Encontrar classificação apropriada
+            for level in sorted(self.PATTERN_CLASSIFICATIONS.keys()):
+                classification = self.PATTERN_CLASSIFICATIONS[level]
+                if win_rate >= classification["min_win_rate"]:
+                    return {
+                        "is_classified": True,
+                        "level": level,
+                        "name": classification["name"],
+                        "emoji": classification["emoji"],
+                        "description": classification["description"],
+                        "win_rate": win_rate,
+                        "n_samples": n_samples,
+                        "min_win_rate": classification["min_win_rate"]
+                    }
+            
+            # Se chegou aqui, é MUITO RUIM (< 40%)
+            worst_classification = self.PATTERN_CLASSIFICATIONS[6]
+            return {
+                "is_classified": True,
+                "level": 6,
+                "name": worst_classification["name"],
+                "emoji": worst_classification["emoji"],
+                "description": worst_classification["description"],
+                "win_rate": win_rate,
+                "n_samples": n_samples,
+                "min_win_rate": worst_classification["min_win_rate"]
+            }
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Erro na classificação de padrão: {e}", "ERROR")
+            return {
+                "is_classified": False,
+                "reason": f"Erro: {str(e)}",
+                "n_samples": n_samples
+            }
+    
+    def get_pattern_quality_summary(self) -> Dict[str, Any]:
+        """
+        Retorna estatísticas gerais dos padrões classificados.
+        
+        Returns:
+            Dict com estatísticas do banco de dados
+        """
+        try:
+            def _get_summary():
+                cursor = self.conn.cursor()
+                
+                # Total de entradas
+                cursor.execute("SELECT COUNT(*) FROM stats")
+                total_entries = cursor.fetchone()[0]
+                
+                # Padrões únicos
+                cursor.execute("SELECT COUNT(DISTINCT key) FROM stats")
+                unique_patterns = cursor.fetchone()[0]
+                
+                # Padrões com pelo menos 5 amostras (classificáveis)
+                cursor.execute("SELECT COUNT(*) FROM stats WHERE n >= 5")
+                classified_patterns = cursor.fetchone()[0]
+                
+                # Distribuição por qualidade
+                cursor.execute("""
+                    SELECT key, n, stopped 
+                    FROM stats 
+                    WHERE n >= 5
+                """)
+                
+                quality_distribution = {}
+                for key, n, stopped in cursor.fetchall():
+                    win_rate = (n - stopped) / n if n > 0 else 0.0
+                    classification = self.classify_pattern_quality(win_rate, n)
+                    
+                    if classification and classification["is_classified"]:
+                        quality_name = classification["name"]
+                        quality_distribution[quality_name] = quality_distribution.get(quality_name, 0) + 1
+                
+                return {
+                    "total_entries": total_entries,
+                    "unique_patterns": unique_patterns,
+                    "classified_patterns": classified_patterns,
+                    "quality_distribution": quality_distribution,
+                    "classification_levels": len(self.PATTERN_CLASSIFICATIONS)
+                }
+                
+            return self._retry_db_operation(_get_summary)
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Erro ao obter resumo de qualidade: {e}", "ERROR")
+            return {
+                "total_entries": 0,
+                "unique_patterns": 0,
+                "classified_patterns": 0,
+                "quality_distribution": {},
+                "error": str(e)
+            }
 
 # Instância global do learner
 _global_learner: Optional[TradingLearner] = None
@@ -1323,7 +1655,7 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
              debug: bool = True,
              target_candles: int = None) -> pd.DataFrame:
     # Sempre prioriza um número alvo de candles (inclui o atual não fechado)
-    n_target = 20
+    n_target = 260  # Padrão aumentado para 260 candles para melhores indicadores
     if target_candles is not None:
         n_target = max(1, int(target_candles))
     else:
@@ -3267,40 +3599,87 @@ class EMAGradientStrategy:
     # ---------- ordens ----------
     def _entrada_segura_pelo_learner(self, side: str, df_for_log: pd.DataFrame) -> Tuple[bool, float, int]:
         """
-        Verifica se a entrada é segura baseada no sistema de aprendizado.
+        Verifica a qualidade do padrão de entrada usando o novo sistema de classificação.
         Retorna: (é_segura, probabilidade_stop, num_amostras)
-        Considera perigosa entradas com P(stop) >= 85%
+        
+        *** NOVO SISTEMA DE CLASSIFICAÇÃO ***
+        - MUITO BOM (🟢): ≥80% wins - Sinal muito positivo
+        - BOM (🔵): ≥70% wins - Sinal positivo  
+        - LEGAL (🟡): ≥60% wins - Sinal neutro positivo
+        - OK (🟠): ≥50% wins - Sinal neutro
+        - RUIM (🔴): ≥40% wins - Alerta moderado
+        - MUITO RUIM (🟣): <40% wins - Alerta severo
         """
         try:
             learner = get_learner()
             
-            # Extrair features da situação atual (similar ao que será feito no record_entry)
+            # Extrair features da situação atual
             price_now = self._preco_atual()
             features_raw = learner.extract_features_raw(self.symbol, side, df_for_log, price_now)
             features_binned = learner.bin_features(features_raw)
             
-            # Calcular P(stop) com backoff
-            p_stop, n_samples = learner.get_stop_probability_with_backoff(features_binned)
+            # Obter classificação do padrão e probabilidade de stop
+            classification, n_samples = learner.get_pattern_classification_with_backoff(features_binned)
+            p_stop, _ = learner.get_stop_probability_with_backoff(features_binned)
             
-            # Limiar de segurança: 85%
-            LIMITE_PERIGOSO = 0.85
-            MIN_AMOSTRAS_CONFIAVEL = 5
-            
+            # SEMPRE permitir entrada - apenas sinalizar no Discord
             is_safe = True
-            if n_samples >= MIN_AMOSTRAS_CONFIAVEL and p_stop is not None and p_stop >= LIMITE_PERIGOSO:
-                is_safe = False
-                self._log(f"🚨 ENTRADA BLOQUEADA pelo learner: P(stop)={p_stop:.1%} >= {LIMITE_PERIGOSO:.0%} (amostras: {n_samples})", level="WARN")
-            elif n_samples >= MIN_AMOSTRAS_CONFIAVEL and p_stop is not None:
-                self._log(f"✅ Entrada aprovada pelo learner: P(stop)={p_stop:.1%} < {LIMITE_PERIGOSO:.0%} (amostras: {n_samples})", level="INFO")
-            else:
-                # Poucas amostras ou p_stop None, permitir entrada mas logar
-                p_stop_str = f"{p_stop:.1%}" if p_stop is not None else "N/A"
-                self._log(f"⚠️ Learner com poucas amostras ou dados insuficientes: P(stop)={p_stop_str} (amostras: {n_samples}) - entrada permitida", level="INFO")
             
-            return is_safe, p_stop, n_samples
+            if classification and classification["is_classified"]:
+                level = classification["level"]
+                name = classification["name"]
+                emoji = classification["emoji"]
+                win_rate = classification["win_rate"]
+                
+                if level == 1:  # MUITO BOM
+                    self._log(f"{emoji} PADRÃO EXCELENTE: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ENTRADA MUITO RECOMENDADA", level="INFO")
+                elif level == 2:  # BOM
+                    self._log(f"{emoji} PADRÃO BOM: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ENTRADA RECOMENDADA", level="INFO")
+                elif level == 3:  # LEGAL
+                    self._log(f"{emoji} PADRÃO ACEITÁVEL: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ENTRADA OK", level="INFO")
+                elif level == 4:  # OK
+                    self._log(f"{emoji} PADRÃO NEUTRO: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ENTRADA NEUTRA", level="INFO")
+                elif level == 5:  # RUIM
+                    self._log(f"{emoji} PADRÃO PROBLEMÁTICO: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ALERTA MODERADO", level="WARN")
+                    
+                    # Enviar alerta moderado no Discord
+                    try:
+                        self._notify_trade(
+                            kind="pattern_alert", 
+                            side=side, 
+                            price=price_now, 
+                            amount=0,
+                            note=f"🔴 PADRÃO RUIM: {win_rate:.1%} vitórias ({n_samples} amostras)",
+                            include_hl=False
+                        )
+                    except Exception:
+                        pass
+                        
+                elif level == 6:  # MUITO RUIM
+                    self._log(f"{emoji} PADRÃO PÉSSIMO: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ALERTA SEVERO", level="ERROR")
+                    
+                    # Enviar alerta severo no Discord
+                    try:
+                        self._notify_trade(
+                            kind="pattern_danger", 
+                            side=side, 
+                            price=price_now, 
+                            amount=0,
+                            note=f"🟣 PADRÃO MUITO RUIM: {win_rate:.1%} vitórias ({n_samples} amostras) - CUIDADO!",
+                            include_hl=False
+                        )
+                    except Exception:
+                        pass
+                        
+            else:
+                # Padrão não classificado (menos de 5 entradas)
+                reason = classification["reason"] if classification else "Padrão desconhecido"
+                self._log(f"⚪ PADRÃO NÃO CLASSIFICADO: {reason} | Amostras: {n_samples} - ENTRADA PERMITIDA", level="INFO")
+            
+            return is_safe, p_stop or 0.0, n_samples
             
         except Exception as e:
-            self._log(f"Erro verificando segurança pelo learner: {e} - permitindo entrada", level="WARN")
+            self._log(f"Erro verificando qualidade do padrão: {e} - permitindo entrada", level="WARN")
             return True, 0.0, 0
 
     def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
@@ -3311,12 +3690,9 @@ class EMAGradientStrategy:
         if not self._anti_spam_ok("open"):
             self._log("Entrada bloqueada pelo anti-spam.", level="DEBUG"); return None, None
         
-        # Verificação de segurança pelo sistema de aprendizado
+        # Verificação de segurança pelo sistema de aprendizado (apenas alerta)
         is_safe, p_stop, n_samples = self._entrada_segura_pelo_learner(side, df_for_log)
-        if not is_safe:
-            p_stop_str = f"{p_stop:.1%}" if p_stop is not None else "N/A"
-            self._log(f"🚫 Entrada RECUSADA pelo learner: risco alto P(stop)={p_stop_str}", level="ERROR")
-            return None, None
+        # Nota: is_safe sempre é True agora - learner apenas sinaliza, não bloqueia
 
         try:
             lev_int = int(self.cfg.LEVERAGE)
@@ -4319,6 +4695,34 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
     # Volume média
     out["vol_ma"] = out["volume"].rolling(p.vol_ma_period, min_periods=1).mean()
 
+    # RSI (Relative Strength Index)
+    def calculate_rsi(prices, period=14):
+        """Calcula RSI usando pandas"""
+        delta = prices.diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        
+        avg_gain = gain.rolling(window=period, min_periods=1).mean()
+        avg_loss = loss.rolling(window=period, min_periods=1).mean()
+        
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+    
+    out["rsi"] = calculate_rsi(close, period=14)
+    
+    # MACD (Moving Average Convergence Divergence)
+    def calculate_macd(prices, fast=12, slow=26, signal=9):
+        """Calcula MACD usando pandas"""
+        ema_fast = prices.ewm(span=fast).mean()
+        ema_slow = prices.ewm(span=slow).mean()
+        macd = ema_fast - ema_slow
+        macd_signal = macd.ewm(span=signal).mean()
+        macd_histogram = macd - macd_signal
+        return macd, macd_signal, macd_histogram
+    
+    out["macd"], out["macd_signal"], out["macd_histogram"] = calculate_macd(close)
+
     # Gradiente EMA curto (slope % por barra via regressão sobre janela)
     def slope_pct(series: pd.Series, win: int) -> float:
         if series.notna().sum() < 2:
@@ -4338,42 +4742,249 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
 
 
 def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
+    """
+    Condições de entrada LONG com filtros mais restritivos para maior qualidade.
+    
+    FILTROS IMPLEMENTADOS:
+    1. EMA + Gradiente mais forte (0.05% mínimo)
+    2. ATR mais conservador (0.25% - 2.0%)
+    3. Rompimento maior (0.5 ATR vs 0.25)
+    4. Volume mais exigente (1.5x vs 1.0x)
+    5. RSI na zona ideal (35-65)
+    6. MACD confirmação
+    7. Confluência mínima (70% dos critérios)
+    """
     reasons = []
     conds = []
-    # EMA short > EMA long
-    c1 = row.ema_short > row.ema_long
-    conds.append(c1);  reasons.append("EMA7>EMA21")
-    # Gradiente positivo (consistência será checada fora por janelas)
-    c2 = row.ema_short_grad_pct > 0
-    conds.append(c2);  reasons.append("grad>0")
-    # ATR% saudável
-    c3 = (row.atr_pct >= p.atr_pct_min) and (row.atr_pct <= p.atr_pct_max)
-    conds.append(c3);  reasons.append("ATR% saudável")
-    # Rompimento
-    c4 = row.valor_fechamento > (row.ema_short + p.breakout_k_atr * row.atr)
-    conds.append(c4);  reasons.append("close>EMA7+k*ATR")
-    # Volume
-    c5 = row.volume > row.vol_ma
-    conds.append(c5);  reasons.append("volume>média")
-    ok = all(conds)
-    return ok, "; ".join([r for r, c in zip(reasons, conds) if c]) if ok else "; ".join([r for r, c in zip(reasons, conds) if not c])
+    confluence_score = 0
+    max_score = 8  # Total de critérios avaliados
+    
+    # CRITÉRIO 1: EMA básico mais gradiente forte (OBRIGATÓRIO)
+    c1_ema = row.ema_short > row.ema_long
+    c1_grad = row.ema_short_grad_pct > 0.05  # Gradiente mais forte: 0.05% vs 0%
+    c1 = c1_ema and c1_grad
+    conds.append(c1)
+    if c1:
+        confluence_score += 1
+        reasons.append("✅ EMA7>EMA21+grad>0.05%")
+    else:
+        reasons.append("❌ EMA/gradiente fraco")
+    
+    # CRITÉRIO 2: ATR mais conservador
+    c2 = (row.atr_pct >= 0.25) and (row.atr_pct <= 2.0)  # 0.25%-2.0% vs 0.15%-2.5%
+    conds.append(c2)
+    if c2:
+        confluence_score += 1
+        reasons.append("✅ ATR saudável")
+    else:
+        reasons.append("❌ ATR inadequado")
+    
+    # CRITÉRIO 3: Rompimento mais significativo
+    c3 = row.valor_fechamento > (row.ema_short + 0.5 * row.atr)  # 0.5 ATR vs 0.25
+    conds.append(c3)
+    if c3:
+        confluence_score += 1
+        reasons.append("✅ Rompimento forte")
+    else:
+        reasons.append("❌ Rompimento fraco")
+    
+    # CRITÉRIO 4: Volume mais exigente
+    volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
+    c4 = volume_ratio > 1.5  # 1.5x vs 1.0x
+    conds.append(c4)
+    if c4:
+        confluence_score += 1
+        reasons.append("✅ Volume alto")
+    else:
+        reasons.append("❌ Volume baixo")
+    
+    # CRITÉRIO 5: RSI na zona ideal (se disponível)
+    if hasattr(row, 'rsi') and row.rsi is not None:
+        c5 = 35 <= row.rsi <= 65  # Zona ideal: evita extremos
+        conds.append(c5)
+        if c5:
+            confluence_score += 1
+            reasons.append("✅ RSI ideal")
+        elif row.rsi > 25:  # Pelo menos não oversold
+            confluence_score += 0.5
+            reasons.append("🔶 RSI aceitável")
+        else:
+            reasons.append("❌ RSI muito baixo")
+    else:
+        confluence_score += 0.5  # Meio ponto se RSI não disponível
+        reasons.append("⚪ RSI n/d")
+    
+    # CRITÉRIO 6: MACD momentum (se disponível)
+    if hasattr(row, 'macd') and hasattr(row, 'macd_signal') and row.macd is not None and row.macd_signal is not None:
+        c6 = row.macd > row.macd_signal  # MACD acima da signal
+        conds.append(c6)
+        if c6:
+            confluence_score += 1
+            reasons.append("✅ MACD positivo")
+        else:
+            reasons.append("❌ MACD negativo")
+    else:
+        confluence_score += 0.5  # Meio ponto se MACD não disponível
+        reasons.append("⚪ MACD n/d")
+    
+    # CRITÉRIO 7: Separação das EMAs (tendência clara)
+    ema_separation = abs(row.ema_short - row.ema_long) / row.atr if row.atr > 0 else 0
+    c7 = ema_separation >= 0.3  # EMAs devem estar bem separadas
+    conds.append(c7)
+    if c7:
+        confluence_score += 1
+        reasons.append("✅ EMAs separadas")
+    else:
+        reasons.append("❌ EMAs próximas")
+    
+    # CRITÉRIO 8: Preço não muito longe da EMA (entrada não tardia)
+    price_distance = abs(row.valor_fechamento - row.ema_short) / row.atr if row.atr > 0 else 999
+    c8 = price_distance <= 1.5  # Máximo 1.5 ATR de distância
+    conds.append(c8)
+    if c8:
+        confluence_score += 1
+        reasons.append("✅ Entrada no timing")
+    else:
+        reasons.append("❌ Entrada tardia")
+    
+    # DECISÃO FINAL: Requer 70% de confluência (5.6/8 = ~6 pontos)
+    MIN_CONFLUENCE = 5.5
+    is_valid = confluence_score >= MIN_CONFLUENCE
+    
+    # Raison d'être mais detalhada
+    confluence_pct = (confluence_score / max_score) * 100
+    reason_summary = f"Confluência: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
+    top_reasons = reasons[:3]  # Mostrar top 3 razões
+    
+    if is_valid:
+        final_reason = f"✅ {reason_summary} | {' | '.join(top_reasons)}"
+    else:
+        final_reason = f"❌ {reason_summary} | {' | '.join(top_reasons)}"
+    
+    return is_valid, final_reason
 
 
 def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
+    """
+    Condições de entrada SHORT com filtros mais restritivos para maior qualidade.
+    
+    FILTROS IMPLEMENTADOS:
+    1. EMA + Gradiente mais forte (-0.05% mínimo)
+    2. ATR mais conservador (0.25% - 2.0%)
+    3. Rompimento maior (0.5 ATR vs 0.25)
+    4. Volume mais exigente (1.5x vs 1.0x)
+    5. RSI na zona ideal (35-65)
+    6. MACD confirmação
+    7. Confluência mínima (70% dos critérios)
+    """
     reasons = []
     conds = []
-    c1 = row.ema_short < row.ema_long
-    conds.append(c1);  reasons.append("EMA7<EMA21")
-    c2 = row.ema_short_grad_pct < 0
-    conds.append(c2);  reasons.append("grad<0")
-    c3 = (row.atr_pct >= p.atr_pct_min) and (row.atr_pct <= p.atr_pct_max)
-    conds.append(c3);  reasons.append("ATR% saudável")
-    c4 = row.valor_fechamento < (row.ema_short - p.breakout_k_atr * row.atr)
-    conds.append(c4);  reasons.append("close<EMA7-k*ATR")
-    c5 = row.volume > row.vol_ma
-    conds.append(c5);  reasons.append("volume>média")
-    ok = all(conds)
-    return ok, "; ".join([r for r, c in zip(reasons, conds) if c]) if ok else "; ".join([r for r, c in zip(reasons, conds) if not c])
+    confluence_score = 0
+    max_score = 8  # Total de critérios avaliados
+    
+    # CRITÉRIO 1: EMA básico mais gradiente forte (OBRIGATÓRIO)
+    c1_ema = row.ema_short < row.ema_long
+    c1_grad = row.ema_short_grad_pct < -0.05  # Gradiente mais forte: -0.05% vs 0%
+    c1 = c1_ema and c1_grad
+    conds.append(c1)
+    if c1:
+        confluence_score += 1
+        reasons.append("✅ EMA7<EMA21+grad<-0.05%")
+    else:
+        reasons.append("❌ EMA/gradiente fraco")
+    
+    # CRITÉRIO 2: ATR mais conservador
+    c2 = (row.atr_pct >= 0.25) and (row.atr_pct <= 2.0)  # 0.25%-2.0% vs 0.15%-2.5%
+    conds.append(c2)
+    if c2:
+        confluence_score += 1
+        reasons.append("✅ ATR saudável")
+    else:
+        reasons.append("❌ ATR inadequado")
+    
+    # CRITÉRIO 3: Rompimento mais significativo
+    c3 = row.valor_fechamento < (row.ema_short - 0.5 * row.atr)  # 0.5 ATR vs 0.25
+    conds.append(c3)
+    if c3:
+        confluence_score += 1
+        reasons.append("✅ Rompimento forte")
+    else:
+        reasons.append("❌ Rompimento fraco")
+    
+    # CRITÉRIO 4: Volume mais exigente
+    volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
+    c4 = volume_ratio > 1.5  # 1.5x vs 1.0x
+    conds.append(c4)
+    if c4:
+        confluence_score += 1
+        reasons.append("✅ Volume alto")
+    else:
+        reasons.append("❌ Volume baixo")
+    
+    # CRITÉRIO 5: RSI na zona ideal (se disponível)
+    if hasattr(row, 'rsi') and row.rsi is not None:
+        c5 = 35 <= row.rsi <= 65  # Zona ideal: evita extremos
+        conds.append(c5)
+        if c5:
+            confluence_score += 1
+            reasons.append("✅ RSI ideal")
+        elif row.rsi < 75:  # Pelo menos não overbought
+            confluence_score += 0.5
+            reasons.append("🔶 RSI aceitável")
+        else:
+            reasons.append("❌ RSI muito alto")
+    else:
+        confluence_score += 0.5  # Meio ponto se RSI não disponível
+        reasons.append("⚪ RSI n/d")
+    
+    # CRITÉRIO 6: MACD momentum (se disponível)
+    if hasattr(row, 'macd') and hasattr(row, 'macd_signal') and row.macd is not None and row.macd_signal is not None:
+        c6 = row.macd < row.macd_signal  # MACD abaixo da signal (momentum de queda)
+        conds.append(c6)
+        if c6:
+            confluence_score += 1
+            reasons.append("✅ MACD negativo")
+        else:
+            reasons.append("❌ MACD positivo")
+    else:
+        confluence_score += 0.5  # Meio ponto se MACD não disponível
+        reasons.append("⚪ MACD n/d")
+    
+    # CRITÉRIO 7: Separação das EMAs (tendência clara)
+    ema_separation = abs(row.ema_short - row.ema_long) / row.atr if row.atr > 0 else 0
+    c7 = ema_separation >= 0.3  # EMAs devem estar bem separadas
+    conds.append(c7)
+    if c7:
+        confluence_score += 1
+        reasons.append("✅ EMAs separadas")
+    else:
+        reasons.append("❌ EMAs próximas")
+    
+    # CRITÉRIO 8: Preço não muito longe da EMA (entrada não tardia)
+    price_distance = abs(row.valor_fechamento - row.ema_short) / row.atr if row.atr > 0 else 999
+    c8 = price_distance <= 1.5  # Máximo 1.5 ATR de distância
+    conds.append(c8)
+    if c8:
+        confluence_score += 1
+        reasons.append("✅ Entrada no timing")
+    else:
+        reasons.append("❌ Entrada tardia")
+    
+    # DECISÃO FINAL: Requer 70% de confluência (5.6/8 = ~6 pontos)
+    MIN_CONFLUENCE = 5.5
+    is_valid = confluence_score >= MIN_CONFLUENCE
+    
+    # Raison d'être mais detalhada
+    confluence_pct = (confluence_score / max_score) * 100
+    reason_summary = f"Confluência: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
+    top_reasons = reasons[:3]  # Mostrar top 3 razões
+    
+    if is_valid:
+        final_reason = f"✅ {reason_summary} | {' | '.join(top_reasons)}"
+    else:
+        final_reason = f"❌ {reason_summary} | {' | '.join(top_reasons)}"
+    
+    return is_valid, final_reason
 
 
 def _no_trade_zone(row, p: BacktestParams) -> bool:
