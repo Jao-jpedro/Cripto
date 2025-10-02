@@ -2389,7 +2389,7 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop inicial
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.05   # take profit máximo em 5% da margem
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.05   # take profit em 5% da margem (tradingv4.py mantém 5%)
     MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
@@ -2417,7 +2417,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.05
-    take_pct: float = 0.05
+    take_pct: float = 0.05  # 5% take profit mantido no tradingv4.py
     usd_env: Optional[str] = None
 
 

@@ -2480,7 +2480,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.05
-    take_pct: float = 0.05
+    take_pct: float = 0.20  # 20% take profit (era 0.05 = 5%)
     usd_env: Optional[str] = None
 
 
