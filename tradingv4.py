@@ -314,6 +314,14 @@ class TradingLearner:
             macd = df.get('macd', pd.Series()).iloc[-1] if 'macd' in df.columns else None
             macd_signal = df.get('macd_signal', pd.Series()).iloc[-1] if 'macd_signal' in df.columns else None
             macd_histogram = df.get('macd_histogram', pd.Series()).iloc[-1] if 'macd_histogram' in df.columns else None
+            
+            # Bollinger Bands
+            bb_upper = df.get('bb_upper', pd.Series()).iloc[-1] if 'bb_upper' in df.columns else None
+            bb_lower = df.get('bb_lower', pd.Series()).iloc[-1] if 'bb_lower' in df.columns else None
+            bb_middle = df.get('bb_middle', pd.Series()).iloc[-1] if 'bb_middle' in df.columns else None
+            bb_percent_b = df.get('bb_percent_b', pd.Series()).iloc[-1] if 'bb_percent_b' in df.columns else None
+            bb_width = df.get('bb_width', pd.Series()).iloc[-1] if 'bb_width' in df.columns else None
+            bb_squeeze = df.get('bb_squeeze', pd.Series()).iloc[-1] if 'bb_squeeze' in df.columns else None
                 
             # =================== SEÇÃO C: VOLUME & LIQUIDEZ ===================
             volume = df.get('volume', pd.Series())
@@ -477,6 +485,14 @@ class TradingLearner:
                 'macd_signal': macd_signal,
                 'macd_histogram': macd_histogram,
                 
+                # Bollinger Bands
+                'bb_upper': bb_upper,
+                'bb_lower': bb_lower,
+                'bb_middle': bb_middle,
+                'bb_percent_b': bb_percent_b,
+                'bb_width': bb_width,
+                'bb_squeeze': bb_squeeze,
+                
                 # C) Volume
                 'vol_ratio_5': vol_ratio_5,
                 'vol_ratio_20': vol_ratio_20,
@@ -586,6 +602,19 @@ class TradingLearner:
             rsi = features_raw.get("rsi")
             if rsi is not None:
                 binned["rsi_bin"] = int(rsi // 5) * 5  # múltiplos de 5
+                
+            # Bollinger Bands binning
+            bb_percent_b = features_raw.get("bb_percent_b")
+            if bb_percent_b is not None:
+                binned["bb_percent_b_bin"] = round(bb_percent_b, 1)  # 0.1 precision
+                
+            bb_width = features_raw.get("bb_width")
+            if bb_width is not None:
+                binned["bb_width_bin"] = round(bb_width, 1)  # 0.1% precision
+                
+            bb_squeeze = features_raw.get("bb_squeeze")
+            if bb_squeeze is not None:
+                binned["bb_squeeze"] = bool(bb_squeeze)  # boolean value
                 
             # Percentis em blocos de 10
             for field in ["atr_percentile_252", "vol_percentile_252"]:

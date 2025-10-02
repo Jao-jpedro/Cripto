@@ -2580,8 +2580,8 @@ class EMAGradientStrategy:
                     ticker = self.dex.fetch_ticker(self.symbol)
                     current_price = float(ticker["last"])
                     
-                    # Registrar fechamento no learner (sistema inverso)
-                    learner = get_learner_inverse()
+                    # Registrar fechamento no learner (sistema principal)
+                    learner = get_learner()
                     learner.record_close(
                         context=self._learner_context,
                         close_price=current_price,
@@ -3732,7 +3732,7 @@ class EMAGradientStrategy:
         - MUITO RUIM (🟣): <40% wins - Alerta severo
         """
         try:
-            learner = get_learner_inverse()
+            learner = get_learner()
             
             # Extrair features da situação atual
             price_now = self._preco_atual()
