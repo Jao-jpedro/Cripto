@@ -4898,7 +4898,42 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
         prev_close = close.shift(1)
         tr = (close - prev_close).abs()
     out["atr"] = tr.rolling(p.atr_period, min_periods=1).mean()
-    out["atr_pct"] = (out["atr"] / close) * 100.0
+    out["atr_pct"] = (out["atr"] / close) * 100
+
+    # 🎯 BOLLINGER BANDS + %B (Para entradas de 20% de ganho)
+    bb_period = 20  # Período padrão
+    bb_std = 2.0    # Desvios padrão
+    
+    # Média móvel simples para as bandas
+    bb_sma = close.rolling(bb_period, min_periods=1).mean()
+    bb_std_dev = close.rolling(bb_period, min_periods=1).std()
+    
+    # Bandas de Bollinger
+    out["bb_upper"] = bb_sma + (bb_std * bb_std_dev)
+    out["bb_lower"] = bb_sma - (bb_std * bb_std_dev)
+    out["bb_middle"] = bb_sma
+    
+    # %B (Bollinger %B) - Posição relativa dentro das bandas
+    # %B = (preço - banda_inferior) / (banda_superior - banda_inferior)
+    # %B > 1.0 = acima da banda superior
+    # %B < 0.0 = abaixo da banda inferior
+    # %B = 0.5 = na média móvel central
+    band_width = out["bb_upper"] - out["bb_lower"]
+    out["bb_percent_b"] = np.where(
+        band_width > 0,
+        (close - out["bb_lower"]) / band_width,
+        0.5  # Fallback se bandas coincidirem
+    )
+    
+    # Largura das Bandas (detecta compressão/expansão)
+    # Valores baixos indicam compressão (movimento iminente)
+    # Valores altos indicam expansão (movimento em curso)
+    out["bb_width"] = band_width / bb_sma * 100  # Normalizado em %
+    
+    # Squeeze detector (compressão extrema - oportunidade)
+    # Quando bb_width está nos 10% menores dos últimos 100 períodos
+    bb_width_percentile = out["bb_width"].rolling(100, min_periods=20).quantile(0.1)
+    out["bb_squeeze"] = out["bb_width"] <= bb_width_percentile
 
     # Volume média
     out["vol_ma"] = out["volume"].rolling(p.vol_ma_period, min_periods=1).mean()
@@ -4951,21 +4986,23 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
 
 def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     """
-    Condições de entrada LONG com filtros mais restritivos para maior qualidade.
+    Condições de entrada LONG com filtros ULTRA-restritivos + Bollinger Bands para qualidade máxima.
     
     FILTROS IMPLEMENTADOS:
-    1. EMA + Gradiente mais forte (0.05% mínimo)
-    2. ATR mais conservador (0.25% - 2.0%)
-    3. Rompimento maior (0.5 ATR vs 0.25)
-    4. Volume mais exigente (1.5x vs 1.0x)
-    5. RSI na zona ideal (35-65)
+    1. EMA + Gradiente ultra-forte (0.08% mínimo)
+    2. ATR ultra-conservador (0.35% - 1.5%)
+    3. Rompimento ultra-significativo (0.8 ATR)
+    4. Volume ultra-exigente (2.0x vs 1.0x)
+    5. RSI zona ultra-ideal (40-60)
     6. MACD confirmação
-    7. Confluência mínima (70% dos critérios)
+    7. Bollinger Bands breakout + squeeze
+    8. Separação EMAs (tendência clara)
+    9. Timing de entrada preciso
     """
     reasons = []
     conds = []
     confluence_score = 0
-    max_score = 8  # Total de critérios avaliados
+    max_score = 9  # Atualizado para 9 critérios (incluindo Bollinger Bands)
     
     # CRITÉRIO 1: EMA básico mais gradiente ULTRA forte (OBRIGATÓRIO)
     c1_ema = row.ema_short > row.ema_long
@@ -5055,8 +5092,8 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     else:
         reasons.append("❌ Entrada tardia")
     
-    # DECISÃO FINAL LONG: Requer 81% de confluência ULTRA-RESTRITIVA (6.5/8 pontos)
-    MIN_CONFLUENCE = 6.5
+    # DECISÃO FINAL LONG: Requer 78% de confluência ULTRA-RESTRITIVA (7.0/9 pontos)
+    MIN_CONFLUENCE = 7.0
     is_valid = confluence_score >= MIN_CONFLUENCE
     
     # Raison d'être mais detalhada

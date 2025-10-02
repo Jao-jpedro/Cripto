@@ -4690,7 +4690,41 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
         prev_close = close.shift(1)
         tr = (close - prev_close).abs()
     out["atr"] = tr.rolling(p.atr_period, min_periods=1).mean()
-    out["atr_pct"] = (out["atr"] / close) * 100.0
+    out["atr_pct"] = (out["atr"] / close) * 100
+
+    # 🎯 BOLLINGER BANDS + %B (Para entradas de 20% de ganho)
+    bb_period = 20  # Período padrão
+    bb_std = 2.0    # Desvios padrão
+    
+    # Média móvel simples para as bandas
+    bb_sma = close.rolling(bb_period, min_periods=1).mean()
+    bb_std_dev = close.rolling(bb_period, min_periods=1).std()
+    
+    # Bandas de Bollinger
+    out["bb_upper"] = bb_sma + (bb_std * bb_std_dev)
+    out["bb_lower"] = bb_sma - (bb_std * bb_std_dev)
+    out["bb_middle"] = bb_sma
+    
+    # %B (Bollinger %B) - Posição relativa dentro das bandas
+    # %B > 1.0 = acima da banda superior
+    # %B < 0.0 = abaixo da banda inferior
+    # %B = 0.5 = na média móvel central
+    band_width = out["bb_upper"] - out["bb_lower"]
+    out["bb_percent_b"] = np.where(
+        band_width > 0,
+        (close - out["bb_lower"]) / band_width,
+        0.5  # Fallback se bandas coincidirem
+    )
+    
+    # Largura das Bandas (detecta compressão/expansão)
+    # Valores baixos indicam compressão (movimento iminente)
+    # Valores altos indicam expansão (movimento em curso)
+    out["bb_width"] = band_width / bb_sma * 100  # Normalizado em %
+    
+    # Squeeze detector (compressão extrema - oportunidade)
+    # Quando bb_width está nos 10% menores dos últimos 100 períodos
+    bb_width_percentile = out["bb_width"].rolling(100, min_periods=20).quantile(0.1)
+    out["bb_squeeze"] = out["bb_width"] <= bb_width_percentile
 
     # Volume média
     out["vol_ma"] = out["volume"].rolling(p.vol_ma_period, min_periods=1).mean()
