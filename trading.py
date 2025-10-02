@@ -3519,7 +3519,11 @@ class EMAGradientStrategy:
             return existing
         try:
             # Hyperliquid exige especificar preço base mesmo para stop_market
+            if self.debug:
+                self._log(f"DEBUG: Chamando create_order stop_market side={side} amt={amt} px={px}", level="DEBUG")
             ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)  # Carteira mãe
+            if self.debug:
+                self._log(f"DEBUG: Stop order criada com sucesso: {ret}", level="DEBUG")
         except Exception as e:
             msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -3543,9 +3547,13 @@ class EMAGradientStrategy:
             self._last_stop_order_px = px
             # Logger opcional
             try:
+                if self.debug:
+                    self._log(f"DEBUG: Chamando _safe_log para stop_criado order_id={str(oid) if oid else None}", level="DEBUG")
                 self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
-            except Exception:
-                pass
+                if self.debug:
+                    self._log(f"DEBUG: _safe_log para stop_criado executado com sucesso", level="DEBUG")
+            except Exception as e:
+                self._log(f"ERROR: Falha no _safe_log para stop_criado: {e}", level="ERROR")
         except Exception:
             pass
         return ret
@@ -3978,6 +3986,10 @@ class EMAGradientStrategy:
         sl_side = "sell" if norm_side == "buy" else "buy"
         tp_side = sl_side
 
+        # DEBUG: Verificar configuração de stop loss
+        if self.debug:
+            self._log(f"DEBUG STOP CONFIG: STOP_LOSS_CAPITAL_PCT={self.cfg.STOP_LOSS_CAPITAL_PCT} sl_price={sl_price:.6f}", level="DEBUG")
+
         if self.debug:
             if manage_take and tp_price is not None:
                 self._log(
@@ -3993,18 +4005,30 @@ class EMAGradientStrategy:
 
         ordem_stop = self._place_stop(sl_side, fill_amount, sl_price, df_for_log=df_for_log)
         self._last_stop_order_id = self._extract_order_id(ordem_stop)
+        
+        # DEBUG: Verificar se stop foi criado
+        if self.debug:
+            self._log(f"DEBUG: ordem_stop retornada: {ordem_stop}", level="DEBUG")
+            self._log(f"DEBUG: _last_stop_order_id: {self._last_stop_order_id}", level="DEBUG")
 
         self._last_take_order_id = None
         if manage_take and tp_price is not None:
             ordem_take = self._place_take_profit(tp_side, fill_amount, tp_price, df_for_log=df_for_log)
             self._last_take_order_id = self._extract_order_id(ordem_take)
 
+        # DEBUG: Verificar chamada de _safe_log
+        if self.debug:
+            self._log(f"DEBUG: Chamando _safe_log stop_inicial com sl_price={sl_price} amount={amount}", level="DEBUG")
+        
         self._safe_log(
             "stop_inicial", df_for_log,
             tipo=("long" if norm_side == "buy" else "short"),
             exec_price=sl_price,
             exec_amount=amount
         )
+        
+        if self.debug:
+            self._log(f"DEBUG: _safe_log stop_inicial executado", level="DEBUG")
 
         if manage_take and tp_price is not None:
             self._safe_log(
