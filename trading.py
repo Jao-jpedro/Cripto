@@ -2678,7 +2678,7 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
             self._log(f"[DEBUG_CLOSE] 🚀 TRAILING L8: ROI {current_roi_pct:.1f}% >= 17.5% → stop +12.5% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 15.0:
-            # ROI >= 15%: stop em +10%
+            # ROI >= 15%: stop em +10% (conservar mais para alcançar 20%)
             trailing_stop_pct = 0.10 / float(self.cfg.LEVERAGE)
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
@@ -2686,7 +2686,7 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
             self._log(f"[DEBUG_CLOSE] 🎯 TRAILING L7: ROI {current_roi_pct:.1f}% >= 15% → stop +10% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 12.5:
-            # ROI >= 12.5%: stop em +7.5%
+            # ROI >= 12.5%: stop em +7.5% (dando espaço para 20%)
             trailing_stop_pct = 0.075 / float(self.cfg.LEVERAGE)
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
@@ -2694,21 +2694,17 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
             self._log(f"[DEBUG_CLOSE] 📈 TRAILING L6: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 10.0:
-            # ROI >= 10%: stop em +5%
-            trailing_stop_pct = 0.05 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 7.5:
-            # ROI >= 7.5%: stop em +2.5%
+            # ROI >= 10%: stop em +2.5% (NÃO mais em +5% para evitar fechamento prematuro)
             trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +2.5% @ {stop_px:.6f} (preservando para 20%)", level="DEBUG")
+        elif current_roi_pct >= 7.5:
+            # ROI >= 7.5%: stop em breakeven (mais conservador)
+            stop_px = entry_price
+            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop breakeven @ {stop_px:.6f} (preservando para 20%)", level="DEBUG")
         elif current_roi_pct >= 5.0:
             # ROI >= 5%: stop em 0% (breakeven)
             stop_px = entry_price
@@ -4986,71 +4982,74 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
 
 def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     """
-    Condições de entrada LONG com filtros ULTRA-restritivos + Bollinger Bands para qualidade máxima.
+    MEGA FILTROS RESTRITIVOS LONG - Máxima Qualidade de Entradas
     
-    FILTROS IMPLEMENTADOS:
-    1. EMA + Gradiente ultra-forte (0.08% mínimo)
-    2. ATR ultra-conservador (0.35% - 1.5%)
-    3. Rompimento ultra-significativo (0.8 ATR)
-    4. Volume ultra-exigente (2.0x vs 1.0x)
-    5. RSI zona ultra-ideal (40-60)
-    6. MACD confirmação
-    7. Bollinger Bands breakout + squeeze
-    8. Separação EMAs (tendência clara)
-    9. Timing de entrada preciso
+    Sistema de confluência com 10 critérios MEGA restritivos:
+    1. EMA + Gradiente MEGA forte (0.10% mínimo)
+    2. ATR MEGA conservador (0.4% - 1.2%)
+    3. Rompimento MEGA significativo (1.0+ ATR)
+    4. Volume MEGA exigente (3.0x+)
+    5. RSI zona MEGA restrita (45-55)
+    6. MACD momentum forte
+    7. Separação EMAs MEGA clara
+    8. Timing de entrada MEGA preciso
+    9. Bollinger Bands validação MEGA
+    10. Momentum e estrutura MEGA
+    
+    MEGA CONFLUÊNCIA: Requer 85% aprovação (8.5/10 pontos)
     """
     reasons = []
     conds = []
     confluence_score = 0
-    max_score = 9  # Atualizado para 9 critérios (incluindo Bollinger Bands)
+    max_score = 10  # MEGA: 10 critérios
     
-    # CRITÉRIO 1: EMA básico mais gradiente ULTRA forte (OBRIGATÓRIO)
+    # CRITÉRIO 1: EMA + Gradiente MEGA restritivo (OBRIGATÓRIO)
     c1_ema = row.ema_short > row.ema_long
-    c1_grad = row.ema_short_grad_pct > 0.08  # ULTRA restritivo: 0.08% vs 0.05%
+    c1_grad = row.ema_short_grad_pct > 0.10  # MEGA: 0.10% vs 0.08%
     c1 = c1_ema and c1_grad
     conds.append(c1)
     if c1:
         confluence_score += 1
-        reasons.append("✅ EMA7>EMA21+grad>0.08%")
+        reasons.append("✅ EMA7>EMA21+grad>0.10%")
     else:
         reasons.append("❌ EMA/gradiente fraco")
     
-    # CRITÉRIO 2: ATR ULTRA conservador
-    c2 = (row.atr_pct >= 0.35) and (row.atr_pct <= 1.5)  # ULTRA restritivo: 0.35%-1.5% vs 0.25%-2.0%
+    # CRITÉRIO 2: ATR MEGA conservador
+    c2 = (row.atr_pct >= 0.4) and (row.atr_pct <= 1.2)  # MEGA: 0.4%-1.2% vs 0.40%-1.2%
     conds.append(c2)
     if c2:
         confluence_score += 1
-        reasons.append("✅ ATR ultra-saudável")
+        reasons.append("✅ ATR MEGA-saudável")
     else:
         reasons.append("❌ ATR inadequado")
     
-    # CRITÉRIO 3: Rompimento MUITO mais significativo
-    c3 = row.valor_fechamento > (row.ema_short + 0.8 * row.atr)  # ULTRA restritivo: 0.8 ATR vs 0.5
+    # CRITÉRIO 3: Rompimento MEGA significativo
+    c3 = row.valor_fechamento > (row.ema_short + 1.0 * row.atr)  # MEGA: 1.0 ATR vs 0.8
     conds.append(c3)
     if c3:
         confluence_score += 1
-        reasons.append("✅ Rompimento ultra-forte")
+        reasons.append("✅ Rompimento MEGA-forte")
     else:
         reasons.append("❌ Rompimento fraco")
     
-    # CRITÉRIO 4: Volume MUITO mais exigente
+    # CRITÉRIO 4: Volume MEGA exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 2.0  # ULTRA restritivo: 2.0x vs 1.5x
+    c4 = volume_ratio > 3.0  # MEGA: 3.0x vs 2.5x
     conds.append(c4)
     if c4:
         confluence_score += 1
-        reasons.append("✅ Volume ultra-alto")
+        reasons.append("✅ Volume MEGA-alto")
     else:
         reasons.append("❌ Volume baixo")
     
-    # CRITÉRIO 5: RSI na zona ULTRA ideal (se disponível)
+    # CRITÉRIO 5: RSI zona MEGA restrita (se disponível)
     if hasattr(row, 'rsi') and row.rsi is not None:
-        c5 = 40 <= row.rsi <= 60  # ULTRA restritivo: zona 40-60 vs 35-65
+        c5 = 45 <= row.rsi <= 55  # MEGA: zona ultra-restrita 45-55 vs 40-60
         conds.append(c5)
         if c5:
             confluence_score += 1
-            reasons.append("✅ RSI ultra-ideal")
-        elif 30 <= row.rsi <= 70:  # Zona aceitável mais restrita
+            reasons.append("✅ RSI MEGA-ideal")
+        elif 35 <= row.rsi <= 65:  # Zona aceitável
             confluence_score += 0.5
             reasons.append("🔶 RSI aceitável")
         else:
@@ -5059,46 +5058,73 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
         confluence_score += 0.5  # Meio ponto se RSI não disponível
         reasons.append("⚪ RSI n/d")
     
-    # CRITÉRIO 6: MACD momentum (se disponível)
+    # CRITÉRIO 6: MACD momentum forte (se disponível)
     if hasattr(row, 'macd') and hasattr(row, 'macd_signal') and row.macd is not None and row.macd_signal is not None:
-        c6 = row.macd > row.macd_signal  # MACD acima da signal
+        macd_diff = row.macd - row.macd_signal
+        c6 = macd_diff > 0.001  # MACD significativamente acima da signal
         conds.append(c6)
         if c6:
             confluence_score += 1
-            reasons.append("✅ MACD positivo")
+            reasons.append("✅ MACD MEGA-positivo")
         else:
-            reasons.append("❌ MACD negativo")
+            reasons.append("❌ MACD fraco")
     else:
         confluence_score += 0.5  # Meio ponto se MACD não disponível
         reasons.append("⚪ MACD n/d")
     
-    # CRITÉRIO 7: Separação das EMAs (tendência clara)
+    # CRITÉRIO 7: Separação EMAs MEGA clara
     ema_separation = abs(row.ema_short - row.ema_long) / row.atr if row.atr > 0 else 0
-    c7 = ema_separation >= 0.3  # EMAs devem estar bem separadas
+    c7 = ema_separation >= 0.5  # MEGA: 0.5 vs 0.3 ATR
     conds.append(c7)
     if c7:
         confluence_score += 1
-        reasons.append("✅ EMAs separadas")
+        reasons.append("✅ EMAs MEGA-separadas")
     else:
         reasons.append("❌ EMAs próximas")
     
-    # CRITÉRIO 8: Preço não muito longe da EMA (entrada não tardia)
+    # CRITÉRIO 8: Timing MEGA preciso
     price_distance = abs(row.valor_fechamento - row.ema_short) / row.atr if row.atr > 0 else 999
-    c8 = price_distance <= 1.5  # Máximo 1.5 ATR de distância
+    c8 = price_distance <= 1.0  # MEGA: máximo 1.0 ATR vs 1.5
     conds.append(c8)
     if c8:
         confluence_score += 1
-        reasons.append("✅ Entrada no timing")
+        reasons.append("✅ Timing MEGA-preciso")
     else:
         reasons.append("❌ Entrada tardia")
+        
+    # CRITÉRIO 9: Bollinger Bands MEGA validação (se disponível)
+    if hasattr(row, 'bb_percent_b') and row.bb_percent_b is not None:
+        # Para LONG: queremos estar na parte inferior das bandas (abaixo de 0.2)
+        c9 = row.bb_percent_b < 0.2  # MEGA: abaixo da banda inferior
+        conds.append(c9)
+        if c9:
+            confluence_score += 1
+            reasons.append("✅ BB posição MEGA-ideal")
+        else:
+            reasons.append("❌ BB posição inadequada")
+    else:
+        confluence_score += 0.5  # Meio ponto se BB não disponível
+        reasons.append("⚪ BB n/d")
     
-    # DECISÃO FINAL LONG: Requer 78% de confluência ULTRA-RESTRITIVA (7.0/9 pontos)
-    MIN_CONFLUENCE = 7.0
+    # CRITÉRIO 10: Momentum e estrutura MEGA (combinado)
+    # Verifica se temos momentum consistente + estrutura de mercado favorável
+    momentum_ok = hasattr(row, 'ema_short_grad_pct') and row.ema_short_grad_pct > 0.05
+    structure_ok = hasattr(row, 'atr') and row.atr > 0 and (row.valor_fechamento > row.ema_long)
+    c10 = momentum_ok and structure_ok
+    conds.append(c10)
+    if c10:
+        confluence_score += 1
+        reasons.append("✅ Momentum+estrutura MEGA")
+    else:
+        reasons.append("❌ Momentum/estrutura fraca")
+    
+    # DECISÃO FINAL LONG: MEGA-RESTRITIVA requer 85% confluência (8.5/10 pontos)
+    MIN_CONFLUENCE = 8.5
     is_valid = confluence_score >= MIN_CONFLUENCE
     
-    # Raison d'être mais detalhada
+    # Raison d'être MEGA detalhada
     confluence_pct = (confluence_score / max_score) * 100
-    reason_summary = f"Confluência ULTRA LONG: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
+    reason_summary = f"Confluência MEGA LONG: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
     top_reasons = reasons[:3]  # Mostrar top 3 razões
     
     if is_valid:
@@ -5111,117 +5137,149 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
 
 def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     """
-    Condições de entrada SHORT com filtros mais restritivos para maior qualidade.
+    MEGA FILTROS RESTRITIVOS SHORT - Máxima Qualidade de Entradas
     
-    FILTROS IMPLEMENTADOS:
-    1. EMA + Gradiente mais forte (-0.05% mínimo)
-    2. ATR mais conservador (0.25% - 2.0%)
-    3. Rompimento maior (0.5 ATR vs 0.25)
-    4. Volume mais exigente (1.5x vs 1.0x)
-    5. RSI na zona ideal (35-65)
-    6. MACD confirmação
-    7. Confluência mínima (70% dos critérios)
+    Sistema de confluência com 10 critérios MEGA restritivos:
+    1. EMA + Gradiente MEGA forte (-0.12% mínimo)
+    2. ATR MEGA conservador (0.4% - 1.2%)
+    3. Rompimento MEGA significativo (1.0+ ATR)
+    4. Volume MEGA exigente (3.0x+)
+    5. RSI zona MEGA restrita (45-55)
+    6. MACD momentum forte
+    7. Separação EMAs MEGA clara
+    8. Timing de entrada MEGA preciso
+    9. Bollinger Bands validação MEGA
+    10. Momentum e estrutura MEGA
+    
+    MEGA CONFLUÊNCIA: Requer 90% aprovação (9.0/10 pontos)
     """
     reasons = []
     conds = []
     confluence_score = 0
-    max_score = 8  # Total de critérios avaliados
+    max_score = 10  # MEGA: 10 critérios
     
-    # CRITÉRIO 1: EMA básico mais gradiente ULTRA forte (OBRIGATÓRIO)
+    # CRITÉRIO 1: EMA + Gradiente MEGA restritivo (OBRIGATÓRIO)
     c1_ema = row.ema_short < row.ema_long
-    c1_grad = row.ema_short_grad_pct < -0.08  # ULTRA restritivo: -0.08% vs -0.05%
+    c1_grad = row.ema_short_grad_pct < -0.12  # MEGA: -0.12% vs -0.10%
     c1 = c1_ema and c1_grad
     conds.append(c1)
     if c1:
         confluence_score += 1
-        reasons.append("✅ EMA7<EMA21+grad<-0.08%")
+        reasons.append("✅ EMA7<EMA21+grad<-0.12%")
     else:
         reasons.append("❌ EMA/gradiente fraco")
     
-    # CRITÉRIO 2: ATR ULTRA conservador
-    c2 = (row.atr_pct >= 0.35) and (row.atr_pct <= 1.5)  # ULTRA restritivo: 0.35%-1.5% vs 0.25%-2.0%
+    # CRITÉRIO 2: ATR MEGA conservador
+    c2 = (row.atr_pct >= 0.4) and (row.atr_pct <= 1.2)  # MEGA: 0.4%-1.2% vs 0.40%-1.2%
     conds.append(c2)
     if c2:
         confluence_score += 1
-        reasons.append("✅ ATR ultra-saudável")
+        reasons.append("✅ ATR MEGA-saudável")
     else:
         reasons.append("❌ ATR inadequado")
     
-    # CRITÉRIO 3: Rompimento MUITO mais significativo
-    c3 = row.valor_fechamento < (row.ema_short - 0.8 * row.atr)  # ULTRA restritivo: 0.8 ATR vs 0.5
+    # CRITÉRIO 3: Rompimento MEGA significativo
+    c3 = row.valor_fechamento < (row.ema_short - 1.0 * row.atr)  # MEGA: 1.0 ATR vs 0.8
     conds.append(c3)
     if c3:
         confluence_score += 1
-        reasons.append("✅ Rompimento ultra-forte")
+        reasons.append("✅ Rompimento MEGA-forte")
     else:
         reasons.append("❌ Rompimento fraco")
     
-    # CRITÉRIO 4: Volume MUITO mais exigente
+    # CRITÉRIO 4: Volume MEGA exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 2.0  # ULTRA restritivo: 2.0x vs 1.5x
+    c4 = volume_ratio > 3.0  # MEGA: 3.0x vs 2.5x
     conds.append(c4)
     if c4:
         confluence_score += 1
-        reasons.append("✅ Volume ultra-alto")
+        reasons.append("✅ Volume MEGA-alto")
     else:
         reasons.append("❌ Volume baixo")
     
-    # CRITÉRIO 5: RSI na zona ULTRA ideal (se disponível)
+    # CRITÉRIO 5: RSI zona MEGA restrita (se disponível)
     if hasattr(row, 'rsi') and row.rsi is not None:
-        c5 = 40 <= row.rsi <= 60  # ULTRA restritivo: zona 40-60 vs 35-65
+        c5 = 45 <= row.rsi <= 55  # MEGA: zona ultra-restrita 45-55 vs 40-60
         conds.append(c5)
         if c5:
             confluence_score += 1
-            reasons.append("✅ RSI ultra-ideal")
-        elif 30 <= row.rsi <= 70:  # Zona aceitável mais restrita
+            reasons.append("✅ RSI MEGA-ideal")
+        elif 35 <= row.rsi <= 65:  # Zona aceitável
             confluence_score += 0.5
             reasons.append("🔶 RSI aceitável")
         else:
-            reasons.append("❌ RSI inadequado")
+            reasons.append("❌ RSI extremo")
     else:
         confluence_score += 0.5  # Meio ponto se RSI não disponível
         reasons.append("⚪ RSI n/d")
     
-    # CRITÉRIO 6: MACD momentum (se disponível)
+    # CRITÉRIO 6: MACD momentum forte (se disponível)
     if hasattr(row, 'macd') and hasattr(row, 'macd_signal') and row.macd is not None and row.macd_signal is not None:
-        c6 = row.macd < row.macd_signal  # MACD abaixo da signal (momentum de queda)
+        macd_diff = row.macd - row.macd_signal
+        c6 = macd_diff < -0.001  # MACD significativamente abaixo da signal
         conds.append(c6)
         if c6:
             confluence_score += 1
-            reasons.append("✅ MACD negativo")
+            reasons.append("✅ MACD MEGA-negativo")
         else:
-            reasons.append("❌ MACD positivo")
+            reasons.append("❌ MACD fraco")
     else:
         confluence_score += 0.5  # Meio ponto se MACD não disponível
         reasons.append("⚪ MACD n/d")
     
-    # CRITÉRIO 7: Separação das EMAs (tendência clara)
+    # CRITÉRIO 7: Separação EMAs MEGA clara
     ema_separation = abs(row.ema_short - row.ema_long) / row.atr if row.atr > 0 else 0
-    c7 = ema_separation >= 0.3  # EMAs devem estar bem separadas
+    c7 = ema_separation >= 0.5  # MEGA: 0.5 vs 0.3 ATR
     conds.append(c7)
     if c7:
         confluence_score += 1
-        reasons.append("✅ EMAs separadas")
+        reasons.append("✅ EMAs MEGA-separadas")
     else:
         reasons.append("❌ EMAs próximas")
     
-    # CRITÉRIO 8: Preço não muito longe da EMA (entrada não tardia)
+    # CRITÉRIO 8: Timing MEGA preciso
     price_distance = abs(row.valor_fechamento - row.ema_short) / row.atr if row.atr > 0 else 999
-    c8 = price_distance <= 1.5  # Máximo 1.5 ATR de distância
+    c8 = price_distance <= 1.0  # MEGA: máximo 1.0 ATR vs 1.5
     conds.append(c8)
     if c8:
         confluence_score += 1
-        reasons.append("✅ Entrada no timing")
+        reasons.append("✅ Timing MEGA-preciso")
     else:
         reasons.append("❌ Entrada tardia")
+        
+    # CRITÉRIO 9: Bollinger Bands MEGA validação (se disponível)
+    if hasattr(row, 'bb_percent_b') and row.bb_percent_b is not None:
+        # Para SHORT: queremos estar na parte superior das bandas (acima de 0.8)
+        c9 = row.bb_percent_b > 0.8  # MEGA: acima da banda superior
+        conds.append(c9)
+        if c9:
+            confluence_score += 1
+            reasons.append("✅ BB posição MEGA-ideal")
+        else:
+            reasons.append("❌ BB posição inadequada")
+    else:
+        confluence_score += 0.5  # Meio ponto se BB não disponível
+        reasons.append("⚪ BB n/d")
     
-    # DECISÃO FINAL SHORT: Requer 81% de confluência ULTRA-RESTRITIVA (6.5/8 pontos)
-    MIN_CONFLUENCE = 6.5
+    # CRITÉRIO 10: Momentum e estrutura MEGA (combinado)
+    # Verifica se temos momentum consistente + estrutura de mercado favorável
+    momentum_ok = hasattr(row, 'ema_short_grad_pct') and row.ema_short_grad_pct < -0.05
+    structure_ok = hasattr(row, 'atr') and row.atr > 0 and (row.valor_fechamento < row.ema_long)
+    c10 = momentum_ok and structure_ok
+    conds.append(c10)
+    if c10:
+        confluence_score += 1
+        reasons.append("✅ Momentum+estrutura MEGA")
+    else:
+        reasons.append("❌ Momentum/estrutura fraca")
+    
+    # DECISÃO FINAL SHORT: MEGA-RESTRITIVA requer 90% confluência (9.0/10 pontos)
+    MIN_CONFLUENCE = 9.0
     is_valid = confluence_score >= MIN_CONFLUENCE
     
-    # Raison d'être mais detalhada
+    # Raison d'être MEGA detalhada
     confluence_pct = (confluence_score / max_score) * 100
-    reason_summary = f"Confluência ULTRA SHORT: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
+    reason_summary = f"Confluência MEGA SHORT: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
     top_reasons = reasons[:3]  # Mostrar top 3 razões
     
     if is_valid:
