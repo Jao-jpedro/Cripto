@@ -2372,15 +2372,15 @@ class GradientConfig:
     EMA_SHORT_SPAN: int     = 7
     EMA_LONG_SPAN: int      = 21
     N_BARRAS_GRADIENTE: int = 3           # janela para gradiente
-    GRAD_CONSISTENCY: int   = 3           # nº velas com gradiente consistente
+    GRAD_CONSISTENCY: int   = 4           # nº velas com gradiente consistente
     ATR_PERIOD: int         = 14
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada
-    ATR_PCT_MIN: float      = 0.15        # ATR% saudável (min)
-    ATR_PCT_MAX: float      = 2.5         # ATR% saudável (max)
-    BREAKOUT_K_ATR: float   = 0.25        # banda de rompimento: k*ATR
-    NO_TRADE_EPS_K_ATR: float = 0.05      # zona neutra: |EMA7-EMA21| < eps*ATR
+    ATR_PCT_MIN: float      = 0.7        # ATR% saudável (min)
+    ATR_PCT_MAX: float      = 1.5         # ATR% saudável (max)
+    BREAKOUT_K_ATR: float   = 0.4        # banda de rompimento: k*ATR
+    NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra: |EMA7-EMA21| < eps*ATR
 
     # Saídas por gradiente
     INV_GRAD_BARS: int      = 2           # barras de gradiente oposto p/ sair
@@ -2389,7 +2389,7 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.05  # 5% da margem como stop inicial
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.05   # take profit em 5% da margem (tradingv4.py mantém 5%)
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.075   # take profit em 5% da margem (tradingv4.py mantém 5%)
     MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
@@ -2417,7 +2417,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.05
-    take_pct: float = 0.05  # 5% take profit mantido no tradingv4.py
+    take_pct: float = 0.075  # 5% take profit mantido no tradingv4.py
     usd_env: Optional[str] = None
 
 
