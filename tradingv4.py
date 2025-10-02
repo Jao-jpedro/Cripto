@@ -267,7 +267,7 @@ class TradingLearner:
                 atr_20_percentile = (atr_series.iloc[-20:] <= atr_series.iloc[-1]).mean() * 100
                 
             # Volatilidade histórica (diferentes períodos)
-            returns = df['close'].pct_change().fillna(0)
+            returns = df['valor_fechamento'].pct_change().fillna(0)
             vol_hist_20 = returns.rolling(20).std() * 100 if len(returns) >= 20 else None
             vol_hist_50 = returns.rolling(50).std() * 100 if len(returns) >= 50 else None
             vol_hist_100 = returns.rolling(100).std() * 100 if len(returns) >= 100 else None
@@ -275,9 +275,9 @@ class TradingLearner:
             # =================== SEÇÃO B: TENDÊNCIA & MOMENTUM ===================
             ema7 = df.get('ema7', pd.Series())
             ema21 = df.get('ema21', pd.Series())
-            ema50 = df.get('ema50', pd.Series()) if 'ema50' in df.columns else df['close'].ewm(span=50).mean()
-            ema100 = df.get('ema100', pd.Series()) if 'ema100' in df.columns else df['close'].ewm(span=100).mean()
-            ema200 = df.get('ema200', pd.Series()) if 'ema200' in df.columns else df['close'].ewm(span=200).mean()
+            ema50 = df.get('ema50', pd.Series()) if 'ema50' in df.columns else df['valor_fechamento'].ewm(span=50).mean()
+            ema100 = df.get('ema100', pd.Series()) if 'ema100' in df.columns else df['valor_fechamento'].ewm(span=100).mean()
+            ema200 = df.get('ema200', pd.Series()) if 'ema200' in df.columns else df['valor_fechamento'].ewm(span=200).mean()
             
             # Slopes de múltiplas EMAs
             slope_ema7 = None
@@ -443,11 +443,11 @@ class TradingLearner:
             
             # =================== SEÇÃO G: MOMENTUM MULTI-TIMEFRAME ===================
             # Momentum em diferentes períodos
-            mom_3 = ((price - df['close'].iloc[-4]) / df['close'].iloc[-4] * 100) if len(df) >= 4 else None
-            mom_5 = ((price - df['close'].iloc[-6]) / df['close'].iloc[-6] * 100) if len(df) >= 6 else None
-            mom_10 = ((price - df['close'].iloc[-11]) / df['close'].iloc[-11] * 100) if len(df) >= 11 else None
-            mom_20 = ((price - df['close'].iloc[-21]) / df['close'].iloc[-21] * 100) if len(df) >= 21 else None
-            mom_50 = ((price - df['close'].iloc[-51]) / df['close'].iloc[-51] * 100) if len(df) >= 51 else None
+            mom_3 = ((price - df['valor_fechamento'].iloc[-4]) / df['valor_fechamento'].iloc[-4] * 100) if len(df) >= 4 else None
+            mom_5 = ((price - df['valor_fechamento'].iloc[-6]) / df['valor_fechamento'].iloc[-6] * 100) if len(df) >= 6 else None
+            mom_10 = ((price - df['valor_fechamento'].iloc[-11]) / df['valor_fechamento'].iloc[-11] * 100) if len(df) >= 11 else None
+            mom_20 = ((price - df['valor_fechamento'].iloc[-21]) / df['valor_fechamento'].iloc[-21] * 100) if len(df) >= 21 else None
+            mom_50 = ((price - df['valor_fechamento'].iloc[-51]) / df['valor_fechamento'].iloc[-51] * 100) if len(df) >= 51 else None
             
             # Risco & Execução 
             leverage_eff = float(os.getenv("LEVERAGE", "5"))
@@ -727,6 +727,88 @@ class TradingLearner:
         except Exception as e:
             _log_global("LEARNER", f"Error getting stop probability: {e}", "WARN")
             return None, 0
+            
+    def get_pattern_classification_with_backoff(self, features_binned: dict) -> tuple:
+        """
+        Obtém classificação do padrão com backoff hierárquico.
+        Retorna (classification_dict, n_samples) ou (None, 0) se não encontrar dados suficientes
+        """
+        try:
+            # Tentar chave completa primeiro
+            full_key = self.generate_profile_key(features_binned)
+            
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (full_key,))
+            row = cursor.fetchone()
+            
+            if row:
+                n, stopped = row
+                n_wins = n - stopped
+                classification = self.classify_pattern_quality(n, n_wins)
+                return classification, n
+                
+            # Backoff para core bins se não tiver amostras suficientes
+            core_bins = features_binned.get("core_bins", {})
+            if core_bins:
+                core_key = self.generate_profile_key(core_bins)
+                cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (core_key,))
+                row = cursor.fetchone()
+                
+                if row:
+                    n, stopped = row
+                    n_wins = n - stopped
+                    classification = self.classify_pattern_quality(n, n_wins)
+                    return classification, n
+                    
+            # Backoff final apenas symbol + side
+            minimal_key = f"symbol:{features_binned.get('symbol')}|side:{features_binned.get('side')}"
+            cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (minimal_key,))
+            row = cursor.fetchone()
+            
+            if row:
+                n, stopped = row
+                n_wins = n - stopped
+                classification = self.classify_pattern_quality(n, n_wins)
+                return classification, n
+                
+            return None, 0
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error getting pattern classification: {e}", "WARN")
+            return None, 0
+            
+    def classify_pattern_quality(self, n: int, n_wins: int) -> dict:
+        """
+        Classifica qualidade do padrão baseado em estatísticas
+        """
+        win_rate = n_wins / n if n > 0 else 0.0
+        
+        # Determinar nível baseado na win rate
+        if win_rate >= 0.8:
+            level = "EXCELLENT"
+            emoji = "🟢"
+        elif win_rate >= 0.7:
+            level = "GOOD" 
+            emoji = "🔵"
+        elif win_rate >= 0.6:
+            level = "AVERAGE"
+            emoji = "🟡"
+        elif win_rate >= 0.5:
+            level = "POOR"
+            emoji = "🟠"
+        else:
+            level = "BAD"
+            emoji = "🔴"
+            
+        return {
+            "is_classified": True,
+            "level": level,
+            "name": f"{level.title()} Pattern",
+            "emoji": emoji,
+            "win_rate": win_rate,
+            "n_samples": n,
+            "n_wins": n_wins
+        }
             
     def record_entry(self, symbol: str, side: str, price: float, df: pd.DataFrame) -> dict:
         """
