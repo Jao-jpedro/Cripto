@@ -4967,57 +4967,57 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     confluence_score = 0
     max_score = 8  # Total de critérios avaliados
     
-    # CRITÉRIO 1: EMA básico mais gradiente forte (OBRIGATÓRIO)
+    # CRITÉRIO 1: EMA básico mais gradiente ULTRA forte (OBRIGATÓRIO)
     c1_ema = row.ema_short > row.ema_long
-    c1_grad = row.ema_short_grad_pct > 0.05  # Gradiente mais forte: 0.05% vs 0%
+    c1_grad = row.ema_short_grad_pct > 0.08  # ULTRA restritivo: 0.08% vs 0.05%
     c1 = c1_ema and c1_grad
     conds.append(c1)
     if c1:
         confluence_score += 1
-        reasons.append("✅ EMA7>EMA21+grad>0.05%")
+        reasons.append("✅ EMA7>EMA21+grad>0.08%")
     else:
         reasons.append("❌ EMA/gradiente fraco")
     
-    # CRITÉRIO 2: ATR mais conservador
-    c2 = (row.atr_pct >= 0.25) and (row.atr_pct <= 2.0)  # 0.25%-2.0% vs 0.15%-2.5%
+    # CRITÉRIO 2: ATR ULTRA conservador
+    c2 = (row.atr_pct >= 0.35) and (row.atr_pct <= 1.5)  # ULTRA restritivo: 0.35%-1.5% vs 0.25%-2.0%
     conds.append(c2)
     if c2:
         confluence_score += 1
-        reasons.append("✅ ATR saudável")
+        reasons.append("✅ ATR ultra-saudável")
     else:
         reasons.append("❌ ATR inadequado")
     
-    # CRITÉRIO 3: Rompimento mais significativo
-    c3 = row.valor_fechamento > (row.ema_short + 0.5 * row.atr)  # 0.5 ATR vs 0.25
+    # CRITÉRIO 3: Rompimento MUITO mais significativo
+    c3 = row.valor_fechamento > (row.ema_short + 0.8 * row.atr)  # ULTRA restritivo: 0.8 ATR vs 0.5
     conds.append(c3)
     if c3:
         confluence_score += 1
-        reasons.append("✅ Rompimento forte")
+        reasons.append("✅ Rompimento ultra-forte")
     else:
         reasons.append("❌ Rompimento fraco")
     
-    # CRITÉRIO 4: Volume mais exigente
+    # CRITÉRIO 4: Volume MUITO mais exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 1.5  # 1.5x vs 1.0x
+    c4 = volume_ratio > 2.0  # ULTRA restritivo: 2.0x vs 1.5x
     conds.append(c4)
     if c4:
         confluence_score += 1
-        reasons.append("✅ Volume alto")
+        reasons.append("✅ Volume ultra-alto")
     else:
         reasons.append("❌ Volume baixo")
     
-    # CRITÉRIO 5: RSI na zona ideal (se disponível)
+    # CRITÉRIO 5: RSI na zona ULTRA ideal (se disponível)
     if hasattr(row, 'rsi') and row.rsi is not None:
-        c5 = 35 <= row.rsi <= 65  # Zona ideal: evita extremos
+        c5 = 40 <= row.rsi <= 60  # ULTRA restritivo: zona 40-60 vs 35-65
         conds.append(c5)
         if c5:
             confluence_score += 1
-            reasons.append("✅ RSI ideal")
-        elif row.rsi > 25:  # Pelo menos não oversold
+            reasons.append("✅ RSI ultra-ideal")
+        elif 30 <= row.rsi <= 70:  # Zona aceitável mais restrita
             confluence_score += 0.5
             reasons.append("🔶 RSI aceitável")
         else:
-            reasons.append("❌ RSI muito baixo")
+            reasons.append("❌ RSI inadequado")
     else:
         confluence_score += 0.5  # Meio ponto se RSI não disponível
         reasons.append("⚪ RSI n/d")
@@ -5055,13 +5055,13 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     else:
         reasons.append("❌ Entrada tardia")
     
-    # DECISÃO FINAL: Requer 70% de confluência (5.6/8 = ~6 pontos)
-    MIN_CONFLUENCE = 5.5
+    # DECISÃO FINAL LONG: Requer 81% de confluência ULTRA-RESTRITIVA (6.5/8 pontos)
+    MIN_CONFLUENCE = 6.5
     is_valid = confluence_score >= MIN_CONFLUENCE
     
     # Raison d'être mais detalhada
     confluence_pct = (confluence_score / max_score) * 100
-    reason_summary = f"Confluência: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
+    reason_summary = f"Confluência ULTRA LONG: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
     top_reasons = reasons[:3]  # Mostrar top 3 razões
     
     if is_valid:
@@ -5090,57 +5090,57 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     confluence_score = 0
     max_score = 8  # Total de critérios avaliados
     
-    # CRITÉRIO 1: EMA básico mais gradiente forte (OBRIGATÓRIO)
+    # CRITÉRIO 1: EMA básico mais gradiente ULTRA forte (OBRIGATÓRIO)
     c1_ema = row.ema_short < row.ema_long
-    c1_grad = row.ema_short_grad_pct < -0.05  # Gradiente mais forte: -0.05% vs 0%
+    c1_grad = row.ema_short_grad_pct < -0.08  # ULTRA restritivo: -0.08% vs -0.05%
     c1 = c1_ema and c1_grad
     conds.append(c1)
     if c1:
         confluence_score += 1
-        reasons.append("✅ EMA7<EMA21+grad<-0.05%")
+        reasons.append("✅ EMA7<EMA21+grad<-0.08%")
     else:
         reasons.append("❌ EMA/gradiente fraco")
     
-    # CRITÉRIO 2: ATR mais conservador
-    c2 = (row.atr_pct >= 0.25) and (row.atr_pct <= 2.0)  # 0.25%-2.0% vs 0.15%-2.5%
+    # CRITÉRIO 2: ATR ULTRA conservador
+    c2 = (row.atr_pct >= 0.35) and (row.atr_pct <= 1.5)  # ULTRA restritivo: 0.35%-1.5% vs 0.25%-2.0%
     conds.append(c2)
     if c2:
         confluence_score += 1
-        reasons.append("✅ ATR saudável")
+        reasons.append("✅ ATR ultra-saudável")
     else:
         reasons.append("❌ ATR inadequado")
     
-    # CRITÉRIO 3: Rompimento mais significativo
-    c3 = row.valor_fechamento < (row.ema_short - 0.5 * row.atr)  # 0.5 ATR vs 0.25
+    # CRITÉRIO 3: Rompimento MUITO mais significativo
+    c3 = row.valor_fechamento < (row.ema_short - 0.8 * row.atr)  # ULTRA restritivo: 0.8 ATR vs 0.5
     conds.append(c3)
     if c3:
         confluence_score += 1
-        reasons.append("✅ Rompimento forte")
+        reasons.append("✅ Rompimento ultra-forte")
     else:
         reasons.append("❌ Rompimento fraco")
     
-    # CRITÉRIO 4: Volume mais exigente
+    # CRITÉRIO 4: Volume MUITO mais exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 1.5  # 1.5x vs 1.0x
+    c4 = volume_ratio > 2.0  # ULTRA restritivo: 2.0x vs 1.5x
     conds.append(c4)
     if c4:
         confluence_score += 1
-        reasons.append("✅ Volume alto")
+        reasons.append("✅ Volume ultra-alto")
     else:
         reasons.append("❌ Volume baixo")
     
-    # CRITÉRIO 5: RSI na zona ideal (se disponível)
+    # CRITÉRIO 5: RSI na zona ULTRA ideal (se disponível)
     if hasattr(row, 'rsi') and row.rsi is not None:
-        c5 = 35 <= row.rsi <= 65  # Zona ideal: evita extremos
+        c5 = 40 <= row.rsi <= 60  # ULTRA restritivo: zona 40-60 vs 35-65
         conds.append(c5)
         if c5:
             confluence_score += 1
-            reasons.append("✅ RSI ideal")
-        elif row.rsi < 75:  # Pelo menos não overbought
+            reasons.append("✅ RSI ultra-ideal")
+        elif 30 <= row.rsi <= 70:  # Zona aceitável mais restrita
             confluence_score += 0.5
             reasons.append("🔶 RSI aceitável")
         else:
-            reasons.append("❌ RSI muito alto")
+            reasons.append("❌ RSI inadequado")
     else:
         confluence_score += 0.5  # Meio ponto se RSI não disponível
         reasons.append("⚪ RSI n/d")
@@ -5178,13 +5178,13 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     else:
         reasons.append("❌ Entrada tardia")
     
-    # DECISÃO FINAL: Requer 70% de confluência (5.6/8 = ~6 pontos)
-    MIN_CONFLUENCE = 5.5
+    # DECISÃO FINAL SHORT: Requer 81% de confluência ULTRA-RESTRITIVA (6.5/8 pontos)
+    MIN_CONFLUENCE = 6.5
     is_valid = confluence_score >= MIN_CONFLUENCE
     
     # Raison d'être mais detalhada
     confluence_pct = (confluence_score / max_score) * 100
-    reason_summary = f"Confluência: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
+    reason_summary = f"Confluência ULTRA SHORT: {confluence_score:.1f}/{max_score} ({confluence_pct:.0f}%)"
     top_reasons = reasons[:3]  # Mostrar top 3 razões
     
     if is_valid:
