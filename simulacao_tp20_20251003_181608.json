@@ -1,0 +1,100 @@
+{
+  "timestamp": "20251003_181608",
+  "config": {
+    "initial_capital": 10.0,
+    "position_size": 1.0,
+    "take_profit_pct": 0.2,
+    "stop_loss_pct": 0.05,
+    "emergency_stop": -0.05,
+    "atr_min_pct": 0.7,
+    "atr_max_pct": 2.5,
+    "volume_multiplier": 2.5,
+    "gradient_min_long": 0.1,
+    "gradient_min_short": 0.12,
+    "ema_short": 7,
+    "ema_long": 21,
+    "atr_period": 14,
+    "vol_ma_period": 20
+  },
+  "results": {
+    "total_trades": 302,
+    "total_pnl": 6.250000000000013,
+    "final_capital": 16.250000000000014,
+    "roi_percent": 62.500000000000135,
+    "win_rate": 46.35761589403973
+  },
+  "comparison_with_tp10": {
+    "tp10_capital": 11.3,
+    "tp20_capital": 16.250000000000014,
+    "capital_difference": 4.9500000000000135,
+    "roi_difference": 49.500000000000135,
+    "better_strategy": "TP20"
+  },
+  "by_asset": [
+    {
+      "asset": "BTC",
+      "total_trades": 237,
+      "winning_trades": 114,
+      "losing_trades": 123,
+      "win_rate": 48.10126582278481,
+      "total_pnl": 7.2000000000000135,
+      "avg_win": 0.13421052631578947,
+      "avg_loss": -0.06585365853658538,
+      "profit_factor": 1.88888888888889,
+      "total_signals": 237,
+      "filter_efficiency": 2.7054794520547945
+    },
+    {
+      "asset": "ETH",
+      "total_trades": 30,
+      "winning_trades": 14,
+      "losing_trades": 16,
+      "win_rate": 46.666666666666664,
+      "total_pnl": 0.20000000000000007,
+      "avg_win": 0.10357142857142858,
+      "avg_loss": -0.078125,
+      "profit_factor": 1.1599999999999997,
+      "total_signals": 30,
+      "filter_efficiency": 0.3424657534246575
+    },
+    {
+      "asset": "SOL",
+      "total_trades": 11,
+      "winning_trades": 4,
+      "losing_trades": 7,
+      "win_rate": 36.36363636363637,
+      "total_pnl": -0.3,
+      "avg_win": 0.0875,
+      "avg_loss": -0.09285714285714287,
+      "profit_factor": 0.5384615384615383,
+      "total_signals": 11,
+      "filter_efficiency": 0.12557077625570776
+    },
+    {
+      "asset": "AVAX",
+      "total_trades": 9,
+      "winning_trades": 4,
+      "losing_trades": 5,
+      "win_rate": 44.44444444444444,
+      "total_pnl": -0.2,
+      "avg_win": 0.0875,
+      "avg_loss": -0.11000000000000001,
+      "profit_factor": 0.6363636363636362,
+      "total_signals": 9,
+      "filter_efficiency": 0.10273972602739725
+    },
+    {
+      "asset": "LINK",
+      "total_trades": 15,
+      "winning_trades": 4,
+      "losing_trades": 11,
+      "win_rate": 26.666666666666668,
+      "total_pnl": -0.65,
+      "avg_win": 0.125,
+      "avg_loss": -0.10454545454545454,
+      "profit_factor": 0.4347826086956522,
+      "total_signals": 15,
+      "filter_efficiency": 0.17123287671232876
+    }
+  ]
+}

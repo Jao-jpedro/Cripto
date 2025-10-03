@@ -1,0 +1,78 @@
+{
+  "timestamp": "20251003_181240",
+  "config": {
+    "initial_capital": 10.0,
+    "position_size": 1.0,
+    "take_profit_pct": 0.1,
+    "stop_loss_pct": 0.05,
+    "emergency_stop": -0.05,
+    "atr_min_pct": 0.7,
+    "atr_max_pct": 2.5,
+    "volume_multiplier": 2.5,
+    "gradient_min_long": 0.1,
+    "gradient_min_short": 0.12,
+    "ema_short": 7,
+    "ema_long": 21,
+    "atr_period": 14,
+    "vol_ma_period": 20
+  },
+  "results": {
+    "total_trades": 265,
+    "total_pnl": 1.2999999999999998,
+    "final_capital": 11.3,
+    "roi_percent": 12.999999999999998,
+    "win_rate": 50.943396226415096
+  },
+  "by_asset": [
+    {
+      "asset": "BTC",
+      "total_trades": 193,
+      "winning_trades": 103,
+      "losing_trades": 90,
+      "win_rate": 53.36787564766839,
+      "total_pnl": 1.4999999999999996,
+      "total_signals": 193,
+      "filter_efficiency": 2.2031963470319638
+    },
+    {
+      "asset": "ETH",
+      "total_trades": 19,
+      "winning_trades": 10,
+      "losing_trades": 9,
+      "win_rate": 52.63157894736842,
+      "total_pnl": 0.35,
+      "total_signals": 19,
+      "filter_efficiency": 0.2168949771689498
+    },
+    {
+      "asset": "SOL",
+      "total_trades": 17,
+      "winning_trades": 8,
+      "losing_trades": 9,
+      "win_rate": 47.05882352941176,
+      "total_pnl": -0.15000000000000002,
+      "total_signals": 17,
+      "filter_efficiency": 0.19406392694063926
+    },
+    {
+      "asset": "AVAX",
+      "total_trades": 14,
+      "winning_trades": 5,
+      "losing_trades": 9,
+      "win_rate": 35.714285714285715,
+      "total_pnl": -0.15000000000000002,
+      "total_signals": 14,
+      "filter_efficiency": 0.15981735159817353
+    },
+    {
+      "asset": "LINK",
+      "total_trades": 22,
+      "winning_trades": 9,
+      "losing_trades": 13,
+      "win_rate": 40.909090909090914,
+      "total_pnl": -0.25,
+      "total_signals": 22,
+      "filter_efficiency": 0.2511415525114155
+    }
+  ]
+}

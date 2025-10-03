@@ -1,0 +1,98 @@
+{
+  "timestamp": "20251003_181832",
+  "verification": "same_trades_count_confirmed",
+  "tp10": {
+    "total_trades": 240,
+    "total_pnl": 0.05000000000000035,
+    "capital_final": 10.05,
+    "roi": 0.5000000000000034,
+    "win_rate": 51.41523941523942,
+    "by_asset": [
+      {
+        "asset": "BTC",
+        "total_trades": 185,
+        "total_pnl": -0.4499999999999997,
+        "win_rate": 41.08108108108108,
+        "signals": 185
+      },
+      {
+        "asset": "ETH",
+        "total_trades": 18,
+        "total_pnl": 0.05,
+        "win_rate": 55.55555555555556,
+        "signals": 18
+      },
+      {
+        "asset": "SOL",
+        "total_trades": 13,
+        "total_pnl": 0.0,
+        "win_rate": 46.15384615384615,
+        "signals": 13
+      },
+      {
+        "asset": "AVAX",
+        "total_trades": 14,
+        "total_pnl": 0.35000000000000003,
+        "win_rate": 64.28571428571429,
+        "signals": 14
+      },
+      {
+        "asset": "LINK",
+        "total_trades": 10,
+        "total_pnl": 0.1,
+        "win_rate": 50.0,
+        "signals": 10
+      }
+    ]
+  },
+  "tp20": {
+    "total_trades": 240,
+    "total_pnl": 0.44999999999999896,
+    "capital_final": 10.45,
+    "roi": 4.499999999999989,
+    "win_rate": 49.33115533115533,
+    "by_asset": [
+      {
+        "asset": "BTC",
+        "total_trades": 185,
+        "total_pnl": -0.30000000000000115,
+        "win_rate": 36.21621621621622,
+        "signals": 185
+      },
+      {
+        "asset": "ETH",
+        "total_trades": 18,
+        "total_pnl": -0.3,
+        "win_rate": 50.0,
+        "signals": 18
+      },
+      {
+        "asset": "SOL",
+        "total_trades": 13,
+        "total_pnl": 0.09999999999999998,
+        "win_rate": 46.15384615384615,
+        "signals": 13
+      },
+      {
+        "asset": "AVAX",
+        "total_trades": 14,
+        "total_pnl": 0.6500000000000001,
+        "win_rate": 64.28571428571429,
+        "signals": 14
+      },
+      {
+        "asset": "LINK",
+        "total_trades": 10,
+        "total_pnl": 0.30000000000000004,
+        "win_rate": 50.0,
+        "signals": 10
+      }
+    ]
+  },
+  "differences": {
+    "capital": 0.3999999999999986,
+    "roi": 3.999999999999986,
+    "win_rate": -2.0840840840840897,
+    "better_strategy": "TP20"
+  }
+}
