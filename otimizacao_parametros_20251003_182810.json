@@ -1,0 +1,2891 @@
+{
+  "timestamp": "20251003_182810",
+  "best_result": {
+    "roi": 2190.0000000000023,
+    "final_capital": 229.00000000000023,
+    "total_pnl": 219.00000000000023,
+    "total_trades": 50606,
+    "win_rate": 48.711615223491286,
+    "asset_results": [
+      {
+        "asset": "BTC",
+        "trades": 2882,
+        "pnl": 18.400000000000052,
+        "signals": 3451
+      },
+      {
+        "asset": "ETH",
+        "trades": 4827,
+        "pnl": 25.50000000000014,
+        "signals": 5406
+      },
+      {
+        "asset": "SOL",
+        "trades": 5722,
+        "pnl": 22.2000000000001,
+        "signals": 6350
+      },
+      {
+        "asset": "AVAX",
+        "trades": 6032,
+        "pnl": 19.200000000000077,
+        "signals": 6565
+      },
+      {
+        "asset": "LINK",
+        "trades": 5942,
+        "pnl": 1.9999999999999956,
+        "signals": 6382
+      },
+      {
+        "asset": "ADA",
+        "trades": 5679,
+        "pnl": 15.300000000000045,
+        "signals": 6098
+      },
+      {
+        "asset": "DOGE",
+        "trades": 5802,
+        "pnl": 28.200000000000156,
+        "signals": 6237
+      },
+      {
+        "asset": "XRP",
+        "trades": 4824,
+        "pnl": 34.3999999999997,
+        "signals": 5262
+      },
+      {
+        "asset": "BNB",
+        "trades": 3558,
+        "pnl": 33.39999999999995,
+        "signals": 4088
+      },
+      {
+        "asset": "LTC",
+        "trades": 5338,
+        "pnl": 20.400000000000038,
+        "signals": 5854
+      }
+    ],
+    "params": {
+      "initial_capital": 10.0,
+      "position_size": 1.0,
+      "emergency_stop": -0.05,
+      "ema_short": 7,
+      "ema_long": 21,
+      "atr_period": 14,
+      "vol_ma_period": 20,
+      "take_profit_pct": 0.3,
+      "stop_loss_pct": 0.1,
+      "atr_min_pct": 0.5,
+      "atr_max_pct": 3.0,
+      "volume_multiplier": 3.0,
+      "gradient_min_long": 0.08,
+      "gradient_min_short": 0.12,
+      "breakout_atr_mult": 0.8,
+      "rsi_min": "20",
+      "rsi_max": "70",
+      "min_confluence": "3"
+    }
+  },
+  "best_params": {
+    "initial_capital": 10.0,
+    "position_size": 1.0,
+    "emergency_stop": -0.05,
+    "ema_short": 7,
+    "ema_long": 21,
+    "atr_period": 14,
+    "vol_ma_period": 20,
+    "take_profit_pct": 0.3,
+    "stop_loss_pct": 0.1,
+    "atr_min_pct": 0.5,
+    "atr_max_pct": 3.0,
+    "volume_multiplier": 3.0,
+    "gradient_min_long": 0.08,
+    "gradient_min_short": 0.12,
+    "breakout_atr_mult": 0.8,
+    "rsi_min": "20",
+    "rsi_max": "70",
+    "min_confluence": "3"
+  },
+  "top_5_results": [
+    {
+      "roi": 2190.0000000000023,
+      "final_capital": 229.00000000000023,
+      "total_pnl": 219.00000000000023,
+      "total_trades": 50606,
+      "win_rate": 48.711615223491286,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 2882,
+          "pnl": 18.400000000000052,
+          "signals": 3451
+        },
+        {
+          "asset": "ETH",
+          "trades": 4827,
+          "pnl": 25.50000000000014,
+          "signals": 5406
+        },
+        {
+          "asset": "SOL",
+          "trades": 5722,
+          "pnl": 22.2000000000001,
+          "signals": 6350
+        },
+        {
+          "asset": "AVAX",
+          "trades": 6032,
+          "pnl": 19.200000000000077,
+          "signals": 6565
+        },
+        {
+          "asset": "LINK",
+          "trades": 5942,
+          "pnl": 1.9999999999999956,
+          "signals": 6382
+        },
+        {
+          "asset": "ADA",
+          "trades": 5679,
+          "pnl": 15.300000000000045,
+          "signals": 6098
+        },
+        {
+          "asset": "DOGE",
+          "trades": 5802,
+          "pnl": 28.200000000000156,
+          "signals": 6237
+        },
+        {
+          "asset": "XRP",
+          "trades": 4824,
+          "pnl": 34.3999999999997,
+          "signals": 5262
+        },
+        {
+          "asset": "BNB",
+          "trades": 3558,
+          "pnl": 33.39999999999995,
+          "signals": 4088
+        },
+        {
+          "asset": "LTC",
+          "trades": 5338,
+          "pnl": 20.400000000000038,
+          "signals": 5854
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.3,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": "20",
+        "rsi_max": "70",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": 2147.0,
+      "final_capital": 224.7,
+      "total_pnl": 214.7,
+      "total_trades": 55263,
+      "win_rate": 48.9043302028482,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 3380,
+          "pnl": 24.000000000000053,
+          "signals": 4086
+        },
+        {
+          "asset": "ETH",
+          "trades": 5320,
+          "pnl": 28.59999999999992,
+          "signals": 5994
+        },
+        {
+          "asset": "SOL",
+          "trades": 6164,
+          "pnl": 15.400000000000102,
+          "signals": 6848
+        },
+        {
+          "asset": "AVAX",
+          "trades": 6422,
+          "pnl": 23.599999999999913,
+          "signals": 7005
+        },
+        {
+          "asset": "LINK",
+          "trades": 6386,
+          "pnl": 21.79999999999994,
+          "signals": 6901
+        },
+        {
+          "asset": "ADA",
+          "trades": 6148,
+          "pnl": 14.20000000000003,
+          "signals": 6627
+        },
+        {
+          "asset": "DOGE",
+          "trades": 6257,
+          "pnl": 32.8999999999999,
+          "signals": 6725
+        },
+        {
+          "asset": "XRP",
+          "trades": 5304,
+          "pnl": 23.999999999999872,
+          "signals": 5798
+        },
+        {
+          "asset": "BNB",
+          "trades": 4093,
+          "pnl": 14.100000000000133,
+          "signals": 4721
+        },
+        {
+          "asset": "LTC",
+          "trades": 5789,
+          "pnl": 16.10000000000013,
+          "signals": 6387
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.3,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": 20,
+        "rsi_max": 80,
+        "min_confluence": 3
+      }
+    },
+    {
+      "roi": 1912.9999999999857,
+      "final_capital": 201.29999999999856,
+      "total_pnl": 191.29999999999856,
+      "total_trades": 55263,
+      "win_rate": 48.9043302028482,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 3380,
+          "pnl": 22.34999999999971,
+          "signals": 4086
+        },
+        {
+          "asset": "ETH",
+          "trades": 5320,
+          "pnl": 25.699999999999783,
+          "signals": 5994
+        },
+        {
+          "asset": "SOL",
+          "trades": 6164,
+          "pnl": 15.599999999999914,
+          "signals": 6848
+        },
+        {
+          "asset": "AVAX",
+          "trades": 6422,
+          "pnl": 17.999999999999883,
+          "signals": 7005
+        },
+        {
+          "asset": "LINK",
+          "trades": 6386,
+          "pnl": 16.899999999999903,
+          "signals": 6901
+        },
+        {
+          "asset": "ADA",
+          "trades": 6148,
+          "pnl": 11.900000000000011,
+          "signals": 6627
+        },
+        {
+          "asset": "DOGE",
+          "trades": 6257,
+          "pnl": 26.399999999999807,
+          "signals": 6725
+        },
+        {
+          "asset": "XRP",
+          "trades": 5304,
+          "pnl": 21.14999999999983,
+          "signals": 5798
+        },
+        {
+          "asset": "BNB",
+          "trades": 4093,
+          "pnl": 17.149999999999835,
+          "signals": 4721
+        },
+        {
+          "asset": "LTC",
+          "trades": 5789,
+          "pnl": 16.14999999999989,
+          "signals": 6387
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": 20,
+        "rsi_max": 80,
+        "min_confluence": 3
+      }
+    },
+    {
+      "roi": 1769.9999999999905,
+      "final_capital": 186.99999999999903,
+      "total_pnl": 176.99999999999903,
+      "total_trades": 42344,
+      "win_rate": 47.569903646325336,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 1815,
+          "pnl": 16.25000000000006,
+          "signals": 2113
+        },
+        {
+          "asset": "ETH",
+          "trades": 3909,
+          "pnl": 15.10000000000001,
+          "signals": 4472
+        },
+        {
+          "asset": "SOL",
+          "trades": 4960,
+          "pnl": 33.54999999999978,
+          "signals": 5661
+        },
+        {
+          "asset": "AVAX",
+          "trades": 5428,
+          "pnl": 19.849999999999653,
+          "signals": 6004
+        },
+        {
+          "asset": "LINK",
+          "trades": 5300,
+          "pnl": 19.59999999999962,
+          "signals": 5826
+        },
+        {
+          "asset": "ADA",
+          "trades": 4941,
+          "pnl": 1.1500000000000057,
+          "signals": 5391
+        },
+        {
+          "asset": "DOGE",
+          "trades": 5132,
+          "pnl": 31.749999999999694,
+          "signals": 5622
+        },
+        {
+          "asset": "XRP",
+          "trades": 3952,
+          "pnl": 16.65000000000006,
+          "signals": 4379
+        },
+        {
+          "asset": "BNB",
+          "trades": 2431,
+          "pnl": 14.400000000000057,
+          "signals": 2761
+        },
+        {
+          "asset": "LTC",
+          "trades": 4476,
+          "pnl": 8.700000000000085,
+          "signals": 4941
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.25,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": "30",
+        "rsi_max": "75",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": 836.6000000000012,
+      "final_capital": 93.66000000000012,
+      "total_pnl": 83.66000000000012,
+      "total_trades": 34056,
+      "win_rate": 46.949142588677475,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 1183,
+          "pnl": 8.729999999999992,
+          "signals": 1209
+        },
+        {
+          "asset": "ETH",
+          "trades": 2910,
+          "pnl": 8.549999999999985,
+          "signals": 2999
+        },
+        {
+          "asset": "SOL",
+          "trades": 3951,
+          "pnl": 8.930000000000001,
+          "signals": 4044
+        },
+        {
+          "asset": "AVAX",
+          "trades": 4794,
+          "pnl": 13.939999999999994,
+          "signals": 4897
+        },
+        {
+          "asset": "LINK",
+          "trades": 4588,
+          "pnl": 10.610000000000053,
+          "signals": 4683
+        },
+        {
+          "asset": "ADA",
+          "trades": 4139,
+          "pnl": 5.890000000000019,
+          "signals": 4205
+        },
+        {
+          "asset": "DOGE",
+          "trades": 4469,
+          "pnl": 7.56,
+          "signals": 4547
+        },
+        {
+          "asset": "XRP",
+          "trades": 2959,
+          "pnl": 4.260000000000037,
+          "signals": 3008
+        },
+        {
+          "asset": "BNB",
+          "trades": 1636,
+          "pnl": 2.8300000000000187,
+          "signals": 1680
+        },
+        {
+          "asset": "LTC",
+          "trades": 3427,
+          "pnl": 12.360000000000031,
+          "signals": 3503
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "30",
+        "rsi_max": "80",
+        "min_confluence": "3"
+      }
+    }
+  ],
+  "all_results": [
+    {
+      "roi": 387.00000000000034,
+      "final_capital": 48.70000000000003,
+      "total_pnl": 38.70000000000003,
+      "total_trades": 7561,
+      "win_rate": 50.019838645681794,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 359,
+          "pnl": -0.35000000000000103,
+          "signals": 359
+        },
+        {
+          "asset": "ETH",
+          "trades": 783,
+          "pnl": 8.399999999999991,
+          "signals": 785
+        },
+        {
+          "asset": "SOL",
+          "trades": 1010,
+          "pnl": 4.250000000000011,
+          "signals": 1010
+        },
+        {
+          "asset": "AVAX",
+          "trades": 1002,
+          "pnl": 0.6999999999999957,
+          "signals": 1004
+        },
+        {
+          "asset": "LINK",
+          "trades": 974,
+          "pnl": 7.8500000000000165,
+          "signals": 975
+        },
+        {
+          "asset": "ADA",
+          "trades": 777,
+          "pnl": 4.450000000000003,
+          "signals": 781
+        },
+        {
+          "asset": "DOGE",
+          "trades": 886,
+          "pnl": 2.3000000000000096,
+          "signals": 889
+        },
+        {
+          "asset": "XRP",
+          "trades": 648,
+          "pnl": 4.30000000000001,
+          "signals": 649
+        },
+        {
+          "asset": "BNB",
+          "trades": 465,
+          "pnl": 2.7999999999999994,
+          "signals": 468
+        },
+        {
+          "asset": "LTC",
+          "trades": 657,
+          "pnl": 4.0,
+          "signals": 662
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": 25,
+        "rsi_max": 75,
+        "min_confluence": 4
+      }
+    },
+    {
+      "roi": 381.5,
+      "final_capital": 48.15,
+      "total_pnl": 38.15,
+      "total_trades": 7561,
+      "win_rate": 49.027906361592386,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 359,
+          "pnl": -2.2500000000000058,
+          "signals": 359
+        },
+        {
+          "asset": "ETH",
+          "trades": 783,
+          "pnl": 8.0,
+          "signals": 785
+        },
+        {
+          "asset": "SOL",
+          "trades": 1010,
+          "pnl": 7.5500000000000025,
+          "signals": 1010
+        },
+        {
+          "asset": "AVAX",
+          "trades": 1002,
+          "pnl": 1.3999999999999924,
+          "signals": 1004
+        },
+        {
+          "asset": "LINK",
+          "trades": 974,
+          "pnl": 7.100000000000011,
+          "signals": 975
+        },
+        {
+          "asset": "ADA",
+          "trades": 777,
+          "pnl": 4.499999999999997,
+          "signals": 781
+        },
+        {
+          "asset": "DOGE",
+          "trades": 886,
+          "pnl": 0.9999999999999993,
+          "signals": 889
+        },
+        {
+          "asset": "XRP",
+          "trades": 648,
+          "pnl": 4.850000000000004,
+          "signals": 649
+        },
+        {
+          "asset": "BNB",
+          "trades": 465,
+          "pnl": 5.499999999999999,
+          "signals": 468
+        },
+        {
+          "asset": "LTC",
+          "trades": 657,
+          "pnl": 0.4999999999999976,
+          "signals": 662
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.3,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": 25,
+        "rsi_max": 75,
+        "min_confluence": 4
+      }
+    },
+    {
+      "roi": 226.5000000000002,
+      "final_capital": 32.65000000000002,
+      "total_pnl": 22.65000000000002,
+      "total_trades": 7561,
+      "win_rate": 48.81629414098664,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 359,
+          "pnl": -0.8399999999999999,
+          "signals": 359
+        },
+        {
+          "asset": "ETH",
+          "trades": 783,
+          "pnl": 3.830000000000001,
+          "signals": 785
+        },
+        {
+          "asset": "SOL",
+          "trades": 1010,
+          "pnl": 3.360000000000015,
+          "signals": 1010
+        },
+        {
+          "asset": "AVAX",
+          "trades": 1002,
+          "pnl": 1.6999999999999937,
+          "signals": 1004
+        },
+        {
+          "asset": "LINK",
+          "trades": 974,
+          "pnl": 1.2500000000000024,
+          "signals": 975
+        },
+        {
+          "asset": "ADA",
+          "trades": 777,
+          "pnl": 3.3699999999999948,
+          "signals": 781
+        },
+        {
+          "asset": "DOGE",
+          "trades": 886,
+          "pnl": 1.7200000000000015,
+          "signals": 889
+        },
+        {
+          "asset": "XRP",
+          "trades": 648,
+          "pnl": 3.6500000000000017,
+          "signals": 649
+        },
+        {
+          "asset": "BNB",
+          "trades": 465,
+          "pnl": 3.770000000000003,
+          "signals": 468
+        },
+        {
+          "asset": "LTC",
+          "trades": 657,
+          "pnl": 0.8400000000000061,
+          "signals": 662
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": 25,
+        "rsi_max": 75,
+        "min_confluence": 4
+      }
+    },
+    {
+      "roi": 3.0000000000000004,
+      "final_capital": 10.3,
+      "total_pnl": 0.30000000000000004,
+      "total_trades": 7,
+      "win_rate": 71.42857142857143,
+      "asset_results": [
+        {
+          "asset": "LINK",
+          "trades": 7,
+          "pnl": 0.30000000000000004,
+          "signals": 7
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.12,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": 30,
+        "rsi_max": 70,
+        "min_confluence": 5
+      }
+    },
+    {
+      "roi": 1912.9999999999857,
+      "final_capital": 201.29999999999856,
+      "total_pnl": 191.29999999999856,
+      "total_trades": 55263,
+      "win_rate": 48.9043302028482,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 3380,
+          "pnl": 22.34999999999971,
+          "signals": 4086
+        },
+        {
+          "asset": "ETH",
+          "trades": 5320,
+          "pnl": 25.699999999999783,
+          "signals": 5994
+        },
+        {
+          "asset": "SOL",
+          "trades": 6164,
+          "pnl": 15.599999999999914,
+          "signals": 6848
+        },
+        {
+          "asset": "AVAX",
+          "trades": 6422,
+          "pnl": 17.999999999999883,
+          "signals": 7005
+        },
+        {
+          "asset": "LINK",
+          "trades": 6386,
+          "pnl": 16.899999999999903,
+          "signals": 6901
+        },
+        {
+          "asset": "ADA",
+          "trades": 6148,
+          "pnl": 11.900000000000011,
+          "signals": 6627
+        },
+        {
+          "asset": "DOGE",
+          "trades": 6257,
+          "pnl": 26.399999999999807,
+          "signals": 6725
+        },
+        {
+          "asset": "XRP",
+          "trades": 5304,
+          "pnl": 21.14999999999983,
+          "signals": 5798
+        },
+        {
+          "asset": "BNB",
+          "trades": 4093,
+          "pnl": 17.149999999999835,
+          "signals": 4721
+        },
+        {
+          "asset": "LTC",
+          "trades": 5789,
+          "pnl": 16.14999999999989,
+          "signals": 6387
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": 20,
+        "rsi_max": 80,
+        "min_confluence": 3
+      }
+    },
+    {
+      "roi": 207.69999999999982,
+      "final_capital": 30.769999999999982,
+      "total_pnl": 20.769999999999982,
+      "total_trades": 7561,
+      "win_rate": 50.019838645681794,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 359,
+          "pnl": 1.0699999999999998,
+          "signals": 359
+        },
+        {
+          "asset": "ETH",
+          "trades": 783,
+          "pnl": 4.089999999999996,
+          "signals": 785
+        },
+        {
+          "asset": "SOL",
+          "trades": 1010,
+          "pnl": 1.6599999999999937,
+          "signals": 1010
+        },
+        {
+          "asset": "AVAX",
+          "trades": 1002,
+          "pnl": -0.8400000000000032,
+          "signals": 1004
+        },
+        {
+          "asset": "LINK",
+          "trades": 974,
+          "pnl": 3.3199999999999936,
+          "signals": 975
+        },
+        {
+          "asset": "ADA",
+          "trades": 777,
+          "pnl": 3.8900000000000015,
+          "signals": 781
+        },
+        {
+          "asset": "DOGE",
+          "trades": 886,
+          "pnl": 0.35999999999999643,
+          "signals": 889
+        },
+        {
+          "asset": "XRP",
+          "trades": 648,
+          "pnl": 2.1199999999999966,
+          "signals": 649
+        },
+        {
+          "asset": "BNB",
+          "trades": 465,
+          "pnl": 2.2299999999999986,
+          "signals": 468
+        },
+        {
+          "asset": "LTC",
+          "trades": 657,
+          "pnl": 2.8700000000000028,
+          "signals": 662
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.15,
+        "stop_loss_pct": 0.07,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": 25,
+        "rsi_max": 75,
+        "min_confluence": 4
+      }
+    },
+    {
+      "roi": 1.6,
+      "final_capital": 10.16,
+      "total_pnl": 0.16,
+      "total_trades": 7,
+      "win_rate": 71.42857142857143,
+      "asset_results": [
+        {
+          "asset": "LINK",
+          "trades": 7,
+          "pnl": 0.16,
+          "signals": 7
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.1,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.12,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": 30,
+        "rsi_max": 70,
+        "min_confluence": 5
+      }
+    },
+    {
+      "roi": 2147.0,
+      "final_capital": 224.7,
+      "total_pnl": 214.7,
+      "total_trades": 55263,
+      "win_rate": 48.9043302028482,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 3380,
+          "pnl": 24.000000000000053,
+          "signals": 4086
+        },
+        {
+          "asset": "ETH",
+          "trades": 5320,
+          "pnl": 28.59999999999992,
+          "signals": 5994
+        },
+        {
+          "asset": "SOL",
+          "trades": 6164,
+          "pnl": 15.400000000000102,
+          "signals": 6848
+        },
+        {
+          "asset": "AVAX",
+          "trades": 6422,
+          "pnl": 23.599999999999913,
+          "signals": 7005
+        },
+        {
+          "asset": "LINK",
+          "trades": 6386,
+          "pnl": 21.79999999999994,
+          "signals": 6901
+        },
+        {
+          "asset": "ADA",
+          "trades": 6148,
+          "pnl": 14.20000000000003,
+          "signals": 6627
+        },
+        {
+          "asset": "DOGE",
+          "trades": 6257,
+          "pnl": 32.8999999999999,
+          "signals": 6725
+        },
+        {
+          "asset": "XRP",
+          "trades": 5304,
+          "pnl": 23.999999999999872,
+          "signals": 5798
+        },
+        {
+          "asset": "BNB",
+          "trades": 4093,
+          "pnl": 14.100000000000133,
+          "signals": 4721
+        },
+        {
+          "asset": "LTC",
+          "trades": 5789,
+          "pnl": 16.10000000000013,
+          "signals": 6387
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.3,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": 20,
+        "rsi_max": 80,
+        "min_confluence": 3
+      }
+    },
+    {
+      "roi": 149.6,
+      "final_capital": 24.96,
+      "total_pnl": 14.96,
+      "total_trades": 460,
+      "win_rate": 40.0,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 14,
+          "pnl": 0.38,
+          "signals": 14
+        },
+        {
+          "asset": "ETH",
+          "trades": 34,
+          "pnl": 2.640000000000001,
+          "signals": 34
+        },
+        {
+          "asset": "SOL",
+          "trades": 56,
+          "pnl": 1.580000000000001,
+          "signals": 56
+        },
+        {
+          "asset": "AVAX",
+          "trades": 74,
+          "pnl": 1.959999999999999,
+          "signals": 74
+        },
+        {
+          "asset": "LINK",
+          "trades": 66,
+          "pnl": 2.020000000000001,
+          "signals": 66
+        },
+        {
+          "asset": "ADA",
+          "trades": 52,
+          "pnl": 1.0399999999999994,
+          "signals": 52
+        },
+        {
+          "asset": "DOGE",
+          "trades": 61,
+          "pnl": 2.01,
+          "signals": 61
+        },
+        {
+          "asset": "XRP",
+          "trades": 42,
+          "pnl": 0.5999999999999999,
+          "signals": 42
+        },
+        {
+          "asset": "BNB",
+          "trades": 21,
+          "pnl": 1.2499999999999998,
+          "signals": 21
+        },
+        {
+          "asset": "LTC",
+          "trades": 40,
+          "pnl": 1.4799999999999995,
+          "signals": 40
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.25,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": "30",
+        "rsi_max": "80",
+        "min_confluence": "5"
+      }
+    },
+    {
+      "roi": 236.00000000000009,
+      "final_capital": 33.60000000000001,
+      "total_pnl": 23.60000000000001,
+      "total_trades": 7633,
+      "win_rate": 50.24236866238701,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 499,
+          "pnl": 5.199999999999998,
+          "signals": 500
+        },
+        {
+          "asset": "ETH",
+          "trades": 782,
+          "pnl": 3.5999999999999974,
+          "signals": 783
+        },
+        {
+          "asset": "SOL",
+          "trades": 938,
+          "pnl": 5.30000000000001,
+          "signals": 939
+        },
+        {
+          "asset": "AVAX",
+          "trades": 968,
+          "pnl": 0.4999999999999965,
+          "signals": 970
+        },
+        {
+          "asset": "LINK",
+          "trades": 937,
+          "pnl": 4.0000000000000115,
+          "signals": 937
+        },
+        {
+          "asset": "ADA",
+          "trades": 734,
+          "pnl": -2.3999999999999986,
+          "signals": 736
+        },
+        {
+          "asset": "DOGE",
+          "trades": 837,
+          "pnl": 7.899999999999994,
+          "signals": 837
+        },
+        {
+          "asset": "XRP",
+          "trades": 674,
+          "pnl": -1.2000000000000002,
+          "signals": 674
+        },
+        {
+          "asset": "BNB",
+          "trades": 574,
+          "pnl": 0.19999999999999848,
+          "signals": 578
+        },
+        {
+          "asset": "LTC",
+          "trades": 690,
+          "pnl": 0.5000000000000002,
+          "signals": 691
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": "25",
+        "rsi_max": "75",
+        "min_confluence": "4"
+      }
+    },
+    {
+      "roi": -7.5999999999999925,
+      "final_capital": 9.24,
+      "total_pnl": -0.7599999999999993,
+      "total_trades": 1054,
+      "win_rate": 50.664136622390885,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 83,
+          "pnl": 0.5900000000000001,
+          "signals": 83
+        },
+        {
+          "asset": "ETH",
+          "trades": 117,
+          "pnl": -0.5299999999999997,
+          "signals": 117
+        },
+        {
+          "asset": "SOL",
+          "trades": 127,
+          "pnl": 1.95,
+          "signals": 127
+        },
+        {
+          "asset": "AVAX",
+          "trades": 111,
+          "pnl": -1.51,
+          "signals": 111
+        },
+        {
+          "asset": "LINK",
+          "trades": 92,
+          "pnl": 1.32,
+          "signals": 92
+        },
+        {
+          "asset": "ADA",
+          "trades": 103,
+          "pnl": -3.39,
+          "signals": 103
+        },
+        {
+          "asset": "DOGE",
+          "trades": 115,
+          "pnl": 0.5499999999999999,
+          "signals": 115
+        },
+        {
+          "asset": "XRP",
+          "trades": 110,
+          "pnl": -1.3799999999999997,
+          "signals": 110
+        },
+        {
+          "asset": "BNB",
+          "trades": 112,
+          "pnl": 0.31999999999999995,
+          "signals": 112
+        },
+        {
+          "asset": "LTC",
+          "trades": 84,
+          "pnl": 1.3200000000000003,
+          "signals": 84
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.25,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": "20",
+        "rsi_max": "80",
+        "min_confluence": "5"
+      }
+    },
+    {
+      "roi": 10.500000000000002,
+      "final_capital": 11.05,
+      "total_pnl": 1.05,
+      "total_trades": 19,
+      "win_rate": 73.68421052631578,
+      "asset_results": [
+        {
+          "asset": "AVAX",
+          "trades": 8,
+          "pnl": 0.7,
+          "signals": 8
+        },
+        {
+          "asset": "LINK",
+          "trades": 11,
+          "pnl": 0.35000000000000003,
+          "signals": 11
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.15,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.12,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "30",
+        "rsi_max": "70",
+        "min_confluence": "5"
+      }
+    },
+    {
+      "roi": 105.6000000000006,
+      "final_capital": 20.56000000000006,
+      "total_pnl": 10.560000000000061,
+      "total_trades": 10095,
+      "win_rate": 50.81723625557206,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 327,
+          "pnl": -1.58,
+          "signals": 328
+        },
+        {
+          "asset": "ETH",
+          "trades": 837,
+          "pnl": 3.030000000000005,
+          "signals": 842
+        },
+        {
+          "asset": "SOL",
+          "trades": 1273,
+          "pnl": 13.430000000000016,
+          "signals": 1281
+        },
+        {
+          "asset": "AVAX",
+          "trades": 1488,
+          "pnl": 7.160000000000013,
+          "signals": 1501
+        },
+        {
+          "asset": "LINK",
+          "trades": 1383,
+          "pnl": -2.139999999999985,
+          "signals": 1398
+        },
+        {
+          "asset": "ADA",
+          "trades": 1201,
+          "pnl": -22.710000000000015,
+          "signals": 1211
+        },
+        {
+          "asset": "DOGE",
+          "trades": 1355,
+          "pnl": 0.9700000000000113,
+          "signals": 1363
+        },
+        {
+          "asset": "XRP",
+          "trades": 831,
+          "pnl": 12.630000000000022,
+          "signals": 833
+        },
+        {
+          "asset": "BNB",
+          "trades": 425,
+          "pnl": -4.5299999999999985,
+          "signals": 431
+        },
+        {
+          "asset": "LTC",
+          "trades": 975,
+          "pnl": 4.299999999999993,
+          "signals": 988
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.3,
+        "stop_loss_pct": 0.07,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.0,
+        "gradient_min_long": 0.12,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": "25",
+        "rsi_max": "75",
+        "min_confluence": "4"
+      }
+    },
+    {
+      "roi": 57.99999999999908,
+      "final_capital": 15.799999999999908,
+      "total_pnl": 5.799999999999908,
+      "total_trades": 43482,
+      "win_rate": 49.45264707235178,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 2277,
+          "pnl": 3.6500000000000035,
+          "signals": 2441
+        },
+        {
+          "asset": "ETH",
+          "trades": 4129,
+          "pnl": 17.899999999999917,
+          "signals": 4311
+        },
+        {
+          "asset": "SOL",
+          "trades": 4990,
+          "pnl": 0.24999999999999933,
+          "signals": 5129
+        },
+        {
+          "asset": "AVAX",
+          "trades": 5301,
+          "pnl": -3.099999999999996,
+          "signals": 5431
+        },
+        {
+          "asset": "LINK",
+          "trades": 5230,
+          "pnl": -6.299999999999987,
+          "signals": 5343
+        },
+        {
+          "asset": "ADA",
+          "trades": 4899,
+          "pnl": -10.050000000000013,
+          "signals": 5001
+        },
+        {
+          "asset": "DOGE",
+          "trades": 5046,
+          "pnl": -2.649999999999992,
+          "signals": 5130
+        },
+        {
+          "asset": "XRP",
+          "trades": 4077,
+          "pnl": -1.6999999999999742,
+          "signals": 4162
+        },
+        {
+          "asset": "BNB",
+          "trades": 2932,
+          "pnl": 1.3499999999999985,
+          "signals": 3076
+        },
+        {
+          "asset": "LTC",
+          "trades": 4601,
+          "pnl": 6.44999999999995,
+          "signals": 4722
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.1,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.12,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "30",
+        "rsi_max": "75",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": 230.49999999999952,
+      "final_capital": 33.049999999999955,
+      "total_pnl": 23.049999999999955,
+      "total_trades": 10449,
+      "win_rate": 47.97588285960379,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 519,
+          "pnl": -1.5500000000000032,
+          "signals": 520
+        },
+        {
+          "asset": "ETH",
+          "trades": 1084,
+          "pnl": 15.399999999999942,
+          "signals": 1086
+        },
+        {
+          "asset": "SOL",
+          "trades": 1303,
+          "pnl": 1.449999999999992,
+          "signals": 1304
+        },
+        {
+          "asset": "AVAX",
+          "trades": 1400,
+          "pnl": 3.099999999999997,
+          "signals": 1403
+        },
+        {
+          "asset": "LINK",
+          "trades": 1323,
+          "pnl": 7.849999999999994,
+          "signals": 1324
+        },
+        {
+          "asset": "ADA",
+          "trades": 1077,
+          "pnl": 1.0500000000000047,
+          "signals": 1082
+        },
+        {
+          "asset": "DOGE",
+          "trades": 1240,
+          "pnl": -1.1999999999999933,
+          "signals": 1243
+        },
+        {
+          "asset": "XRP",
+          "trades": 936,
+          "pnl": -3.8999999999999977,
+          "signals": 937
+        },
+        {
+          "asset": "BNB",
+          "trades": 641,
+          "pnl": 2.8500000000000076,
+          "signals": 644
+        },
+        {
+          "asset": "LTC",
+          "trades": 926,
+          "pnl": -1.9999999999999898,
+          "signals": 932
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.25,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": "20",
+        "rsi_max": "80",
+        "min_confluence": "4"
+      }
+    },
+    {
+      "roi": 526.000000000006,
+      "final_capital": 62.600000000000605,
+      "total_pnl": 52.600000000000605,
+      "total_trades": 42001,
+      "win_rate": 48.85359872383991,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 1786,
+          "pnl": -1.050000000000023,
+          "signals": 1908
+        },
+        {
+          "asset": "ETH",
+          "trades": 3899,
+          "pnl": 12.500000000000151,
+          "signals": 4110
+        },
+        {
+          "asset": "SOL",
+          "trades": 4941,
+          "pnl": 7.500000000000192,
+          "signals": 5134
+        },
+        {
+          "asset": "AVAX",
+          "trades": 5403,
+          "pnl": 8.450000000000008,
+          "signals": 5597
+        },
+        {
+          "asset": "LINK",
+          "trades": 5280,
+          "pnl": 3.8500000000001124,
+          "signals": 5464
+        },
+        {
+          "asset": "ADA",
+          "trades": 4916,
+          "pnl": 1.0500000000000018,
+          "signals": 5061
+        },
+        {
+          "asset": "DOGE",
+          "trades": 5081,
+          "pnl": -2.6499999999999306,
+          "signals": 5224
+        },
+        {
+          "asset": "XRP",
+          "trades": 3881,
+          "pnl": 14.300000000000065,
+          "signals": 3973
+        },
+        {
+          "asset": "BNB",
+          "trades": 2401,
+          "pnl": 3.1499999999999906,
+          "signals": 2534
+        },
+        {
+          "asset": "LTC",
+          "trades": 4413,
+          "pnl": 5.500000000000039,
+          "signals": 4565
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.15,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "25",
+        "rsi_max": "80",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": 2190.0000000000023,
+      "final_capital": 229.00000000000023,
+      "total_pnl": 219.00000000000023,
+      "total_trades": 50606,
+      "win_rate": 48.711615223491286,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 2882,
+          "pnl": 18.400000000000052,
+          "signals": 3451
+        },
+        {
+          "asset": "ETH",
+          "trades": 4827,
+          "pnl": 25.50000000000014,
+          "signals": 5406
+        },
+        {
+          "asset": "SOL",
+          "trades": 5722,
+          "pnl": 22.2000000000001,
+          "signals": 6350
+        },
+        {
+          "asset": "AVAX",
+          "trades": 6032,
+          "pnl": 19.200000000000077,
+          "signals": 6565
+        },
+        {
+          "asset": "LINK",
+          "trades": 5942,
+          "pnl": 1.9999999999999956,
+          "signals": 6382
+        },
+        {
+          "asset": "ADA",
+          "trades": 5679,
+          "pnl": 15.300000000000045,
+          "signals": 6098
+        },
+        {
+          "asset": "DOGE",
+          "trades": 5802,
+          "pnl": 28.200000000000156,
+          "signals": 6237
+        },
+        {
+          "asset": "XRP",
+          "trades": 4824,
+          "pnl": 34.3999999999997,
+          "signals": 5262
+        },
+        {
+          "asset": "BNB",
+          "trades": 3558,
+          "pnl": 33.39999999999995,
+          "signals": 4088
+        },
+        {
+          "asset": "LTC",
+          "trades": 5338,
+          "pnl": 20.400000000000038,
+          "signals": 5854
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.3,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": "20",
+        "rsi_max": "70",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": -32.7,
+      "final_capital": 6.73,
+      "total_pnl": -3.27,
+      "total_trades": 82,
+      "win_rate": 43.90243902439025,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 8,
+          "pnl": -0.95,
+          "signals": 8
+        },
+        {
+          "asset": "ETH",
+          "trades": 9,
+          "pnl": -0.27999999999999997,
+          "signals": 9
+        },
+        {
+          "asset": "SOL",
+          "trades": 9,
+          "pnl": -0.38,
+          "signals": 9
+        },
+        {
+          "asset": "AVAX",
+          "trades": 10,
+          "pnl": 0.95,
+          "signals": 10
+        },
+        {
+          "asset": "LINK",
+          "trades": 11,
+          "pnl": -0.71,
+          "signals": 11
+        },
+        {
+          "asset": "ADA",
+          "trades": 9,
+          "pnl": -0.8200000000000001,
+          "signals": 9
+        },
+        {
+          "asset": "DOGE",
+          "trades": 5,
+          "pnl": 0.38,
+          "signals": 5
+        },
+        {
+          "asset": "XRP",
+          "trades": 6,
+          "pnl": -0.52,
+          "signals": 6
+        },
+        {
+          "asset": "BNB",
+          "trades": 6,
+          "pnl": -0.020000000000000018,
+          "signals": 6
+        },
+        {
+          "asset": "LTC",
+          "trades": 9,
+          "pnl": -0.9199999999999999,
+          "signals": 9
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.3,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "30",
+        "rsi_max": "70",
+        "min_confluence": "5"
+      }
+    },
+    {
+      "roi": -98.2000000000001,
+      "final_capital": 0.17999999999998906,
+      "total_pnl": -9.820000000000011,
+      "total_trades": 5959,
+      "win_rate": 50.797113609666056,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 154,
+          "pnl": 0.2999999999999997,
+          "signals": 154
+        },
+        {
+          "asset": "ETH",
+          "trades": 463,
+          "pnl": -2.209999999999998,
+          "signals": 465
+        },
+        {
+          "asset": "SOL",
+          "trades": 789,
+          "pnl": 1.100000000000006,
+          "signals": 790
+        },
+        {
+          "asset": "AVAX",
+          "trades": 909,
+          "pnl": -4.760000000000017,
+          "signals": 912
+        },
+        {
+          "asset": "LINK",
+          "trades": 823,
+          "pnl": -2.4899999999999975,
+          "signals": 827
+        },
+        {
+          "asset": "ADA",
+          "trades": 720,
+          "pnl": -3.0600000000000023,
+          "signals": 720
+        },
+        {
+          "asset": "DOGE",
+          "trades": 798,
+          "pnl": 5.770000000000004,
+          "signals": 801
+        },
+        {
+          "asset": "XRP",
+          "trades": 499,
+          "pnl": 0.08999999999999526,
+          "signals": 500
+        },
+        {
+          "asset": "BNB",
+          "trades": 232,
+          "pnl": -2.4899999999999998,
+          "signals": 234
+        },
+        {
+          "asset": "LTC",
+          "trades": 572,
+          "pnl": -2.070000000000001,
+          "signals": 575
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.12,
+        "gradient_min_short": 0.12,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": "30",
+        "rsi_max": "70",
+        "min_confluence": "4"
+      }
+    },
+    {
+      "roi": -653.9999999999998,
+      "final_capital": -55.39999999999998,
+      "total_pnl": -65.39999999999998,
+      "total_trades": 34784,
+      "win_rate": 49.05991260349586,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 1366,
+          "pnl": -5.599999999999996,
+          "signals": 1417
+        },
+        {
+          "asset": "ETH",
+          "trades": 2987,
+          "pnl": -10.499999999999979,
+          "signals": 3167
+        },
+        {
+          "asset": "SOL",
+          "trades": 4035,
+          "pnl": -6.099999999999994,
+          "signals": 4243
+        },
+        {
+          "asset": "AVAX",
+          "trades": 4804,
+          "pnl": 1.1999999999999997,
+          "signals": 5032
+        },
+        {
+          "asset": "LINK",
+          "trades": 4569,
+          "pnl": 1.0999999999999999,
+          "signals": 4779
+        },
+        {
+          "asset": "ADA",
+          "trades": 4160,
+          "pnl": -21.600000000000037,
+          "signals": 4321
+        },
+        {
+          "asset": "DOGE",
+          "trades": 4518,
+          "pnl": -16.599999999999966,
+          "signals": 4695
+        },
+        {
+          "asset": "XRP",
+          "trades": 3075,
+          "pnl": -1.7000000000000006,
+          "signals": 3186
+        },
+        {
+          "asset": "BNB",
+          "trades": 1780,
+          "pnl": -3.200000000000002,
+          "signals": 1856
+        },
+        {
+          "asset": "LTC",
+          "trades": 3490,
+          "pnl": -2.4000000000000012,
+          "signals": 3638
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.1,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": "30",
+        "rsi_max": "80",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": 436.30000000000007,
+      "final_capital": 53.63,
+      "total_pnl": 43.63,
+      "total_trades": 5773,
+      "win_rate": 40.325653906114674,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 154,
+          "pnl": 0.07999999999999953,
+          "signals": 154
+        },
+        {
+          "asset": "ETH",
+          "trades": 505,
+          "pnl": 5.95,
+          "signals": 506
+        },
+        {
+          "asset": "SOL",
+          "trades": 731,
+          "pnl": 6.639999999999991,
+          "signals": 731
+        },
+        {
+          "asset": "AVAX",
+          "trades": 895,
+          "pnl": 7.060000000000002,
+          "signals": 897
+        },
+        {
+          "asset": "LINK",
+          "trades": 853,
+          "pnl": 4.420000000000027,
+          "signals": 853
+        },
+        {
+          "asset": "ADA",
+          "trades": 609,
+          "pnl": 3.440000000000001,
+          "signals": 610
+        },
+        {
+          "asset": "DOGE",
+          "trades": 784,
+          "pnl": 5.919999999999986,
+          "signals": 784
+        },
+        {
+          "asset": "XRP",
+          "trades": 498,
+          "pnl": 7.600000000000004,
+          "signals": 498
+        },
+        {
+          "asset": "BNB",
+          "trades": 219,
+          "pnl": 0.12999999999999892,
+          "signals": 220
+        },
+        {
+          "asset": "LTC",
+          "trades": 525,
+          "pnl": 2.3900000000000032,
+          "signals": 525
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": "30",
+        "rsi_max": "80",
+        "min_confluence": "4"
+      }
+    },
+    {
+      "roi": 836.6000000000012,
+      "final_capital": 93.66000000000012,
+      "total_pnl": 83.66000000000012,
+      "total_trades": 34056,
+      "win_rate": 46.949142588677475,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 1183,
+          "pnl": 8.729999999999992,
+          "signals": 1209
+        },
+        {
+          "asset": "ETH",
+          "trades": 2910,
+          "pnl": 8.549999999999985,
+          "signals": 2999
+        },
+        {
+          "asset": "SOL",
+          "trades": 3951,
+          "pnl": 8.930000000000001,
+          "signals": 4044
+        },
+        {
+          "asset": "AVAX",
+          "trades": 4794,
+          "pnl": 13.939999999999994,
+          "signals": 4897
+        },
+        {
+          "asset": "LINK",
+          "trades": 4588,
+          "pnl": 10.610000000000053,
+          "signals": 4683
+        },
+        {
+          "asset": "ADA",
+          "trades": 4139,
+          "pnl": 5.890000000000019,
+          "signals": 4205
+        },
+        {
+          "asset": "DOGE",
+          "trades": 4469,
+          "pnl": 7.56,
+          "signals": 4547
+        },
+        {
+          "asset": "XRP",
+          "trades": 2959,
+          "pnl": 4.260000000000037,
+          "signals": 3008
+        },
+        {
+          "asset": "BNB",
+          "trades": 1636,
+          "pnl": 2.8300000000000187,
+          "signals": 1680
+        },
+        {
+          "asset": "LTC",
+          "trades": 3427,
+          "pnl": 12.360000000000031,
+          "signals": 3503
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "30",
+        "rsi_max": "80",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": -266.20000000000005,
+      "final_capital": -16.620000000000005,
+      "total_pnl": -26.620000000000005,
+      "total_trades": 36834,
+      "win_rate": 49.97828093609166,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 1428,
+          "pnl": -2.1799999999999993,
+          "signals": 1484
+        },
+        {
+          "asset": "ETH",
+          "trades": 3491,
+          "pnl": -5.789999999999952,
+          "signals": 3597
+        },
+        {
+          "asset": "SOL",
+          "trades": 4503,
+          "pnl": -4.929999999999988,
+          "signals": 4606
+        },
+        {
+          "asset": "AVAX",
+          "trades": 4788,
+          "pnl": -12.280000000000012,
+          "signals": 4884
+        },
+        {
+          "asset": "LINK",
+          "trades": 4582,
+          "pnl": -7.600000000000015,
+          "signals": 4665
+        },
+        {
+          "asset": "ADA",
+          "trades": 4298,
+          "pnl": 4.279999999999999,
+          "signals": 4365
+        },
+        {
+          "asset": "DOGE",
+          "trades": 4458,
+          "pnl": 11.399999999999997,
+          "signals": 4522
+        },
+        {
+          "asset": "XRP",
+          "trades": 3325,
+          "pnl": -2.7700000000000204,
+          "signals": 3365
+        },
+        {
+          "asset": "BNB",
+          "trades": 2112,
+          "pnl": -5.060000000000022,
+          "signals": 2179
+        },
+        {
+          "asset": "LTC",
+          "trades": 3849,
+          "pnl": -1.689999999999999,
+          "signals": 3926
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.25,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.12,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "30",
+        "rsi_max": "70",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": -464.79999999999916,
+      "final_capital": -36.47999999999992,
+      "total_pnl": -46.47999999999992,
+      "total_trades": 7671,
+      "win_rate": 54.738625994003385,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 352,
+          "pnl": -6.109999999999994,
+          "signals": 353
+        },
+        {
+          "asset": "ETH",
+          "trades": 762,
+          "pnl": -9.749999999999977,
+          "signals": 764
+        },
+        {
+          "asset": "SOL",
+          "trades": 980,
+          "pnl": -4.519999999999979,
+          "signals": 981
+        },
+        {
+          "asset": "AVAX",
+          "trades": 1023,
+          "pnl": -10.50999999999997,
+          "signals": 1026
+        },
+        {
+          "asset": "LINK",
+          "trades": 974,
+          "pnl": -10.229999999999999,
+          "signals": 974
+        },
+        {
+          "asset": "ADA",
+          "trades": 835,
+          "pnl": 0.34000000000001535,
+          "signals": 837
+        },
+        {
+          "asset": "DOGE",
+          "trades": 905,
+          "pnl": 2.8099999999999885,
+          "signals": 908
+        },
+        {
+          "asset": "XRP",
+          "trades": 668,
+          "pnl": -1.620000000000004,
+          "signals": 669
+        },
+        {
+          "asset": "BNB",
+          "trades": 454,
+          "pnl": -5.96,
+          "signals": 456
+        },
+        {
+          "asset": "LTC",
+          "trades": 718,
+          "pnl": -0.9299999999999975,
+          "signals": 722
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.2,
+        "stop_loss_pct": 0.07,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 1.0,
+        "rsi_min": "20",
+        "rsi_max": "70",
+        "min_confluence": "4"
+      }
+    },
+    {
+      "roi": 1769.9999999999905,
+      "final_capital": 186.99999999999903,
+      "total_pnl": 176.99999999999903,
+      "total_trades": 42344,
+      "win_rate": 47.569903646325336,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 1815,
+          "pnl": 16.25000000000006,
+          "signals": 2113
+        },
+        {
+          "asset": "ETH",
+          "trades": 3909,
+          "pnl": 15.10000000000001,
+          "signals": 4472
+        },
+        {
+          "asset": "SOL",
+          "trades": 4960,
+          "pnl": 33.54999999999978,
+          "signals": 5661
+        },
+        {
+          "asset": "AVAX",
+          "trades": 5428,
+          "pnl": 19.849999999999653,
+          "signals": 6004
+        },
+        {
+          "asset": "LINK",
+          "trades": 5300,
+          "pnl": 19.59999999999962,
+          "signals": 5826
+        },
+        {
+          "asset": "ADA",
+          "trades": 4941,
+          "pnl": 1.1500000000000057,
+          "signals": 5391
+        },
+        {
+          "asset": "DOGE",
+          "trades": 5132,
+          "pnl": 31.749999999999694,
+          "signals": 5622
+        },
+        {
+          "asset": "XRP",
+          "trades": 3952,
+          "pnl": 16.65000000000006,
+          "signals": 4379
+        },
+        {
+          "asset": "BNB",
+          "trades": 2431,
+          "pnl": 14.400000000000057,
+          "signals": 2761
+        },
+        {
+          "asset": "LTC",
+          "trades": 4476,
+          "pnl": 8.700000000000085,
+          "signals": 4941
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.25,
+        "stop_loss_pct": 0.1,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": "30",
+        "rsi_max": "75",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": -0.4000000000000001,
+      "final_capital": 9.96,
+      "total_pnl": -0.04000000000000001,
+      "total_trades": 149,
+      "win_rate": 40.939597315436245,
+      "asset_results": [
+        {
+          "asset": "ETH",
+          "trades": 12,
+          "pnl": -0.32000000000000006,
+          "signals": 12
+        },
+        {
+          "asset": "SOL",
+          "trades": 16,
+          "pnl": -0.45000000000000007,
+          "signals": 16
+        },
+        {
+          "asset": "AVAX",
+          "trades": 26,
+          "pnl": 0.23,
+          "signals": 26
+        },
+        {
+          "asset": "LINK",
+          "trades": 25,
+          "pnl": 0.06000000000000005,
+          "signals": 25
+        },
+        {
+          "asset": "ADA",
+          "trades": 20,
+          "pnl": 0.21000000000000002,
+          "signals": 20
+        },
+        {
+          "asset": "DOGE",
+          "trades": 15,
+          "pnl": 0.05000000000000002,
+          "signals": 15
+        },
+        {
+          "asset": "XRP",
+          "trades": 14,
+          "pnl": 0.21000000000000005,
+          "signals": 14
+        },
+        {
+          "asset": "BNB",
+          "trades": 5,
+          "pnl": 0.1,
+          "signals": 5
+        },
+        {
+          "asset": "LTC",
+          "trades": 16,
+          "pnl": -0.13,
+          "signals": 16
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.1,
+        "stop_loss_pct": 0.03,
+        "atr_min_pct": 1.0,
+        "atr_max_pct": 3.0,
+        "volume_multiplier": 2.0,
+        "gradient_min_long": 0.08,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "30",
+        "rsi_max": "75",
+        "min_confluence": "5"
+      }
+    },
+    {
+      "roi": 631.4999999999987,
+      "final_capital": 73.14999999999988,
+      "total_pnl": 63.14999999999988,
+      "total_trades": 39337,
+      "win_rate": 49.0962706866309,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 2130,
+          "pnl": 8.450000000000001,
+          "signals": 2269
+        },
+        {
+          "asset": "ETH",
+          "trades": 3769,
+          "pnl": 13.999999999999826,
+          "signals": 3915
+        },
+        {
+          "asset": "SOL",
+          "trades": 4589,
+          "pnl": 0.9000000000000363,
+          "signals": 4715
+        },
+        {
+          "asset": "AVAX",
+          "trades": 4857,
+          "pnl": 3.7500000000000178,
+          "signals": 4994
+        },
+        {
+          "asset": "LINK",
+          "trades": 4632,
+          "pnl": 1.150000000000001,
+          "signals": 4758
+        },
+        {
+          "asset": "ADA",
+          "trades": 4403,
+          "pnl": 3.900000000000015,
+          "signals": 4497
+        },
+        {
+          "asset": "DOGE",
+          "trades": 4520,
+          "pnl": 5.100000000000015,
+          "signals": 4619
+        },
+        {
+          "asset": "XRP",
+          "trades": 3600,
+          "pnl": 6.150000000000003,
+          "signals": 3666
+        },
+        {
+          "asset": "BNB",
+          "trades": 2695,
+          "pnl": 9.049999999999963,
+          "signals": 2828
+        },
+        {
+          "asset": "LTC",
+          "trades": 4142,
+          "pnl": 10.7,
+          "signals": 4263
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.1,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 0.5,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 3.0,
+        "gradient_min_long": 0.1,
+        "gradient_min_short": 0.15,
+        "breakout_atr_mult": 1.2,
+        "rsi_min": "25",
+        "rsi_max": "70",
+        "min_confluence": "3"
+      }
+    },
+    {
+      "roi": -98.99999999999999,
+      "final_capital": 0.10000000000000142,
+      "total_pnl": -9.899999999999999,
+      "total_trades": 566,
+      "win_rate": 48.58657243816255,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 26,
+          "pnl": -0.6,
+          "signals": 26
+        },
+        {
+          "asset": "ETH",
+          "trades": 63,
+          "pnl": -1.45,
+          "signals": 63
+        },
+        {
+          "asset": "SOL",
+          "trades": 82,
+          "pnl": -1.1499999999999997,
+          "signals": 82
+        },
+        {
+          "asset": "AVAX",
+          "trades": 65,
+          "pnl": -0.9499999999999997,
+          "signals": 65
+        },
+        {
+          "asset": "LINK",
+          "trades": 50,
+          "pnl": -1.0999999999999996,
+          "signals": 50
+        },
+        {
+          "asset": "ADA",
+          "trades": 61,
+          "pnl": -0.8999999999999995,
+          "signals": 61
+        },
+        {
+          "asset": "DOGE",
+          "trades": 63,
+          "pnl": -1.7500000000000002,
+          "signals": 63
+        },
+        {
+          "asset": "XRP",
+          "trades": 60,
+          "pnl": -0.7999999999999992,
+          "signals": 60
+        },
+        {
+          "asset": "BNB",
+          "trades": 45,
+          "pnl": -0.6499999999999999,
+          "signals": 45
+        },
+        {
+          "asset": "LTC",
+          "trades": 51,
+          "pnl": -0.55,
+          "signals": 51
+        }
+      ],
+      "params": {
+        "initial_capital": 10.0,
+        "position_size": 1.0,
+        "emergency_stop": -0.05,
+        "ema_short": 7,
+        "ema_long": 21,
+        "atr_period": 14,
+        "vol_ma_period": 20,
+        "take_profit_pct": 0.1,
+        "stop_loss_pct": 0.05,
+        "atr_min_pct": 0.7,
+        "atr_max_pct": 2.5,
+        "volume_multiplier": 2.5,
+        "gradient_min_long": 0.12,
+        "gradient_min_short": 0.1,
+        "breakout_atr_mult": 0.8,
+        "rsi_min": "20",
+        "rsi_max": "70",
+        "min_confluence": "5"
+      }
+    }
+  ]
+}
