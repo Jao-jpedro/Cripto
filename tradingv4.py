@@ -1590,7 +1590,7 @@ class TradingLearner:
             # Calcular se bateu no nível de stop baseado na configuração
             side = features_binned.get("side", "").lower()
             leverage = features_binned.get("leverage_eff", 5.0)
-            stop_loss_pct = float(os.getenv("STOP_LOSS_CAPITAL_PCT", "0.05")) / leverage
+            stop_loss_pct = float(os.getenv("STOP_LOSS_CAPITAL_PCT", "0.10")) / leverage
             
             if side == "buy":
                 stop_level = entry_price * (1.0 - stop_loss_pct)
@@ -3175,8 +3175,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.05
-    take_pct: float = 0.10  # 10% take profit para tradingv4.py
+    stop_pct: float = 0.10  # 10% stop loss (OTIMIZADO)
+    take_pct: float = 0.30  # 30% take profit (OTIMIZADO)
     usd_env: Optional[str] = None
 
 
