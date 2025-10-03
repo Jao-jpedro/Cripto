@@ -2440,7 +2440,7 @@ class GradientConfig:
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada
-    ATR_PCT_MIN: float      = 0.15        # ATR% saudável (min)
+    ATR_PCT_MIN: float      = 0.4        # ATR% saudável (min) - MAIS RESTRITIVO
     ATR_PCT_MAX: float      = 2.5         # ATR% saudável (max)
     BREAKOUT_K_ATR: float   = 0.25        # banda de rompimento: k*ATR
     NO_TRADE_EPS_K_ATR: float = 0.05      # zona neutra: |EMA7-EMA21| < eps*ATR
@@ -5034,7 +5034,7 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     # CRITÉRIO 4: Volume MEGA exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 2.5  # MEGA restritivo: 2.5x vs 2.0x
+    c4 = volume_ratio > 3.0  # MEGA restritivo: 3.0x vs 2.5x
     conds.append(c4)
     if c4:
         confluence_score += 1
@@ -5193,7 +5193,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     # CRITÉRIO 4: Volume MEGA exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 2.5  # MEGA restritivo: 2.5x vs 2.0x
+    c4 = volume_ratio > 3.0  # MEGA restritivo: 3.0x vs 2.5x
     conds.append(c4)
     if c4:
         confluence_score += 1
