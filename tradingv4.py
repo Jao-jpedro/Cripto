@@ -2536,7 +2536,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.05
-    take_pct: float = 0.075  # 5% take profit mantido no tradingv4.py
+    take_pct: float = 0.10  # 10% take profit para tradingv4.py
     usd_env: Optional[str] = None
 
 
