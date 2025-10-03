@@ -22,10 +22,10 @@ def _is_live_trading():
     print(f"[DEBUG] [LIVE_CHECK_V4] LIVE_TRADING='{os.getenv('LIVE_TRADING', 'UNSET')}' → {is_live}", flush=True)
     return is_live
 
-ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
+ABS_LOSS_HARD_STOP = 0.20  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -5.0  # ROI mínimo aceitável (-5%) - em percentual
-UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real
+ROI_HARD_STOP = -10.0  # ROI mínimo aceitável (-10%) - em percentual (mais permissivo)
+UNREALIZED_PNL_HARD_STOP = -0.20  # trava dura: perda de 20 cents do capital real (mais permissivo)
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
@@ -2522,7 +2522,7 @@ class GradientConfig:
     STOP_ATR_MULT: float    = 0.0         # desativado (uso por % da margem)
     TAKEPROFIT_ATR_MULT: float = 0.0      # desativado
     TRAILING_ATR_MULT: float   = 0.0      # desativado
-    ENABLE_TRAILING_STOP: bool = True     # trailing stop ativado
+    ENABLE_TRAILING_STOP: bool = False    # trailing stop DESATIVADO (usar apenas TP/SL fixos)
 
     # Breakeven trailing legado (mantido opcionalmente)
     BE_TRIGGER_PCT: float   = 0.0
@@ -2713,29 +2713,17 @@ class EMAGradientStrategy:
             except Exception as e:
                 self._log(f"Erro ao calcular ROI atual: {e}", level="WARN")
         
-        # Calcular stop loss dinâmico baseado no ROI
+        # Calcular stop loss FIXO baseado na configuração (SEM trailing dinâmico)
         base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         
-        # Trailing stop dinâmico simplificado:
-        # ROI < 2.5%: stop em -5%
-        # ROI >= 2.5%: stop em -2.5%
-        if current_roi_pct >= 2.5:
-            # ROI >= 2.5%: stop em -2.5%
-            trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] � TRAILING: ROI {current_roi_pct:.1f}% >= 2.5% → stop -2.5% @ {stop_px:.6f}", level="DEBUG")
+        # Stop loss FIXO em -5% (removido trailing dinâmico)
+        if norm_side == "buy":
+            stop_px = entry_price * (1.0 - base_risk_ratio)
         else:
-            # ROI < 2.5%: stop normal em -5%
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 - base_risk_ratio)
-            else:
-                stop_px = entry_price * (1.0 + base_risk_ratio)
-            self._log(f"[DEBUG_CLOSE] ⬇️ TRAILING: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
+            stop_px = entry_price * (1.0 + base_risk_ratio)
+        self._log(f"[DEBUG_CLOSE] 🔒 STOP FIXO: -5% @ {stop_px:.6f} (sem trailing)", level="DEBUG")
         
-        # Take profit fixo em 5%
+        # Take profit fixo em 10%
         reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         if norm_side == "buy":
             take_px = entry_price * (1.0 + reward_ratio)
@@ -5085,7 +5073,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
         reasons.append("❌ EMA/gradiente fraco")
     
     # CRITÉRIO 2: ATR MEGA conservador
-    c2 = (row.atr_pct >= 0.4) and (row.atr_pct <= 1.2)  # MEGA: 0.4%-1.2% vs 0.35%-1.5%
+    c2 = (row.atr_pct >= 0.40) and (row.atr_pct <= 1.2)  # MEGA restritivo: 0.40%-1.2% vs 0.35%-1.5%
     conds.append(c2)
     if c2:
         confluence_score += 1
@@ -5104,7 +5092,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     # CRITÉRIO 4: Volume MEGA exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 3.0  # MEGA: 3.0x vs 2.0x
+    c4 = volume_ratio > 2.5  # MEGA restritivo: 2.5x vs 2.0x
     conds.append(c4)
     if c4:
         confluence_score += 1
@@ -5131,7 +5119,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     # CRITÉRIO 6: MACD momentum forte (se disponível)
     if hasattr(row, 'macd') and hasattr(row, 'macd_signal') and row.macd is not None and row.macd_signal is not None:
         macd_diff = row.macd - row.macd_signal
-        c6 = macd_diff < -0.001  # MACD significativamente abaixo da signal
+        c6 = macd_diff < -0.01  # MACD deve estar CLARAMENTE abaixo da signal
         conds.append(c6)
         if c6:
             confluence_score += 1
@@ -5162,31 +5150,35 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     else:
         reasons.append("❌ Entrada tardia")
         
-    # CRITÉRIO 9: Bollinger Bands MEGA validação (se disponível)
+    # CRITÉRIO 9: Bollinger Bands posicionamento MEGA ideal (se disponível)
     if hasattr(row, 'bb_percent_b') and row.bb_percent_b is not None:
-        # Para SHORT: queremos estar na parte superior das bandas (acima de 0.8)
-        c9 = row.bb_percent_b > 0.8  # MEGA: acima da banda superior
+        c9 = 0.10 <= row.bb_percent_b <= 0.25  # MEGA restritivo: zona 10%-25% da banda (parte inferior)
         conds.append(c9)
         if c9:
             confluence_score += 1
-            reasons.append("✅ BB posição MEGA-ideal")
+            reasons.append("✅ BB mega-ideal")
+        elif 0.05 <= row.bb_percent_b <= 0.40:  # Zona aceitável
+            confluence_score += 0.5
+            reasons.append("🔶 BB aceitável")
         else:
-            reasons.append("❌ BB posição inadequada")
+            reasons.append("❌ BB inadequado")
     else:
-        confluence_score += 0.5  # Meio ponto se BB não disponível
+        confluence_score += 0.5
         reasons.append("⚪ BB n/d")
     
-    # CRITÉRIO 10: Momentum e estrutura MEGA (combinado)
-    # Verifica se temos momentum consistente + estrutura de mercado favorável
-    momentum_ok = hasattr(row, 'ema_short_grad_pct') and row.ema_short_grad_pct < -0.05
-    structure_ok = hasattr(row, 'atr') and row.atr > 0 and (row.valor_fechamento < row.ema_long)
-    c10 = momentum_ok and structure_ok
-    conds.append(c10)
-    if c10:
-        confluence_score += 1
-        reasons.append("✅ Momentum+estrutura MEGA")
+    # CRITÉRIO 10: Bollinger Bands squeeze/expansão (se disponível)
+    if hasattr(row, 'bb_squeeze') and row.bb_squeeze is not None:
+        c10 = not row.bb_squeeze  # Queremos expansão (movimento já iniciado)
+        conds.append(c10)
+        if c10:
+            confluence_score += 1
+            reasons.append("✅ BB em expansão")
+        else:
+            confluence_score += 0.5  # Squeeze pode ser bom (movimento iminente)
+            reasons.append("🔶 BB squeeze")
     else:
-        reasons.append("❌ Momentum/estrutura fraca")
+        confluence_score += 0.5
+        reasons.append("⚪ BB squeeze n/d")
     
     # DECISÃO FINAL SHORT: MEGA-RESTRITIVA requer 90% confluência (9.0/10 pontos)
     MIN_CONFLUENCE = 9.0

@@ -5015,7 +5015,7 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
         reasons.append("❌ EMA/gradiente fraco")
     
     # CRITÉRIO 2: ATR MEGA conservador
-    c2 = (row.atr_pct >= 0.4) and (row.atr_pct <= 1.2)  # MEGA: 0.4%-1.2% vs 0.40%-1.2%
+    c2 = (row.atr_pct >= 0.40) and (row.atr_pct <= 1.2)  # MEGA restritivo: 0.40%-1.2% vs 0.35%-1.5%
     conds.append(c2)
     if c2:
         confluence_score += 1
@@ -5034,7 +5034,7 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     # CRITÉRIO 4: Volume MEGA exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 3.0  # MEGA: 3.0x vs 2.5x
+    c4 = volume_ratio > 2.5  # MEGA restritivo: 2.5x vs 2.0x
     conds.append(c4)
     if c4:
         confluence_score += 1
@@ -5061,7 +5061,7 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     # CRITÉRIO 6: MACD momentum forte (se disponível)
     if hasattr(row, 'macd') and hasattr(row, 'macd_signal') and row.macd is not None and row.macd_signal is not None:
         macd_diff = row.macd - row.macd_signal
-        c6 = macd_diff > 0.001  # MACD significativamente acima da signal
+        c6 = macd_diff > 0.01  # MACD deve estar CLARAMENTE acima da signal
         conds.append(c6)
         if c6:
             confluence_score += 1
@@ -5092,31 +5092,35 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     else:
         reasons.append("❌ Entrada tardia")
         
-    # CRITÉRIO 9: Bollinger Bands MEGA validação (se disponível)
+    # CRITÉRIO 9: Bollinger Bands posicionamento MEGA ideal (se disponível)
     if hasattr(row, 'bb_percent_b') and row.bb_percent_b is not None:
-        # Para LONG: queremos estar na parte inferior das bandas (abaixo de 0.2)
-        c9 = row.bb_percent_b < 0.2  # MEGA: abaixo da banda inferior
+        c9 = 0.75 <= row.bb_percent_b <= 0.90  # MEGA restritivo: zona 75%-90% da banda
         conds.append(c9)
         if c9:
             confluence_score += 1
-            reasons.append("✅ BB posição MEGA-ideal")
+            reasons.append("✅ BB mega-ideal")
+        elif 0.6 <= row.bb_percent_b <= 0.95:  # Zona aceitável
+            confluence_score += 0.5
+            reasons.append("🔶 BB aceitável")
         else:
-            reasons.append("❌ BB posição inadequada")
+            reasons.append("❌ BB inadequado")
     else:
-        confluence_score += 0.5  # Meio ponto se BB não disponível
+        confluence_score += 0.5
         reasons.append("⚪ BB n/d")
     
-    # CRITÉRIO 10: Momentum e estrutura MEGA (combinado)
-    # Verifica se temos momentum consistente + estrutura de mercado favorável
-    momentum_ok = hasattr(row, 'ema_short_grad_pct') and row.ema_short_grad_pct > 0.05
-    structure_ok = hasattr(row, 'atr') and row.atr > 0 and (row.valor_fechamento > row.ema_long)
-    c10 = momentum_ok and structure_ok
-    conds.append(c10)
-    if c10:
-        confluence_score += 1
-        reasons.append("✅ Momentum+estrutura MEGA")
+    # CRITÉRIO 10: Bollinger Bands squeeze/expansão (se disponível)
+    if hasattr(row, 'bb_squeeze') and row.bb_squeeze is not None:
+        c10 = not row.bb_squeeze  # Queremos expansão (movimento já iniciado)
+        conds.append(c10)
+        if c10:
+            confluence_score += 1
+            reasons.append("✅ BB em expansão")
+        else:
+            confluence_score += 0.5  # Squeeze pode ser bom (movimento iminente)
+            reasons.append("🔶 BB squeeze")
     else:
-        reasons.append("❌ Momentum/estrutura fraca")
+        confluence_score += 0.5
+        reasons.append("⚪ BB squeeze n/d")
     
     # DECISÃO FINAL LONG: MEGA-RESTRITIVA requer 85% confluência (8.5/10 pontos)
     MIN_CONFLUENCE = 8.5
@@ -5170,7 +5174,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
         reasons.append("❌ EMA/gradiente fraco")
     
     # CRITÉRIO 2: ATR MEGA conservador
-    c2 = (row.atr_pct >= 0.4) and (row.atr_pct <= 1.2)  # MEGA: 0.4%-1.2% vs 0.40%-1.2%
+    c2 = (row.atr_pct >= 0.40) and (row.atr_pct <= 1.2)  # MEGA restritivo: 0.40%-1.2% vs 0.35%-1.5%
     conds.append(c2)
     if c2:
         confluence_score += 1
@@ -5189,7 +5193,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     # CRITÉRIO 4: Volume MEGA exigente
     volume_ratio = row.volume / row.vol_ma if row.vol_ma > 0 else 0
-    c4 = volume_ratio > 3.0  # MEGA: 3.0x vs 2.5x
+    c4 = volume_ratio > 2.5  # MEGA restritivo: 2.5x vs 2.0x
     conds.append(c4)
     if c4:
         confluence_score += 1
@@ -5216,7 +5220,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     # CRITÉRIO 6: MACD momentum forte (se disponível)
     if hasattr(row, 'macd') and hasattr(row, 'macd_signal') and row.macd is not None and row.macd_signal is not None:
         macd_diff = row.macd - row.macd_signal
-        c6 = macd_diff < -0.001  # MACD significativamente abaixo da signal
+        c6 = macd_diff < -0.01  # MACD deve estar CLARAMENTE abaixo da signal
         conds.append(c6)
         if c6:
             confluence_score += 1
@@ -5247,31 +5251,35 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     else:
         reasons.append("❌ Entrada tardia")
         
-    # CRITÉRIO 9: Bollinger Bands MEGA validação (se disponível)
+    # CRITÉRIO 9: Bollinger Bands posicionamento MEGA ideal (se disponível)
     if hasattr(row, 'bb_percent_b') and row.bb_percent_b is not None:
-        # Para SHORT: queremos estar na parte superior das bandas (acima de 0.8)
-        c9 = row.bb_percent_b > 0.8  # MEGA: acima da banda superior
+        c9 = 0.10 <= row.bb_percent_b <= 0.25  # MEGA restritivo: zona 10%-25% da banda (parte inferior)
         conds.append(c9)
         if c9:
             confluence_score += 1
-            reasons.append("✅ BB posição MEGA-ideal")
+            reasons.append("✅ BB mega-ideal")
+        elif 0.05 <= row.bb_percent_b <= 0.40:  # Zona aceitável
+            confluence_score += 0.5
+            reasons.append("🔶 BB aceitável")
         else:
-            reasons.append("❌ BB posição inadequada")
+            reasons.append("❌ BB inadequado")
     else:
-        confluence_score += 0.5  # Meio ponto se BB não disponível
+        confluence_score += 0.5
         reasons.append("⚪ BB n/d")
     
-    # CRITÉRIO 10: Momentum e estrutura MEGA (combinado)
-    # Verifica se temos momentum consistente + estrutura de mercado favorável
-    momentum_ok = hasattr(row, 'ema_short_grad_pct') and row.ema_short_grad_pct < -0.05
-    structure_ok = hasattr(row, 'atr') and row.atr > 0 and (row.valor_fechamento < row.ema_long)
-    c10 = momentum_ok and structure_ok
-    conds.append(c10)
-    if c10:
-        confluence_score += 1
-        reasons.append("✅ Momentum+estrutura MEGA")
+    # CRITÉRIO 10: Bollinger Bands squeeze/expansão (se disponível)
+    if hasattr(row, 'bb_squeeze') and row.bb_squeeze is not None:
+        c10 = not row.bb_squeeze  # Queremos expansão (movimento já iniciado)
+        conds.append(c10)
+        if c10:
+            confluence_score += 1
+            reasons.append("✅ BB em expansão")
+        else:
+            confluence_score += 0.5  # Squeeze pode ser bom (movimento iminente)
+            reasons.append("🔶 BB squeeze")
     else:
-        reasons.append("❌ Momentum/estrutura fraca")
+        confluence_score += 0.5
+        reasons.append("⚪ BB squeeze n/d")
     
     # DECISÃO FINAL SHORT: MEGA-RESTRITIVA requer 90% confluência (9.0/10 pontos)
     MIN_CONFLUENCE = 9.0
