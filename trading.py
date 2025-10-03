@@ -1862,7 +1862,7 @@ import ccxt  # type: ignore
 
 # ATENÇÃO: chaves privadas em código-fonte. Considere usar variáveis
 # de ambiente em produção para evitar exposição acidental.
-dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "5000"))
+dex_timeout = int(os.getenv("DEX_TIMEOUT_MS", "15000"))  # Aumentado de 5000 para 15000
 
 # Variáveis globais para lazy initialization
 dex = None
@@ -1876,6 +1876,8 @@ def _init_dex_if_needed():
     if dex is not None:
         return dex
         
+    _log_global("DEX", "🔧 Iniciando inicialização do DEX...", level="INFO")
+        
     # Lê credenciais da carteira MÃE (via env vars do Render)
     WALLET_MAE = os.getenv("WALLET_ADDRESS")  # Carteira mãe do Render
     _wallet_env = WALLET_MAE
@@ -1888,8 +1890,11 @@ def _init_dex_if_needed():
         )
         _log_global("DEX", msg, level="ERROR")
         raise RuntimeError(msg)
+    
+    _log_global("DEX", f"✅ Credenciais OK. Wallet: {_wallet_env[:10]}... Timeout: {dex_timeout}ms", level="INFO")
 
     try:
+        _log_global("DEX", "🔗 Tentando conectar ao HyperLiquid...", level="INFO")
         dex = ccxt.hyperliquid({
             "walletAddress": _wallet_env,
             "privateKey": _priv_env,
@@ -1897,13 +1902,15 @@ def _init_dex_if_needed():
             "timeout": dex_timeout,
             "options": {"timeout": dex_timeout},
         })
+        _log_global("DEX", "✅ HyperLiquid conectado com sucesso!", level="INFO")
     except AttributeError as e:
         if "hyperliquid" in str(e):
-            _log_global("DEX", "ccxt.hyperliquid não disponível - usando Binance para dados reais", level="WARN")
+            _log_global("DEX", "⚠️ ccxt.hyperliquid não disponível - usando Binance para dados reais", level="WARN")
             
             # Criar um DEX híbrido que sempre usa dados reais da Binance
             class RealDataDex:
                 def __init__(self):
+                    _log_global("DEX", "🔗 Inicializando DEX híbrido com Binance...", level="INFO")
                     self.walletAddress = _wallet_env
                     self.options = {"timeout": dex_timeout}
                     self._price_cache = {}  # Cache para evitar requisições repetidas
@@ -1912,11 +1919,13 @@ def _init_dex_if_needed():
                     
                     # SEMPRE conectar à Binance para dados reais
                     try:
+                        _log_global("DEX", "🔗 Conectando à Binance...", level="INFO")
                         self.binance = ccxt.binance({
                             "enableRateLimit": True,
                             "timeout": dex_timeout,
                             "sandbox": False,  # SEMPRE dados reais, nunca sandbox
                         })
+                        _log_global("DEX", "✅ Binance conectada com sucesso!", level="INFO")
                         # Verificar se conectou
                         self.binance.load_markets()
                         _log_global("DEX", "✅ Conectado à Binance - DADOS REAIS DE MERCADO", level="INFO")
