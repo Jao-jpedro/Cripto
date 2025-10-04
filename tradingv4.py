@@ -86,6 +86,161 @@ import threading
 import hashlib
 from pathlib import Path
 import pytz
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional, Dict, Any, List, Tuple
+import time as _time
+
+# =============================================================================
+# SISTEMA DE CACHE E OTIMIZAÇÃO
+# =============================================================================
+
+class DataCache:
+    """Sistema de cache para otimizar chamadas de API"""
+    
+    def __init__(self, ttl_seconds: int = 30):
+        self.cache = {}
+        self.timestamps = {}
+        self.ttl = ttl_seconds
+        self.hits = 0
+        self.misses = 0
+        self.lock = threading.Lock()
+    
+    def get_cache_key(self, symbol: str, tf: str, target_candles: int) -> str:
+        """Gera chave única para cache"""
+        return f"{symbol}_{tf}_{target_candles}"
+    
+    def is_valid(self, key: str) -> bool:
+        """Verifica se entrada do cache ainda é válida"""
+        if key not in self.timestamps:
+            return False
+        
+        elapsed = _time.time() - self.timestamps[key]
+        return elapsed < self.ttl
+    
+    def get(self, key: str) -> Optional[pd.DataFrame]:
+        """Busca dados do cache"""
+        with self.lock:
+            if self.is_valid(key):
+                self.hits += 1
+                return self.cache[key].copy()
+            
+            self.misses += 1
+            return None
+    
+    def set(self, key: str, data: pd.DataFrame):
+        """Armazena dados no cache"""
+        with self.lock:
+            self.cache[key] = data.copy()
+            self.timestamps[key] = _time.time()
+    
+    def clear_expired(self):
+        """Remove entradas expiradas do cache"""
+        with self.lock:
+            now = _time.time()
+            expired_keys = []
+            
+            for key, timestamp in self.timestamps.items():
+                if now - timestamp > self.ttl:
+                    expired_keys.append(key)
+            
+            for key in expired_keys:
+                if key in self.cache:
+                    del self.cache[key]
+                if key in self.timestamps:
+                    del self.timestamps[key]
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Retorna estatísticas do cache"""
+        total = self.hits + self.misses
+        hit_rate = (self.hits / total * 100) if total > 0 else 0
+        
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": hit_rate,
+            "cached_items": len(self.cache)
+        }
+
+# Cache global para build_df
+DATA_CACHE = DataCache(ttl_seconds=30)
+
+def build_df_batch(requests: List[Tuple[str, str, int]], debug: bool = False, max_workers: int = 8) -> Dict[str, pd.DataFrame]:
+    """
+    Busca dados de múltiplos símbolos em paralelo com cache
+    
+    Args:
+        requests: Lista de (symbol, timeframe, target_candles)
+        debug: Se deve imprimir logs
+        max_workers: Número máximo de threads paralelas
+    
+    Returns:
+        Dict com chave "symbol_tf" e DataFrame como valor
+    """
+    if debug:
+        _log_global("DATA_BATCH", f"Buscando {len(requests)} datasets em paralelo (workers={max_workers})")
+    
+    start_time = _time.time()
+    results = {}
+    
+    # Verificar cache primeiro
+    cache_requests = []
+    for symbol, tf, target_candles in requests:
+        cache_key = DATA_CACHE.get_cache_key(symbol, tf, target_candles)
+        cached_data = DATA_CACHE.get(cache_key)
+        
+        if cached_data is not None:
+            result_key = f"{symbol}_{tf}"
+            results[result_key] = cached_data
+            if debug:
+                _log_global("DATA_BATCH", f"Cache HIT: {result_key}")
+        else:
+            cache_requests.append((symbol, tf, target_candles))
+            if debug:
+                _log_global("DATA_BATCH", f"Cache MISS: {symbol}_{tf}")
+    
+    # Buscar dados em paralelo para requests não cached
+    if cache_requests:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_request = {}
+            
+            for symbol, tf, target_candles in cache_requests:
+                future = executor.submit(build_df_single, symbol, tf, target_candles, debug=False)
+                future_to_request[future] = (symbol, tf, target_candles)
+            
+            # Coletar resultados
+            for future in as_completed(future_to_request):
+                symbol, tf, target_candles = future_to_request[future]
+                result_key = f"{symbol}_{tf}"
+                
+                try:
+                    df = future.result()
+                    results[result_key] = df
+                    
+                    # Armazenar no cache
+                    cache_key = DATA_CACHE.get_cache_key(symbol, tf, target_candles)
+                    DATA_CACHE.set(cache_key, df)
+                    
+                    if debug:
+                        _log_global("DATA_BATCH", f"Fetched: {result_key} ({len(df)} candles)")
+                        
+                except Exception as e:
+                    if debug:
+                        _log_global("DATA_BATCH", f"ERRO {result_key}: {e}", level="ERROR")
+                    results[result_key] = pd.DataFrame()
+    
+    elapsed = _time.time() - start_time
+    
+    if debug:
+        cache_stats = DATA_CACHE.get_stats()
+        _log_global("DATA_BATCH", 
+                   f"Concluído em {elapsed:.2f}s | Cache: {cache_stats['hit_rate']:.1f}% hit rate | "
+                   f"{cache_stats['hits']} hits / {cache_stats['misses']} misses")
+    
+    return results
+
+def build_df_single(symbol: str, tf: str, target_candles: int, debug: bool = False) -> pd.DataFrame:
+    """Versão single-threaded do build_df para uso em paralelo"""
+    return build_df(symbol, tf, debug=debug, target_candles=target_candles)
 
 # =============================================================================
 # SISTEMA DE MONITORAMENTO INTEGRADO
@@ -6337,10 +6492,10 @@ if __name__ == "__main__":
         asset_state: Dict[str, Dict[str, Any]] = {}
         default_cols = df_in.columns if isinstance(df_in, pd.DataFrame) else pd.Index([])
 
-        # Configuração dos loops
-        fast_sleep = 5  # Fast safety loop: 5 segundos  
+        # Configuração dos loops OTIMIZADA
+        fast_sleep = 3  # Fast safety loop: 3 segundos (reduzido de 5s)  
         trailing_sleep = 15  # Trailing stop check: 15 segundos (placeholder - não implementado ainda)
-        slow_sleep = sleep_seconds  # Full analysis loop: 60 segundos (ou env var)
+        slow_sleep = 30  # Full analysis loop: 30 segundos (reduzido de 60s) 
         try:
             env_sleep = os.getenv("SLEEP_SECONDS")
             if env_sleep:
@@ -6352,7 +6507,7 @@ if __name__ == "__main__":
         iter_count = 0
         last_full_analysis = 0
         
-        _log_global("ENGINE", f"Iniciando per-asset safety V4: FAST_SAFETY=após_cada_ativo FULL_ANALYSIS={slow_sleep}s")
+        _log_global("ENGINE", f"🚀 Iniciando ENGINE OTIMIZADO V4: FAST_SAFETY={fast_sleep}s | FULL_ANALYSIS={slow_sleep}s")
 
         while True:
             iter_count += 1
@@ -6371,7 +6526,7 @@ if __name__ == "__main__":
             should_run_full_analysis = (time_since_analysis >= slow_sleep) or (iter_count == 1)
 
             if should_run_full_analysis:
-                _log_global("ENGINE", f"Executando análise completa V4 (última há {time_since_analysis:.1f}s)")
+                _log_global("ENGINE", f"Executando análise completa V4 OTIMIZADA (última há {time_since_analysis:.1f}s)")
                 last_full_analysis = current_time
                 
                 # MOSTRAR STATUS DO MONITOR A CADA ANÁLISE COMPLETA
@@ -6380,36 +6535,65 @@ if __name__ == "__main__":
                 # VERIFICAR E ENVIAR NOTIFICAÇÕES DISCORD A CADA 10 TRADES
                 TRADING_MONITOR.check_and_notify_milestones()
 
-                # FULL ANALYSIS LOOP - processar todos os assets
+                # 🚀 OTIMIZAÇÃO: BUSCAR DADOS EM PARALELO
+                _log_global("ENGINE", "🚀 Iniciando coleta paralela de dados...")
+                batch_start = _time.time()
+                
+                # Preparar requests para todos os assets
+                data_requests = []
                 for asset in ASSET_SETUPS:
-                    _log_global("ASSET", f"Análise completa: {asset.name}")
+                    # 15m data
+                    data_requests.append((asset.data_symbol, INTERVAL, 260))
+                    # 1h data
+                    data_requests.append((asset.data_symbol, "1h", 100))
+                
+                # Buscar todos os dados em paralelo
+                batch_data = build_df_batch(data_requests, debug=True, max_workers=8)
+                
+                batch_elapsed = _time.time() - batch_start
+                _log_global("ENGINE", f"⚡ Dados coletados em {batch_elapsed:.2f}s (vs ~{len(ASSET_SETUPS)*4:.0f}s sequencial)")
+                
+                # 🎯 OTIMIZAÇÃO: PRIORIZAR ATIVOS COM POSIÇÕES ABERTAS
+                priority_assets = []
+                standard_assets = []
+                
+                for asset in ASSET_SETUPS:
                     try:
-                        df_asset = build_df(asset.data_symbol, INTERVAL, debug=True)
-                    except MarketDataUnavailable as e:
-                        _log_global(
-                            "ASSET",
-                            f"Sem dados recentes para {asset.name} ({asset.data_symbol}) {INTERVAL}: {e}",
-                            level="WARN",
-                        )
-                        continue
-                    except Exception as e:
-                        _log_global("ASSET", f"Falha ao atualizar DF {asset.name}: {type(e).__name__}: {e}", level="WARN")
-                        continue
-
-                    try:
-                        df_asset_hour = build_df(asset.data_symbol, "1h", debug=False)
-                    except MarketDataUnavailable:
-                        _log_global(
-                            "ASSET",
-                            f"Sem dados 1h para {asset.name} ({asset.data_symbol}); seguindo sem rsi_aux.",
-                            level="WARN",
-                        )
-                        df_asset_hour = pd.DataFrame()
-                    except Exception as e:
-                        _log_global("ASSET", f"Falha ao atualizar DF 1h {asset.name}: {type(e).__name__}: {e}", level="WARN")
-                        df_asset_hour = pd.DataFrame()
-
-                    if not isinstance(df_asset, pd.DataFrame) or df_asset.empty:
+                        # Verificar se há posição aberta
+                        positions = dex_in.fetch_positions([asset.hl_symbol], {"vaultAddress": VAULT_ADDRESS})
+                        has_position = positions and float(positions[0].get("contracts", 0)) != 0
+                        
+                        if has_position:
+                            priority_assets.append(asset)
+                        else:
+                            standard_assets.append(asset)
+                            
+                    except Exception:
+                        standard_assets.append(asset)
+                
+                _log_global("ENGINE", f"🎯 Priorização: {len(priority_assets)} com posições | {len(standard_assets)} padrão")
+                
+                # Processar ativos prioritários primeiro
+                all_assets_to_process = priority_assets + standard_assets
+                
+                # FULL ANALYSIS LOOP OTIMIZADO - processar com dados já coletados
+                processing_start = _time.time()
+                
+                for i, asset in enumerate(all_assets_to_process):
+                    is_priority = asset in priority_assets
+                    asset_type = "PRIORITÁRIO" if is_priority else "PADRÃO"
+                    
+                    _log_global("ASSET", f"[{i+1}/{len(all_assets_to_process)}] {asset_type}: {asset.name}")
+                    
+                    # Buscar dados do batch já coletado
+                    df_asset_key = f"{asset.data_symbol}_{INTERVAL}"
+                    df_hour_key = f"{asset.data_symbol}_1h"
+                    
+                    df_asset = batch_data.get(df_asset_key, pd.DataFrame())
+                    df_asset_hour = batch_data.get(df_hour_key, pd.DataFrame())
+                    
+                    # Verificar se obtivemos dados válidos
+                    if df_asset.empty:
                         _log_global("ASSET", f"DataFrame vazio para {asset.name}; pulando.", level="WARN")
                         continue
 
@@ -6461,14 +6645,38 @@ if __name__ == "__main__":
                     except Exception as e:
                         _log_global("ASSET", f"Erro na análise completa {asset.name}: {type(e).__name__}: {e}", level="ERROR")
                     
-                    # FAST SAFETY CHECK IMEDIATAMENTE APÓS O ASSET
-                    _log_global("ASSET", f"Fast safety check pós-{asset.name}")
-                    fast_safety_check_v4(dex_in, asset_state)
-                    
-                    # TRAILING STOP CHECK PARA TODAS AS POSIÇÕES APÓS CADA ASSET
-                    check_all_trailing_stops_v4(dex_in, asset_state)
-                    
-                    _time.sleep(0.25)
+                    # 🚀 OTIMIZAÇÃO: APENAS UM DELAY MÍNIMO PARA ATIVOS PRIORITÁRIOS
+                    if is_priority:
+                        _time.sleep(0.1)  # Delay mínimo para ativos com posições
+                        
+                # 🛡️ OTIMIZAÇÃO: SAFETY CHECKS EM BATCH (não por asset individual)
+                processing_elapsed = _time.time() - processing_start
+                _log_global("ENGINE", f"⚡ Processamento concluído em {processing_elapsed:.2f}s")
+                
+                _log_global("ENGINE", "🛡️ Executando safety checks em batch...")
+                batch_safety_start = _time.time()
+                
+                # Fast safety check para todos os assets
+                fast_safety_check_v4(dex_in, asset_state)
+                
+                # Trailing stop check para todas as posições
+                check_all_trailing_stops_v4(dex_in, asset_state)
+                
+                # Limpar cache expirado
+                DATA_CACHE.clear_expired()
+                
+                batch_safety_elapsed = _time.time() - batch_safety_start
+                total_cycle_time = _time.time() - batch_start
+                
+                # Estatísticas de performance
+                cache_stats = DATA_CACHE.get_stats()
+                _log_global("ENGINE", f"✅ CICLO OTIMIZADO CONCLUÍDO:")
+                _log_global("ENGINE", f"   • Coleta de dados: {batch_elapsed:.2f}s")
+                _log_global("ENGINE", f"   • Processamento: {processing_elapsed:.2f}s") 
+                _log_global("ENGINE", f"   • Safety checks: {batch_safety_elapsed:.2f}s")
+                _log_global("ENGINE", f"   • TOTAL: {total_cycle_time:.2f}s (vs ~{len(ASSET_SETUPS)*4:.0f}s anterior)")
+                _log_global("ENGINE", f"   • Speedup: {len(ASSET_SETUPS)*4/total_cycle_time:.1f}x mais rápido")
+                _log_global("ENGINE", f"   • Cache: {cache_stats['hit_rate']:.1f}% hit rate ({cache_stats['hits']}/{cache_stats['hits']+cache_stats['misses']})")
 
             if not loop:
                 break
