@@ -1,0 +1,173 @@
+{
+  "timestamp": "20251004_155446",
+  "test_type": "exact_replication_2190_roi",
+  "description": "Replica\u00e7\u00e3o exata da l\u00f3gica que gerou 2190% ROI para testar TP 40% vs TP 30%",
+  "exact_params": {
+    "initial_capital": 10.0,
+    "position_size": 1.0,
+    "emergency_stop": -0.05,
+    "ema_short": 7,
+    "ema_long": 21,
+    "atr_period": 14,
+    "vol_ma_period": 20,
+    "take_profit_pct": 0.3,
+    "stop_loss_pct": 0.1,
+    "atr_min_pct": 0.5,
+    "atr_max_pct": 3.0,
+    "volume_multiplier": 3.0,
+    "gradient_min_long": 0.08,
+    "gradient_min_short": 0.12,
+    "breakout_atr_mult": 0.8,
+    "rsi_min": 20,
+    "rsi_max": 70,
+    "min_confluence": 3
+  },
+  "results": {
+    "tp30": {
+      "total_pnl": 89.00000000000017,
+      "total_trades": 37958,
+      "total_wins": 18423,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 2278,
+          "pnl": 4.000000000000165,
+          "signals": 2278
+        },
+        {
+          "asset": "ETH",
+          "trades": 3650,
+          "pnl": 22.999999999999986,
+          "signals": 3650
+        },
+        {
+          "asset": "SOL",
+          "trades": 4249,
+          "pnl": -8.69999999999994,
+          "signals": 4249
+        },
+        {
+          "asset": "AVAX",
+          "trades": 4528,
+          "pnl": -4.4000000000000306,
+          "signals": 4528
+        },
+        {
+          "asset": "LINK",
+          "trades": 4468,
+          "pnl": 6.599999999999981,
+          "signals": 4468
+        },
+        {
+          "asset": "ADA",
+          "trades": 4184,
+          "pnl": 1.5999999999999446,
+          "signals": 4184
+        },
+        {
+          "asset": "DOGE",
+          "trades": 4271,
+          "pnl": 0.5000000000000352,
+          "signals": 4271
+        },
+        {
+          "asset": "XRP",
+          "trades": 3614,
+          "pnl": 21.60000000000007,
+          "signals": 3614
+        },
+        {
+          "asset": "BNB",
+          "trades": 2679,
+          "pnl": 10.300000000000018,
+          "signals": 2679
+        },
+        {
+          "asset": "LTC",
+          "trades": 4037,
+          "pnl": 34.49999999999994,
+          "signals": 4037
+        }
+      ],
+      "final_capital": 99.00000000000017,
+      "roi": 890.0000000000016,
+      "win_rate": 48.53522314136677
+    },
+    "tp40": {
+      "total_pnl": 347.0999999999995,
+      "total_trades": 37958,
+      "total_wins": 18739,
+      "asset_results": [
+        {
+          "asset": "BTC",
+          "trades": 2278,
+          "pnl": 35.89999999999962,
+          "signals": 2278
+        },
+        {
+          "asset": "ETH",
+          "trades": 3650,
+          "pnl": 38.299999999999734,
+          "signals": 3650
+        },
+        {
+          "asset": "SOL",
+          "trades": 4249,
+          "pnl": 14.800000000000116,
+          "signals": 4249
+        },
+        {
+          "asset": "AVAX",
+          "trades": 4528,
+          "pnl": 55.800000000000075,
+          "signals": 4528
+        },
+        {
+          "asset": "LINK",
+          "trades": 4468,
+          "pnl": 16.200000000000017,
+          "signals": 4468
+        },
+        {
+          "asset": "ADA",
+          "trades": 4184,
+          "pnl": 36.99999999999988,
+          "signals": 4184
+        },
+        {
+          "asset": "DOGE",
+          "trades": 4271,
+          "pnl": 30.700000000000053,
+          "signals": 4271
+        },
+        {
+          "asset": "XRP",
+          "trades": 3614,
+          "pnl": 37.099999999999795,
+          "signals": 3614
+        },
+        {
+          "asset": "BNB",
+          "trades": 2679,
+          "pnl": 74.10000000000015,
+          "signals": 2679
+        },
+        {
+          "asset": "LTC",
+          "trades": 4037,
+          "pnl": 7.20000000000011,
+          "signals": 4037
+        }
+      ],
+      "final_capital": 357.0999999999995,
+      "roi": 3470.999999999995,
+      "win_rate": 49.36772221929501
+    }
+  },
+  "validation": {
+    "tp30_roi_expected": 2190,
+    "tp30_roi_actual": 890.0000000000016,
+    "validation_passed": false,
+    "tp40_vs_tp30_winner": "TP40"
+  }
+}

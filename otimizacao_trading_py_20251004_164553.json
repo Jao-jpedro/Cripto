@@ -1,0 +1,1807 @@
+{
+  "timestamp": "20251004_164553",
+  "total_combinations_tested": 240,
+  "assets_used": 10,
+  "top_results": [
+    {
+      "config": {
+        "tp_pct": 20.0,
+        "sl_pct": 8.0,
+        "atr_min": 0.3,
+        "atr_max": 4.0,
+        "volume_mult": 3.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": 79.23467389114255,
+      "total_trades": 552,
+      "avg_win_rate": 0.4215252037633587,
+      "avg_max_drawdown": 93.97162633176475,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 11.785743168444482,
+          "total_return_pct": -98.82142568315555,
+          "num_trades": 58,
+          "win_rate": 0.3103448275862069,
+          "avg_win": 0.2660324663634978,
+          "avg_loss": -0.18285775741022015,
+          "max_drawdown": 99.05489055663506,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 26.699447499272427,
+          "total_return_pct": -97.33005525007276,
+          "num_trades": 69,
+          "win_rate": 0.4057971014492754,
+          "avg_win": 0.3538340173137411,
+          "avg_loss": -0.22905735385068227,
+          "max_drawdown": 98.25130275386475,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 11793.600668419374,
+          "total_return_pct": 1079.3600668419374,
+          "num_trades": 43,
+          "win_rate": 0.5813953488372093,
+          "avg_win": 0.2708938009880362,
+          "avg_loss": -0.1717285686418647,
+          "max_drawdown": 38.807277733261465,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 786.7880536029398,
+          "total_return_pct": -21.321194639706015,
+          "num_trades": 47,
+          "win_rate": 0.46808510638297873,
+          "avg_win": 0.38055568249481875,
+          "avg_loss": -0.21015031120660108,
+          "max_drawdown": 87.81010268155153,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 10.647883353144557,
+          "total_return_pct": -98.93521166468554,
+          "num_trades": 52,
+          "win_rate": 0.40384615384615385,
+          "avg_win": 0.36189190755425044,
+          "avg_loss": -0.43132012855703894,
+          "max_drawdown": 126.28424657534234,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 5190.116253173411,
+          "total_return_pct": 419.0116253173411,
+          "num_trades": 50,
+          "win_rate": 0.54,
+          "avg_win": 0.36912640621758186,
+          "avg_loss": -0.23304754101561406,
+          "max_drawdown": 89.97497025276698,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 89.99895623505232,
+          "total_return_pct": -91.00010437649476,
+          "num_trades": 61,
+          "win_rate": 0.45901639344262296,
+          "avg_win": 0.42343969237042234,
+          "avg_loss": -0.2768249362900214,
+          "max_drawdown": 98.2192137852039,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 14.030175698525492,
+          "total_return_pct": -98.59698243014745,
+          "num_trades": 59,
+          "win_rate": 0.3898305084745763,
+          "avg_win": 0.40146985058993356,
+          "avg_loss": -0.2558803665398176,
+          "max_drawdown": 99.25692958822732,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": -0.0012246620182782056,
+          "total_return_pct": -100.00012246620183,
+          "num_trades": 54,
+          "win_rate": 0.35185185185185186,
+          "avg_win": 0.29626682399534854,
+          "avg_loss": -0.2914742542543696,
+          "max_drawdown": 100.05922228237193,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -0.1985673738914397,
+          "total_return_pct": -100.01985673738916,
+          "num_trades": 59,
+          "win_rate": 0.3050847457627119,
+          "avg_win": 0.37710643776574243,
+          "avg_loss": -0.31133550878707605,
+          "max_drawdown": 101.99810710842235,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 20.0,
+        "sl_pct": 12.0,
+        "atr_min": 0.5,
+        "atr_max": 2.0,
+        "volume_mult": 3.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": 31.148960286509855,
+      "total_trades": 447,
+      "avg_win_rate": 0.41778908551431265,
+      "avg_max_drawdown": 96.29849664155863,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 47.81047889996993,
+          "total_return_pct": -95.218952110003,
+          "num_trades": 45,
+          "win_rate": 0.35555555555555557,
+          "avg_win": 0.28307467724026014,
+          "avg_loss": -0.20456621441726563,
+          "max_drawdown": 96.9677395593456,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 2.241384777557676,
+          "total_return_pct": -99.77586152224424,
+          "num_trades": 61,
+          "win_rate": 0.36065573770491804,
+          "avg_win": 0.3229823875037942,
+          "avg_loss": -0.2445643043077949,
+          "max_drawdown": 99.85319908255961,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 11281.81376661025,
+          "total_return_pct": 1028.181376661025,
+          "num_trades": 40,
+          "win_rate": 0.625,
+          "avg_win": 0.2712256104477492,
+          "avg_loss": -0.20475429781137006,
+          "max_drawdown": 58.8077704164811,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 21.64808362953599,
+          "total_return_pct": -97.8351916370464,
+          "num_trades": 36,
+          "win_rate": 0.3611111111111111,
+          "avg_win": 0.28164820118026335,
+          "avg_loss": -0.23879941426358187,
+          "max_drawdown": 99.25568041181594,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": -10.455477336580605,
+          "total_return_pct": -101.04554773365805,
+          "num_trades": 38,
+          "win_rate": 0.42105263157894735,
+          "avg_win": 0.3077654334175935,
+          "avg_loss": -0.3275669862953142,
+          "max_drawdown": 126.88566888072653,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 1712.2715655744018,
+          "total_return_pct": 71.22715655744018,
+          "num_trades": 43,
+          "win_rate": 0.5581395348837209,
+          "avg_win": 0.31011762027099277,
+          "avg_loss": -0.2520254550557252,
+          "max_drawdown": 83.61832340804422,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 2.1679088129537263,
+          "total_return_pct": -99.78320911870462,
+          "num_trades": 51,
+          "win_rate": 0.4117647058823529,
+          "avg_win": 0.3724328775386713,
+          "avg_loss": -0.3104176380334801,
+          "max_drawdown": 99.94891277228109,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 57.199928906855746,
+          "total_return_pct": -94.28000710931443,
+          "num_trades": 43,
+          "win_rate": 0.37209302325581395,
+          "avg_win": 0.41753629720512503,
+          "avg_loss": -0.24325834641675018,
+          "max_drawdown": 97.46804524198144,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": -0.006514121895035032,
+          "total_return_pct": -100.0006514121895,
+          "num_trades": 43,
+          "win_rate": 0.37209302325581395,
+          "avg_win": 0.29053064615420837,
+          "avg_loss": -0.30963043326592854,
+          "max_drawdown": 100.19403774916222,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": 0.20490289793528207,
+          "total_return_pct": -99.97950971020647,
+          "num_trades": 47,
+          "win_rate": 0.3404255319148936,
+          "avg_win": 0.27743859167861207,
+          "avg_loss": -0.3072272012461495,
+          "max_drawdown": 99.98558889318848,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 20.0,
+        "sl_pct": 10.0,
+        "atr_min": 0.8,
+        "atr_max": 2.5,
+        "volume_mult": 4.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -35.37489821619381,
+      "total_trades": 180,
+      "avg_win_rate": 0.4070717256599609,
+      "avg_max_drawdown": 83.26723163280663,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 202.16170776765765,
+          "total_return_pct": -79.78382922323424,
+          "num_trades": 3,
+          "win_rate": 0.0,
+          "avg_win": 0,
+          "avg_loss": -0.3819712779493652,
+          "max_drawdown": 79.78382922323424,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 9.63715399088874,
+          "total_return_pct": -99.03628460091113,
+          "num_trades": 21,
+          "win_rate": 0.2857142857142857,
+          "avg_win": 0.2893585465656534,
+          "avg_loss": -0.29537012378669236,
+          "max_drawdown": 99.1981113054814,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 788.2199486891258,
+          "total_return_pct": -21.178005131087424,
+          "num_trades": 9,
+          "win_rate": 0.4444444444444444,
+          "avg_win": 0.2553355215893244,
+          "avg_loss": -0.2007908038489948,
+          "max_drawdown": 40.558823031436646,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 782.7714862567401,
+          "total_return_pct": -21.722851374325987,
+          "num_trades": 14,
+          "win_rate": 0.42857142857142855,
+          "avg_win": 0.5989671371724189,
+          "avg_loss": -0.2632749930246237,
+          "max_drawdown": 87.89664621626699,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 1255.426206940447,
+          "total_return_pct": 25.542620694044693,
+          "num_trades": 17,
+          "win_rate": 0.5882352941176471,
+          "avg_win": 0.3212210584348657,
+          "avg_loss": -0.2850650118628599,
+          "max_drawdown": 71.0218987547201,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 2682.336484926334,
+          "total_return_pct": 168.2336484926334,
+          "num_trades": 21,
+          "win_rate": 0.5238095238095238,
+          "avg_win": 0.35329500501840255,
+          "avg_loss": -0.20268539730022567,
+          "max_drawdown": 60.80759683459964,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 140.36840186734105,
+          "total_return_pct": -85.9631598132659,
+          "num_trades": 27,
+          "win_rate": 0.4444444444444444,
+          "avg_win": 0.28733527208725446,
+          "avg_loss": -0.26721459085400945,
+          "max_drawdown": 93.7885627706229,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 871.2887116422315,
+          "total_return_pct": -12.871128835776846,
+          "num_trades": 22,
+          "win_rate": 0.45454545454545453,
+          "avg_win": 0.4561346116784864,
+          "avg_loss": -0.24868827121452372,
+          "max_drawdown": 67.06335871950687,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": 71.9853898044012,
+          "total_return_pct": -92.80146101955988,
+          "num_trades": 21,
+          "win_rate": 0.38095238095238093,
+          "avg_win": 0.25537300270937413,
+          "avg_loss": -0.2710293447572064,
+          "max_drawdown": 94.06103279705778,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -341.6853135045473,
+          "total_return_pct": -134.16853135045474,
+          "num_trades": 25,
+          "win_rate": 0.52,
+          "avg_win": 0.26423931145620305,
+          "avg_loss": -0.4274859529211404,
+          "max_drawdown": 138.49245667513964,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 30.0,
+        "sl_pct": 8.0,
+        "atr_min": 1.0,
+        "atr_max": 2.5,
+        "volume_mult": 4.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -37.64811718786954,
+      "total_trades": 156,
+      "avg_win_rate": 0.3350937950937951,
+      "avg_max_drawdown": 82.85489528183516,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 202.16170776765765,
+          "total_return_pct": -79.78382922323424,
+          "num_trades": 3,
+          "win_rate": 0.0,
+          "avg_win": 0,
+          "avg_loss": -0.3819712779493652,
+          "max_drawdown": 79.78382922323424,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 11.788899100806942,
+          "total_return_pct": -98.8211100899193,
+          "num_trades": 18,
+          "win_rate": 0.2222222222222222,
+          "avg_win": 0.4620121776247495,
+          "avg_loss": -0.3035420873896634,
+          "max_drawdown": 99.20116476380456,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 1331.4952317953625,
+          "total_return_pct": 33.14952317953625,
+          "num_trades": 5,
+          "win_rate": 0.4,
+          "avg_win": 0.6108837623061931,
+          "avg_loss": -0.1938841574063419,
+          "max_drawdown": 31.263825394484662,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 790.3438126486976,
+          "total_return_pct": -20.96561873513024,
+          "num_trades": 11,
+          "win_rate": 0.36363636363636365,
+          "avg_win": 0.7933964472155701,
+          "avg_loss": -0.25371530209212606,
+          "max_drawdown": 86.36369451395508,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 1525.2301148682866,
+          "total_return_pct": 52.523011486828665,
+          "num_trades": 15,
+          "win_rate": 0.6,
+          "avg_win": 0.3502184093902497,
+          "avg_loss": -0.29289330749079673,
+          "max_drawdown": 78.61140146181722,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 1455.40632831468,
+          "total_return_pct": 45.540632831467995,
+          "num_trades": 20,
+          "win_rate": 0.4,
+          "avg_win": 0.4298625617508224,
+          "avg_loss": -0.18165041628783216,
+          "max_drawdown": 64.61849413860094,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 55.256609338301935,
+          "total_return_pct": -94.4743390661698,
+          "num_trades": 24,
+          "win_rate": 0.3333333333333333,
+          "avg_win": 0.4119265129071603,
+          "avg_loss": -0.282526614943845,
+          "max_drawdown": 98.10048172317607,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 1049.6322783385851,
+          "total_return_pct": 4.9632278338585145,
+          "num_trades": 21,
+          "win_rate": 0.42857142857142855,
+          "avg_win": 0.5649023776754049,
+          "avg_loss": -0.25620309316233547,
+          "max_drawdown": 77.52673366566397,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": 1.9084360100095965,
+          "total_return_pct": -99.80915639899905,
+          "num_trades": 18,
+          "win_rate": 0.2222222222222222,
+          "avg_win": 0.3482325197651004,
+          "avg_loss": -0.317590319540061,
+          "max_drawdown": 99.80915639899905,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -188.03513696934192,
+          "total_return_pct": -118.80351369693417,
+          "num_trades": 21,
+          "win_rate": 0.38095238095238093,
+          "avg_win": 0.3946831536641001,
+          "avg_loss": -0.4089218337664789,
+          "max_drawdown": 113.27017153461578,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 20.0,
+        "sl_pct": 5.0,
+        "atr_min": 0.8,
+        "atr_max": 2.0,
+        "volume_mult": 4.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -39.241742111156675,
+      "total_trades": 157,
+      "avg_win_rate": 0.3719218831003728,
+      "avg_max_drawdown": 74.83581103314387,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 202.16170776765765,
+          "total_return_pct": -79.78382922323424,
+          "num_trades": 3,
+          "win_rate": 0.0,
+          "avg_win": 0,
+          "avg_loss": -0.3819712779493652,
+          "max_drawdown": 79.78382922323424,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 5.957574356977029,
+          "total_return_pct": -99.4042425643023,
+          "num_trades": 19,
+          "win_rate": 0.21052631578947367,
+          "avg_win": 0.2484696945687649,
+          "avg_loss": -0.2873541760481469,
+          "max_drawdown": 99.50428191475093,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 997.3474683992952,
+          "total_return_pct": -0.26525316007048333,
+          "num_trades": 9,
+          "win_rate": 0.4444444444444444,
+          "avg_win": 0.2553355215893244,
+          "avg_loss": -0.16259424979261738,
+          "max_drawdown": 35.744987328874956,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 190.19861819319047,
+          "total_return_pct": -80.98013818068097,
+          "num_trades": 11,
+          "win_rate": 0.2727272727272727,
+          "avg_win": 0.2800463851417325,
+          "avg_loss": -0.22635300537355663,
+          "max_drawdown": 86.50870242425562,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 1013.1275035778266,
+          "total_return_pct": 1.3127503577826587,
+          "num_trades": 14,
+          "win_rate": 0.5714285714285714,
+          "avg_win": 0.3228259266956721,
+          "avg_loss": -0.28381881897766575,
+          "max_drawdown": 80.64665295894278,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 1546.084825096496,
+          "total_return_pct": 54.60848250964959,
+          "num_trades": 20,
+          "win_rate": 0.45,
+          "avg_win": 0.33006224754712776,
+          "avg_loss": -0.17115083003151071,
+          "max_drawdown": 54.72175219791412,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 123.81890095825777,
+          "total_return_pct": -87.61810990417422,
+          "num_trades": 23,
+          "win_rate": 0.391304347826087,
+          "avg_win": 0.29671869573146886,
+          "avg_loss": -0.2528194437160476,
+          "max_drawdown": 96.16310198919312,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 1089.4641512194642,
+          "total_return_pct": 8.946415121946416,
+          "num_trades": 18,
+          "win_rate": 0.4444444444444444,
+          "avg_win": 0.49451067702777773,
+          "avg_loss": -0.23490206976920053,
+          "max_drawdown": 59.70574946567264,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": 303.65287407418236,
+          "total_return_pct": -69.63471259258176,
+          "num_trades": 18,
+          "win_rate": 0.3888888888888889,
+          "avg_win": 0.2565156370354173,
+          "avg_loss": -0.20739983014523264,
+          "max_drawdown": 74.94791005361125,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": 604.0121652409855,
+          "total_return_pct": -39.59878347590145,
+          "num_trades": 22,
+          "win_rate": 0.5454545454545454,
+          "avg_win": 0.26740555875326966,
+          "avg_loss": -0.265209943545156,
+          "max_drawdown": 80.63114277498886,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 25.0,
+        "sl_pct": 8.0,
+        "atr_min": 0.8,
+        "atr_max": 3.5,
+        "volume_mult": 4.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -54.11236057571146,
+      "total_trades": 194,
+      "avg_win_rate": 0.36494388470684525,
+      "avg_max_drawdown": 159.24937229584398,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 202.16170776765765,
+          "total_return_pct": -79.78382922323424,
+          "num_trades": 3,
+          "win_rate": 0.0,
+          "avg_win": 0,
+          "avg_loss": -0.3819712779493652,
+          "max_drawdown": 79.78382922323424,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 8.749099954563981,
+          "total_return_pct": -99.1250900045436,
+          "num_trades": 22,
+          "win_rate": 0.22727272727272727,
+          "avg_win": 0.4235335038588685,
+          "avg_loss": -0.27867385311601,
+          "max_drawdown": 99.30822168586879,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 558.5570812522843,
+          "total_return_pct": -44.14429187477157,
+          "num_trades": 10,
+          "win_rate": 0.3,
+          "avg_win": 0.3625248355895228,
+          "avg_loss": -0.18895462741263716,
+          "max_drawdown": 51.29995666485446,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 800.1322128030863,
+          "total_return_pct": -19.98677871969137,
+          "num_trades": 14,
+          "win_rate": 0.42857142857142855,
+          "avg_win": 0.6035853960888073,
+          "avg_loss": -0.2632749930246237,
+          "max_drawdown": 87.89664621626699,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": -7361.048114851254,
+          "total_return_pct": -836.1048114851254,
+          "num_trades": 19,
+          "win_rate": 0.5789473684210527,
+          "avg_win": 0.37437446441656946,
+          "avg_loss": -0.7437152899301811,
+          "max_drawdown": 810.3389072274538,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 10626.411069444179,
+          "total_return_pct": 962.641106944418,
+          "num_trades": 23,
+          "win_rate": 0.5652173913043478,
+          "avg_win": 0.4168652763600825,
+          "avg_loss": -0.18592562076391275,
+          "max_drawdown": 54.72175219791412,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 103.360419516368,
+          "total_return_pct": -89.6639580483632,
+          "num_trades": 27,
+          "win_rate": 0.37037037037037035,
+          "avg_win": 0.38452193709000504,
+          "avg_loss": -0.2628487052858519,
+          "max_drawdown": 96.8147681012284,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 477.6978717755692,
+          "total_return_pct": -52.23021282244308,
+          "num_trades": 25,
+          "win_rate": 0.48,
+          "avg_win": 0.4457313882425105,
+          "avg_loss": -0.2845723989861699,
+          "max_drawdown": 90.61904947218085,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": 0.32719784087211046,
+          "total_return_pct": -99.9672802159128,
+          "num_trades": 22,
+          "win_rate": 0.18181818181818182,
+          "avg_win": 0.34159020824068964,
+          "avg_loss": -0.31112956379716367,
+          "max_drawdown": 99.9672802159128,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -827.5846030744732,
+          "total_return_pct": -182.75846030744734,
+          "num_trades": 29,
+          "win_rate": 0.5172413793103449,
+          "avg_win": 0.4241162222203737,
+          "avg_loss": -0.42544212626568,
+          "max_drawdown": 121.74331195352525,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 25.0,
+        "sl_pct": 20.0,
+        "atr_min": 1.0,
+        "atr_max": 2.0,
+        "volume_mult": 4.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -59.87812622019389,
+      "total_trades": 133,
+      "avg_win_rate": 0.4157116443068455,
+      "avg_max_drawdown": 81.30815268617532,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 202.16170776765765,
+          "total_return_pct": -79.78382922323424,
+          "num_trades": 3,
+          "win_rate": 0.0,
+          "avg_win": 0,
+          "avg_loss": -0.3819712779493652,
+          "max_drawdown": 79.78382922323424,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 2.483260339058523,
+          "total_return_pct": -99.75167396609415,
+          "num_trades": 16,
+          "win_rate": 0.1875,
+          "avg_win": 0.3200501998639514,
+          "avg_loss": -0.374853627721144,
+          "max_drawdown": 99.8036523002567,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 751.6952930963935,
+          "total_return_pct": -24.830470690360652,
+          "num_trades": 5,
+          "win_rate": 0.6,
+          "avg_win": 0.2816804162234412,
+          "avg_loss": -0.39657016479153107,
+          "max_drawdown": 48.05020756382157,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 211.4413926545618,
+          "total_return_pct": -78.85586073454381,
+          "num_trades": 8,
+          "win_rate": 0.375,
+          "avg_win": 0.2892829029745095,
+          "avg_loss": -0.341007392990545,
+          "max_drawdown": 87.20589259234721,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 681.254822634233,
+          "total_return_pct": -31.874517736576696,
+          "num_trades": 12,
+          "win_rate": 0.5833333333333334,
+          "avg_win": 0.3447917647660592,
+          "avg_loss": -0.37324703756814226,
+          "max_drawdown": 88.90027726265654,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 919.2371595198516,
+          "total_return_pct": -8.076284048014838,
+          "num_trades": 19,
+          "win_rate": 0.5263157894736842,
+          "avg_win": 0.3429413239417077,
+          "avg_loss": -0.2820093104721384,
+          "max_drawdown": 64.12943789790813,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 85.98657217478097,
+          "total_return_pct": -91.4013427825219,
+          "num_trades": 20,
+          "win_rate": 0.4,
+          "avg_win": 0.38062262532485136,
+          "avg_loss": -0.3287286224882611,
+          "max_drawdown": 96.05703058701576,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 739.2819997643011,
+          "total_return_pct": -26.071800023569892,
+          "num_trades": 17,
+          "win_rate": 0.5294117647058824,
+          "avg_win": 0.4723365818274377,
+          "avg_loss": -0.3438229333548908,
+          "max_drawdown": 62.83300066422125,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": 7.178420611776483,
+          "total_return_pct": -99.28215793882235,
+          "num_trades": 15,
+          "win_rate": 0.4,
+          "avg_win": 0.32207167040669443,
+          "avg_loss": -0.4085944520560482,
+          "max_drawdown": 99.42699156433824,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": 411.4667494179957,
+          "total_return_pct": -58.853325058200426,
+          "num_trades": 18,
+          "win_rate": 0.5555555555555556,
+          "avg_win": 0.3161548372920096,
+          "avg_loss": -0.3551185413851202,
+          "max_drawdown": 86.89120720595362,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 25.0,
+        "sl_pct": 10.0,
+        "atr_min": 0.5,
+        "atr_max": 3.0,
+        "volume_mult": 3.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -64.56563075560837,
+      "total_trades": 513,
+      "avg_win_rate": 0.364963153890307,
+      "avg_max_drawdown": 98.2717210844574,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 23.437750801433953,
+          "total_return_pct": -97.6562249198566,
+          "num_trades": 45,
+          "win_rate": 0.26666666666666666,
+          "avg_win": 0.31060788989604454,
+          "avg_loss": -0.18032225174681618,
+          "max_drawdown": 98.14086495036508,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 7.888930505043278,
+          "total_return_pct": -99.21110694949567,
+          "num_trades": 67,
+          "win_rate": 0.34328358208955223,
+          "avg_win": 0.4159682315929536,
+          "avg_loss": -0.22972045715360168,
+          "max_drawdown": 99.50901439954731,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 2935.8468985950512,
+          "total_return_pct": 193.58468985950512,
+          "num_trades": 39,
+          "win_rate": 0.5128205128205128,
+          "avg_win": 0.3157051015152196,
+          "avg_loss": -0.20072397718601132,
+          "max_drawdown": 71.47052377436952,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 114.7207736039321,
+          "total_return_pct": -88.5279226396068,
+          "num_trades": 45,
+          "win_rate": 0.4,
+          "avg_win": 0.4219128093137254,
+          "avg_loss": -0.2335033752873988,
+          "max_drawdown": 96.91082728198585,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 7.182518813612798,
+          "total_return_pct": -99.28174811863872,
+          "num_trades": 47,
+          "win_rate": 0.3617021276595745,
+          "avg_win": 0.3502366837243567,
+          "avg_loss": -0.4326306513878328,
+          "max_drawdown": 126.28424657534234,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 439.7976313570935,
+          "total_return_pct": -56.02023686429065,
+          "num_trades": 48,
+          "win_rate": 0.4791666666666667,
+          "avg_win": 0.38507662014472777,
+          "avg_loss": -0.256443335272135,
+          "max_drawdown": 88.94101789379152,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 9.900045764327336,
+          "total_return_pct": -99.00999542356726,
+          "num_trades": 58,
+          "win_rate": 0.41379310344827586,
+          "avg_win": 0.43541855620990494,
+          "avg_loss": -0.2881541520388493,
+          "max_drawdown": 99.81527624054303,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 4.721910420028351,
+          "total_return_pct": -99.52780895799717,
+          "num_trades": 57,
+          "win_rate": 0.3333333333333333,
+          "avg_win": 0.45487095817738804,
+          "avg_loss": -0.2540771951984094,
+          "max_drawdown": 99.77022120981474,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": -8.608130896576589e-06,
+          "total_return_pct": -100.00000086081309,
+          "num_trades": 51,
+          "win_rate": 0.23529411764705882,
+          "avg_win": 0.34353225150442984,
+          "avg_loss": -0.2988429785602131,
+          "max_drawdown": 100.04760399522077,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -0.059526813229206804,
+          "total_return_pct": -100.00595268132292,
+          "num_trades": 56,
+          "win_rate": 0.30357142857142855,
+          "avg_win": 0.4001558022111799,
+          "avg_loss": -0.3475544267633366,
+          "max_drawdown": 101.82761452359384,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 30.0,
+        "sl_pct": 5.0,
+        "atr_min": 0.5,
+        "atr_max": 4.0,
+        "volume_mult": 3.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -65.96505432863395,
+      "total_trades": 532,
+      "avg_win_rate": 0.31257383369946623,
+      "avg_max_drawdown": 97.15659766982677,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 23.55907499744993,
+          "total_return_pct": -97.64409250025501,
+          "num_trades": 45,
+          "win_rate": 0.17777777777777778,
+          "avg_win": 0.37939363553514904,
+          "avg_loss": -0.14561333645952929,
+          "max_drawdown": 97.64409250025501,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 4.27162256528091,
+          "total_return_pct": -99.57283774347191,
+          "num_trades": 69,
+          "win_rate": 0.2898550724637681,
+          "avg_win": 0.45484965506968467,
+          "avg_loss": -0.20936422239390176,
+          "max_drawdown": 99.82164764911039,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 662.7759356249621,
+          "total_return_pct": -33.722406437503786,
+          "num_trades": 40,
+          "win_rate": 0.3,
+          "avg_win": 0.4321493020394945,
+          "avg_loss": -0.14906006173680916,
+          "max_drawdown": 71.0954471436576,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 85.85013223103194,
+          "total_return_pct": -91.41498677689681,
+          "num_trades": 46,
+          "win_rate": 0.32608695652173914,
+          "avg_win": 0.5024314172135913,
+          "avg_loss": -0.2037737295083584,
+          "max_drawdown": 97.32911435594413,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 8.1751309519264,
+          "total_return_pct": -99.18248690480736,
+          "num_trades": 52,
+          "win_rate": 0.34615384615384615,
+          "avg_win": 0.423905390075994,
+          "avg_loss": -0.39813428133629714,
+          "max_drawdown": 126.28424657534234,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 2476.82418118961,
+          "total_return_pct": 147.682418118961,
+          "num_trades": 49,
+          "win_rate": 0.4489795918367347,
+          "avg_win": 0.43769322982714093,
+          "avg_loss": -0.2052563063501889,
+          "max_drawdown": 77.39530474299055,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 15.919340330152213,
+          "total_return_pct": -98.40806596698478,
+          "num_trades": 61,
+          "win_rate": 0.3770491803278688,
+          "avg_win": 0.4624243624251167,
+          "avg_loss": -0.2581684412914737,
+          "max_drawdown": 99.318494058562,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 129.103994481628,
+          "total_return_pct": -87.0896005518372,
+          "num_trades": 59,
+          "win_rate": 0.3559322033898305,
+          "avg_win": 0.5236116940694386,
+          "avg_loss": -0.22479402524063252,
+          "max_drawdown": 96.94801595508925,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": -0.0010763308447978898,
+          "total_return_pct": -100.0001076330845,
+          "num_trades": 53,
+          "win_rate": 0.24528301886792453,
+          "avg_win": 0.39342273174304637,
+          "avg_loss": -0.24525842663057093,
+          "max_drawdown": 100.0527782927787,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -2.983768904591868,
+          "total_return_pct": -100.2983768904592,
+          "num_trades": 58,
+          "win_rate": 0.25862068965517243,
+          "avg_win": 0.4860727923866602,
+          "avg_loss": -0.26058444646068224,
+          "max_drawdown": 105.67683542453761,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 25.0,
+        "sl_pct": 15.0,
+        "atr_min": 0.5,
+        "atr_max": 3.5,
+        "volume_mult": 3.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -68.448293890568,
+      "total_trades": 522,
+      "avg_win_rate": 0.40463561455227637,
+      "avg_max_drawdown": 99.07388382730412,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 21.22125250747667,
+          "total_return_pct": -97.87787474925233,
+          "num_trades": 44,
+          "win_rate": 0.36363636363636365,
+          "avg_win": 0.3121001834087568,
+          "avg_loss": -0.2441951589025532,
+          "max_drawdown": 98.97888709938972,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 5.16318156838705,
+          "total_return_pct": -99.48368184316129,
+          "num_trades": 67,
+          "win_rate": 0.373134328358209,
+          "avg_win": 0.40636535349294683,
+          "avg_loss": -0.2586449363545079,
+          "max_drawdown": 99.67865760751977,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 2370.2599964560723,
+          "total_return_pct": 137.02599964560721,
+          "num_trades": 40,
+          "win_rate": 0.55,
+          "avg_win": 0.3145974110086539,
+          "avg_loss": -0.2436704293310315,
+          "max_drawdown": 75.25344316239475,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 408.97560995732067,
+          "total_return_pct": -59.102439004267936,
+          "num_trades": 46,
+          "win_rate": 0.4782608695652174,
+          "avg_win": 0.4315984601459632,
+          "avg_loss": -0.2742238717222269,
+          "max_drawdown": 96.52722618261141,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 10.496843813675422,
+          "total_return_pct": -98.95031561863246,
+          "num_trades": 50,
+          "win_rate": 0.4,
+          "avg_win": 0.3794051449925463,
+          "avg_loss": -0.45674498186110063,
+          "max_drawdown": 126.28424657534234,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 335.3623089674955,
+          "total_return_pct": -66.46376910325046,
+          "num_trades": 49,
+          "win_rate": 0.5102040816326531,
+          "avg_win": 0.39355340264347893,
+          "avg_loss": -0.2995739691270512,
+          "max_drawdown": 91.83768072385648,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 3.0308938026091683,
+          "total_return_pct": -99.69691061973909,
+          "num_trades": 59,
+          "win_rate": 0.423728813559322,
+          "avg_win": 0.4321290266319584,
+          "avg_loss": -0.3211861366076402,
+          "max_drawdown": 99.95177721447544,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 0.7385724205153386,
+          "total_return_pct": -99.92614275794847,
+          "num_trades": 58,
+          "win_rate": 0.3448275862068966,
+          "avg_win": 0.44520380393679126,
+          "avg_loss": -0.2920329277366743,
+          "max_drawdown": 99.96405940347145,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": -6.5114429990748284e-06,
+          "total_return_pct": -100.00000065114429,
+          "num_trades": 52,
+          "win_rate": 0.2692307692307692,
+          "avg_win": 0.3407206887005413,
+          "avg_loss": -0.3307567336049461,
+          "max_drawdown": 100.04760399522077,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -0.07804203890854425,
+          "total_return_pct": -100.00780420389086,
+          "num_trades": 57,
+          "win_rate": 0.3333333333333333,
+          "avg_win": 0.4042802984618159,
+          "avg_loss": -0.36592861695305573,
+          "max_drawdown": 102.21525630875891,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 25.0,
+        "sl_pct": 5.0,
+        "atr_min": 0.5,
+        "atr_max": 2.5,
+        "volume_mult": 3.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -69.26946637720889,
+      "total_trades": 496,
+      "avg_win_rate": 0.3206880598060743,
+      "avg_max_drawdown": 96.18301135850045,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 24.71023724976938,
+          "total_return_pct": -97.52897627502306,
+          "num_trades": 45,
+          "win_rate": 0.2,
+          "avg_win": 0.3248185361484859,
+          "avg_loss": -0.14712538942474965,
+          "max_drawdown": 97.52897627502306,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 2.6937504679965594,
+          "total_return_pct": -99.73062495320035,
+          "num_trades": 65,
+          "win_rate": 0.2923076923076923,
+          "avg_win": 0.4070018939780462,
+          "avg_loss": -0.2118995174540962,
+          "max_drawdown": 99.85137131943985,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 2116.731761435859,
+          "total_return_pct": 111.67317614358589,
+          "num_trades": 39,
+          "win_rate": 0.41025641025641024,
+          "avg_win": 0.32160119098818807,
+          "avg_loss": -0.1427568106503164,
+          "max_drawdown": 55.097795484981646,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 105.69366261106929,
+          "total_return_pct": -89.43063373889308,
+          "num_trades": 42,
+          "win_rate": 0.3333333333333333,
+          "avg_win": 0.4530212339215636,
+          "avg_loss": -0.19531827669026922,
+          "max_drawdown": 96.11403975862018,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": -9.47283197227993,
+          "total_return_pct": -100.94728319722799,
+          "num_trades": 44,
+          "win_rate": 0.36363636363636365,
+          "avg_win": 0.3424788595608109,
+          "avg_loss": -0.27318314796437765,
+          "max_drawdown": 126.28424657534234,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 788.1570836258198,
+          "total_return_pct": -21.184291637418013,
+          "num_trades": 47,
+          "win_rate": 0.44680851063829785,
+          "avg_win": 0.37820733860829164,
+          "avg_loss": -0.20933544201396737,
+          "max_drawdown": 86.35721503091747,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 19.610271002472306,
+          "total_return_pct": -98.03897289975276,
+          "num_trades": 58,
+          "win_rate": 0.39655172413793105,
+          "avg_win": 0.4211375249797994,
+          "avg_loss": -0.26041604838557303,
+          "max_drawdown": 99.39360315612817,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 25.414063124948942,
+          "total_return_pct": -97.4585936875051,
+          "num_trades": 55,
+          "win_rate": 0.32727272727272727,
+          "avg_win": 0.45092475203392,
+          "avg_loss": -0.2229608600409304,
+          "max_drawdown": 98.76329448060393,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": -0.0017355116974337218,
+          "total_return_pct": -100.00017355116975,
+          "num_trades": 48,
+          "win_rate": 0.22916666666666666,
+          "avg_win": 0.3470751252594782,
+          "avg_loss": -0.24028799214147112,
+          "max_drawdown": 100.1667564747428,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -0.48289975484792086,
+          "total_return_pct": -100.0482899754848,
+          "num_trades": 53,
+          "win_rate": 0.20754716981132076,
+          "avg_win": 0.31255142278695563,
+          "avg_loss": -0.25154583973938194,
+          "max_drawdown": 102.27281502920518,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 40.0,
+        "sl_pct": 5.0,
+        "atr_min": 0.3,
+        "atr_max": 2.5,
+        "volume_mult": 4.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -75.34237419890651,
+      "total_trades": 227,
+      "avg_win_rate": 0.21581779138441984,
+      "avg_max_drawdown": 89.9847896049415,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 15.467993428381469,
+          "total_return_pct": -98.45320065716186,
+          "num_trades": 27,
+          "win_rate": 0.07407407407407407,
+          "avg_win": 0.4785419590009613,
+          "avg_loss": -0.1624460779954898,
+          "max_drawdown": 98.51974354504556,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 2.002515750119416,
+          "total_return_pct": -99.79974842498805,
+          "num_trades": 30,
+          "win_rate": 0.16666666666666666,
+          "avg_win": 0.544412750121446,
+          "avg_loss": -0.2551495834874402,
+          "max_drawdown": 99.92482515563202,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 474.8463194459684,
+          "total_return_pct": -52.51536805540316,
+          "num_trades": 17,
+          "win_rate": 0.23529411764705882,
+          "avg_win": 0.5581446942266477,
+          "avg_loss": -0.17062443960678542,
+          "max_drawdown": 57.65247391497476,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 453.9886250850019,
+          "total_return_pct": -54.601137491499806,
+          "num_trades": 14,
+          "win_rate": 0.21428571428571427,
+          "avg_win": 1.0019706032291724,
+          "avg_loss": -0.19431403057384825,
+          "max_drawdown": 89.31050324682728,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 293.21302500895115,
+          "total_return_pct": -70.67869749910489,
+          "num_trades": 18,
+          "win_rate": 0.2777777777777778,
+          "avg_win": 0.5550716759388917,
+          "avg_loss": -0.21321960571751264,
+          "max_drawdown": 88.05774125187143,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 940.8432772556141,
+          "total_return_pct": -5.915672274438589,
+          "num_trades": 21,
+          "win_rate": 0.3333333333333333,
+          "avg_win": 0.495168787126351,
+          "avg_loss": -0.1796919969069525,
+          "max_drawdown": 64.61849413860094,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 50.228471772307145,
+          "total_return_pct": -94.9771528227693,
+          "num_trades": 27,
+          "win_rate": 0.25925925925925924,
+          "avg_win": 0.4942381533997474,
+          "avg_loss": -0.23726198670523257,
+          "max_drawdown": 98.25233400250096,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 300.8458844484501,
+          "total_return_pct": -69.91541155515499,
+          "num_trades": 23,
+          "win_rate": 0.2608695652173913,
+          "avg_win": 0.8248494202313285,
+          "avg_loss": -0.22658499788331177,
+          "max_drawdown": 93.0755635371078,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": 30.79366406184951,
+          "total_return_pct": -96.92063359381504,
+          "num_trades": 21,
+          "win_rate": 0.09523809523809523,
+          "avg_win": 0.45556594113647475,
+          "avg_loss": -0.18547643290149565,
+          "max_drawdown": 96.92063359381504,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -96.4671961472943,
+          "total_return_pct": -109.64671961472942,
+          "num_trades": 29,
+          "win_rate": 0.2413793103448276,
+          "avg_win": 0.5015627444208449,
+          "avg_loss": -0.27828350050725753,
+          "max_drawdown": 113.51558366303924,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 30.0,
+        "sl_pct": 10.0,
+        "atr_min": 0.8,
+        "atr_max": 2.0,
+        "volume_mult": 3.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -76.99325841984947,
+      "total_trades": 354,
+      "avg_win_rate": 0.3307347950266581,
+      "avg_max_drawdown": 96.23748288822182,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 194.35996911129044,
+          "total_return_pct": -80.56400308887096,
+          "num_trades": 11,
+          "win_rate": 0.2727272727272727,
+          "avg_win": 0.36963134219892346,
+          "avg_loss": -0.25340767015730037,
+          "max_drawdown": 87.01442106199902,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 2.7921688756753813,
+          "total_return_pct": -99.72078311243246,
+          "num_trades": 48,
+          "win_rate": 0.25,
+          "avg_win": 0.4484685113259552,
+          "avg_loss": -0.222880330497977,
+          "max_drawdown": 99.83643231763338,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 1643.8166279607774,
+          "total_return_pct": 64.38166279607775,
+          "num_trades": 20,
+          "win_rate": 0.4,
+          "avg_win": 0.46835204903480054,
+          "avg_loss": -0.18748038482175178,
+          "max_drawdown": 66.21985503559326,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 12.742556846965748,
+          "total_return_pct": -98.72574431530343,
+          "num_trades": 34,
+          "win_rate": 0.29411764705882354,
+          "avg_win": 0.3662345523100644,
+          "avg_loss": -0.23855216270061144,
+          "max_drawdown": 99.54068134874879,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": -3.642597767752957,
+          "total_return_pct": -100.3642597767753,
+          "num_trades": 34,
+          "win_rate": 0.3235294117647059,
+          "avg_win": 0.36182668790812,
+          "avg_loss": -0.31937657537162645,
+          "max_drawdown": 126.28424657534234,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 160.5031115383967,
+          "total_return_pct": -83.94968884616031,
+          "num_trades": 42,
+          "win_rate": 0.42857142857142855,
+          "avg_win": 0.3776862224848084,
+          "avg_loss": -0.24943677744222778,
+          "max_drawdown": 93.04113313166783,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 1.0333445637012928,
+          "total_return_pct": -99.89666554362987,
+          "num_trades": 49,
+          "win_rate": 0.3469387755102041,
+          "avg_win": 0.44911658893392176,
+          "avg_loss": -0.30303931750060153,
+          "max_drawdown": 99.97641332940587,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 268.2371125867961,
+          "total_return_pct": -73.17628874132038,
+          "num_trades": 41,
+          "win_rate": 0.34146341463414637,
+          "avg_win": 0.5286880960501985,
+          "avg_loss": -0.2181703121603365,
+          "max_drawdown": 91.08257163133817,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": -0.00013288927494419016,
+          "total_return_pct": -100.00001328892749,
+          "num_trades": 40,
+          "win_rate": 0.25,
+          "avg_win": 0.37059150834532695,
+          "avg_loss": -0.3104436074671046,
+          "max_drawdown": 100.08016440092409,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": 20.831997188478226,
+          "total_return_pct": -97.91680028115218,
+          "num_trades": 35,
+          "win_rate": 0.4,
+          "avg_win": 0.40764204495714845,
+          "avg_loss": -0.31226527934691073,
+          "max_drawdown": 99.29891004956549,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 45.0,
+        "sl_pct": 5.0,
+        "atr_min": 1.0,
+        "atr_max": 3.5,
+        "volume_mult": 3.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -77.9087379208035,
+      "total_trades": 361,
+      "avg_win_rate": 0.2583805021211036,
+      "avg_max_drawdown": 97.65691049207021,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 789.6268294530411,
+          "total_return_pct": -21.03731705469589,
+          "num_trades": 7,
+          "win_rate": 0.42857142857142855,
+          "avg_win": 0.6266854428619566,
+          "avg_loss": -0.30927331588992313,
+          "max_drawdown": 81.62712814561199,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 11.33519984887089,
+          "total_return_pct": -98.86648001511291,
+          "num_trades": 40,
+          "win_rate": 0.25,
+          "avg_win": 0.5826035366287894,
+          "avg_loss": -0.2304492287458842,
+          "max_drawdown": 99.23190817300528,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 308.56530376304875,
+          "total_return_pct": -69.14346962369513,
+          "num_trades": 12,
+          "win_rate": 0.16666666666666666,
+          "avg_win": 0.6108837623061931,
+          "avg_loss": -0.18475619287444034,
+          "max_drawdown": 82.64221937378777,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 19.472187169070622,
+          "total_return_pct": -98.05278128309294,
+          "num_trades": 35,
+          "win_rate": 0.22857142857142856,
+          "avg_win": 0.7245135759875165,
+          "avg_loss": -0.2270224321031159,
+          "max_drawdown": 98.05278128309294,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 1.5966927109691642,
+          "total_return_pct": -99.84033072890308,
+          "num_trades": 42,
+          "win_rate": 0.19047619047619047,
+          "avg_win": 0.565402930047389,
+          "avg_loss": -0.382709408615394,
+          "max_drawdown": 126.28424657534234,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 1044.1053299029572,
+          "total_return_pct": 4.4105329902957235,
+          "num_trades": 44,
+          "win_rate": 0.3409090909090909,
+          "avg_win": 0.5766644853521291,
+          "avg_loss": -0.19270458167299365,
+          "max_drawdown": 86.6247112948685,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 2.7683855305351983,
+          "total_return_pct": -99.72316144694648,
+          "num_trades": 49,
+          "win_rate": 0.2653061224489796,
+          "avg_win": 0.6311513848384241,
+          "avg_loss": -0.2601551908010684,
+          "max_drawdown": 99.88827301440857,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 36.747594871443006,
+          "total_return_pct": -96.3252405128557,
+          "num_trades": 54,
+          "win_rate": 0.2777777777777778,
+          "avg_win": 0.6907251650720673,
+          "avg_loss": -0.22883806344783722,
+          "max_drawdown": 99.24907262649255,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": -0.005080435508582852,
+          "total_return_pct": -100.00050804355085,
+          "num_trades": 38,
+          "win_rate": 0.21052631578947367,
+          "avg_win": 0.5871695940984804,
+          "avg_loss": -0.268190409354648,
+          "max_drawdown": 100.07937807186025,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": -5.086234894777643,
+          "total_return_pct": -100.50862348947776,
+          "num_trades": 40,
+          "win_rate": 0.225,
+          "avg_win": 0.594668058492429,
+          "avg_loss": -0.3005459574529135,
+          "max_drawdown": 102.88938636223197,
+          "asset": "XRP"
+        }
+      ]
+    },
+    {
+      "config": {
+        "tp_pct": 35.0,
+        "sl_pct": 15.0,
+        "atr_min": 0.3,
+        "atr_max": 2.0,
+        "volume_mult": 4.0,
+        "min_confluencia": 4,
+        "ema_short": 7,
+        "ema_long": 24,
+        "breakout_k": 1.0
+      },
+      "avg_return_pct": -77.92608742537416,
+      "total_trades": 204,
+      "avg_win_rate": 0.29483994572902905,
+      "avg_max_drawdown": 90.6228897086602,
+      "num_assets": 10,
+      "asset_results": [
+        {
+          "final_balance": 10.465940626595936,
+          "total_return_pct": -98.9534059373404,
+          "num_trades": 27,
+          "win_rate": 0.2222222222222222,
+          "avg_win": 0.4304372278978484,
+          "avg_loss": -0.2598673285914027,
+          "max_drawdown": 99.3043637007218,
+          "asset": "BTC"
+        },
+        {
+          "final_balance": 0.609530030030086,
+          "total_return_pct": -99.93904699699699,
+          "num_trades": 28,
+          "win_rate": 0.14285714285714285,
+          "avg_win": 0.42875830837670265,
+          "avg_loss": -0.28140354319465405,
+          "max_drawdown": 99.9700668350467,
+          "asset": "ETH"
+        },
+        {
+          "final_balance": 255.97563877092577,
+          "total_return_pct": -74.40243612290742,
+          "num_trades": 17,
+          "win_rate": 0.29411764705882354,
+          "avg_win": 0.5222994274447008,
+          "avg_loss": -0.24794562769142423,
+          "max_drawdown": 81.4364906482139,
+          "asset": "BNB"
+        },
+        {
+          "final_balance": 66.33459158542036,
+          "total_return_pct": -93.36654084145796,
+          "num_trades": 11,
+          "win_rate": 0.18181818181818182,
+          "avg_win": 0.457337250411586,
+          "avg_loss": -0.2995693362911675,
+          "max_drawdown": 95.94037337479243,
+          "asset": "SOL"
+        },
+        {
+          "final_balance": 777.9267571806727,
+          "total_return_pct": -22.207324281932735,
+          "num_trades": 15,
+          "win_rate": 0.5333333333333333,
+          "avg_win": 0.40773052154376244,
+          "avg_loss": -0.32811712330961784,
+          "max_drawdown": 84.24507813670809,
+          "asset": "ADA"
+        },
+        {
+          "final_balance": 361.9031955557236,
+          "total_return_pct": -63.80968044442764,
+          "num_trades": 20,
+          "win_rate": 0.35,
+          "avg_win": 0.43768701638215346,
+          "avg_loss": -0.23731988764376485,
+          "max_drawdown": 74.14731040555283,
+          "asset": "AVAX"
+        },
+        {
+          "final_balance": 57.71767733082646,
+          "total_return_pct": -94.22823226691735,
+          "num_trades": 23,
+          "win_rate": 0.30434782608695654,
+          "avg_win": 0.4695847286228626,
+          "avg_loss": -0.278620779209211,
+          "max_drawdown": 98.71600657120172,
+          "asset": "DOGE"
+        },
+        {
+          "final_balance": 543.5122444673859,
+          "total_return_pct": -45.64877555326141,
+          "num_trades": 19,
+          "win_rate": 0.3684210526315789,
+          "avg_win": 0.7529237369073813,
+          "avg_loss": -0.2927700680311686,
+          "max_drawdown": 78.66043329788411,
+          "asset": "LINK"
+        },
+        {
+          "final_balance": 0.45608477206477005,
+          "total_return_pct": -99.95439152279353,
+          "num_trades": 18,
+          "win_rate": 0.16666666666666666,
+          "avg_win": 0.4504394380578387,
+          "avg_loss": -0.3594037584649191,
+          "max_drawdown": 99.95439152279353,
+          "asset": "LTC"
+        },
+        {
+          "final_balance": 132.48959714293903,
+          "total_return_pct": -86.7510402857061,
+          "num_trades": 26,
+          "win_rate": 0.38461538461538464,
+          "avg_win": 0.45902849539177987,
+          "avg_loss": -0.2869914543077515,
+          "max_drawdown": 93.85438259368682,
+          "asset": "XRP"
+        }
+      ]
+    }
+  ]
+}

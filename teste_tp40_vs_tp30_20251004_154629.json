@@ -1,0 +1,129 @@
+{
+  "timestamp": "20251004_154629",
+  "test_description": "Compara\u00e7\u00e3o TP 40% vs TP 30% mantendo outros par\u00e2metros",
+  "config": {
+    "initial_capital": 10.0,
+    "position_size": 1.0,
+    "stop_loss_pct": 0.1,
+    "emergency_stop": -0.05,
+    "atr_min_pct": 0.5,
+    "atr_max_pct": 3.0,
+    "volume_multiplier": 3.0,
+    "gradient_min_long": 0.08,
+    "gradient_min_short": 0.12,
+    "rsi_min": 20,
+    "rsi_max": 70,
+    "min_confluence": 3
+  },
+  "total_results": {
+    "tp30": {
+      "trades": 6,
+      "pnl": -0.20000000000000007,
+      "wins": 1,
+      "losses": 5,
+      "win_rate": 16.666666666666664
+    },
+    "tp40": {
+      "trades": 5,
+      "pnl": -2.7755575615628914e-17,
+      "wins": 1,
+      "losses": 4,
+      "win_rate": 20.0
+    }
+  },
+  "asset_details": [
+    {
+      "asset": "BTCUSDT",
+      "tp30": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -0.1,
+        "win_rate": 0.0
+      },
+      "tp40": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -0.1,
+        "win_rate": 0.0
+      }
+    },
+    {
+      "asset": "ETHUSDT",
+      "tp30": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "pnl": 0,
+        "win_rate": 0
+      },
+      "tp40": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "pnl": 0,
+        "win_rate": 0
+      }
+    },
+    {
+      "asset": "SOLUSDT",
+      "tp30": {
+        "trades": 2,
+        "wins": 0,
+        "losses": 2,
+        "pnl": -0.2,
+        "win_rate": 0.0
+      },
+      "tp40": {
+        "trades": 2,
+        "wins": 0,
+        "losses": 2,
+        "pnl": -0.2,
+        "win_rate": 0.0
+      }
+    },
+    {
+      "asset": "AVAXUSDT",
+      "tp30": {
+        "trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "pnl": 0.19999999999999998,
+        "win_rate": 50.0
+      },
+      "tp40": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "pnl": 0.4,
+        "win_rate": 100.0
+      }
+    },
+    {
+      "asset": "LINKUSDT",
+      "tp30": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -0.1,
+        "win_rate": 0.0
+      },
+      "tp40": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "pnl": -0.1,
+        "win_rate": 0.0
+      }
+    }
+  ],
+  "conclusion": {
+    "tp30_pnl": -0.20000000000000007,
+    "tp40_pnl": -2.7755575615628914e-17,
+    "difference": 0.20000000000000004,
+    "better_strategy": "TP40",
+    "roi_tp30": -2.000000000000001,
+    "roi_tp40": -2.7755575615628914e-16
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "timestamp": "20251004_164849",
+  "config": {
+    "tp_pct": 25.0,
+    "sl_pct": 10.0,
+    "atr_min": 0.5,
+    "atr_max": 3.0,
+    "volume_mult": 3.0,
+    "min_confluencia": 3,
+    "ema_short": 7,
+    "ema_long": 21,
+    "breakout_k": 0.8,
+    "leverage": 20
+  },
+  "summary": {
+    "avg_roi": -100.00015560903682,
+    "profitable_assets": 0,
+    "total_assets": 6,
+    "total_trades": 2108,
+    "avg_win_rate": 0.3489525620693119,
+    "avg_drawdown": 100.19497101104962
+  },
+  "results": [
+    {
+      "asset": "BTC",
+      "total_return_pct": -99.99990963229469,
+      "num_trades": 234,
+      "win_rate": 0.3034188034188034,
+      "max_drawdown": 99.99990963229469,
+      "final_balance": 0.0009036770530717366
+    },
+    {
+      "asset": "ETH",
+      "total_return_pct": -100.00000000000003,
+      "num_trades": 406,
+      "win_rate": 0.33251231527093594,
+      "max_drawdown": 100.00117962744082,
+      "final_balance": -2.4706678324739974e-13
+    },
+    {
+      "asset": "BNB",
+      "total_return_pct": -100.0010242646693,
+      "num_trades": 273,
+      "win_rate": 0.3626373626373626,
+      "max_drawdown": 100.76207893571834,
+      "final_balance": -0.010242646693000686
+    },
+    {
+      "asset": "SOL",
+      "total_return_pct": -99.99999996357958,
+      "num_trades": 390,
+      "win_rate": 0.358974358974359,
+      "max_drawdown": 99.99999998844501,
+      "final_balance": 3.6420418826034647e-07
+    },
+    {
+      "asset": "ADA",
+      "total_return_pct": -99.99999979375274,
+      "num_trades": 379,
+      "win_rate": 0.37467018469656993,
+      "max_drawdown": 100.40665788246024,
+      "final_balance": 2.062472577252532e-06
+    },
+    {
+      "asset": "AVAX",
+      "total_return_pct": -99.99999999992461,
+      "num_trades": 426,
+      "win_rate": 0.3615023474178404,
+      "max_drawdown": 99.99999999993861,
+      "final_balance": 7.53831496807708e-10
+    }
+  ]
+}

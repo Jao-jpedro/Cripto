@@ -1,0 +1,22 @@
+{
+  "timestamp": "20251004_165803",
+  "config": {
+    "tp_pct": 8.0,
+    "sl_pct": 4.0,
+    "leverage": 1,
+    "atr_min": 0.5,
+    "atr_max": 2.0,
+    "volume_mult": 1.5,
+    "min_confluencia": 2,
+    "ema_short": 9,
+    "ema_long": 21,
+    "rsi_oversold": 30,
+    "rsi_overbought": 70
+  },
+  "summary": {
+    "avg_roi": 69.41637357837159,
+    "avg_buy_hold": 93.09480988698967,
+    "profitable_assets": 6,
+    "outperformed_bh": 1,
+    "total_assets": 6,
+    "criteria_passed": 

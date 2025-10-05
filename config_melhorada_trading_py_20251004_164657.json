@@ -1,0 +1,23 @@
+{
+  "timestamp": "20251004_164657",
+  "type": "improved_config",
+  "description": "Configura\u00e7\u00e3o melhorada baseada em an\u00e1lise dos resultados",
+  "config": {
+    "tp_pct": 25.0,
+    "sl_pct": 10.0,
+    "atr_min": 0.5,
+    "atr_max": 3.0,
+    "volume_mult": 3.0,
+    "min_confluencia": 3,
+    "ema_short": 7,
+    "ema_long": 21,
+    "breakout_k": 0.8
+  },
+  "reasoning": {
+    "tp_sl_ratio": "2.5:1 para melhor balanceamento",
+    "atr_range": "Mais restritivo para evitar volatilidade extrema",
+    "confluencia": "Reduzido para mais oportunidades",
+    "ema_period": "EMA 21 \u00e9 mais tradicional e testada",
+    "breakout_k": "Menor para entradas mais precoces"
+  }
+}
