@@ -1,0 +1,88 @@
+{
+  "timestamp": "20251005_145718",
+  "best_configuration": "Aggressive_Optimized",
+  "parameters": {
+    "leverage": 3,
+    "sl_pct": 0.03,
+    "tp_pct": 0.15,
+    "rsi_period": 7,
+    "rsi_min": 25,
+    "rsi_max": 75,
+    "volume_min": 1.5,
+    "momentum_min": 0.01,
+    "min_confluencia": 5,
+    "ema_mode": "strong",
+    "macd_mode": "strong",
+    "bb_min": 0.15,
+    "bb_max": 0.85,
+    "atr_min": 0.3,
+    "atr_max": 8.0
+  },
+  "performance": {
+    "avg_roi": 635.6688086150256,
+    "profitable_assets": 9,
+    "total_assets": 10
+  },
+  "asset_results": [
+    {
+      "asset": "BTC",
+      "roi": 196.32743670755045,
+      "trades": 28,
+      "win_rate": 28.57142857142857
+    },
+    {
+      "asset": "ETH",
+      "roi": 875.9671347501185,
+      "trades": 45,
+      "win_rate": 31.11111111111111
+    },
+    {
+      "asset": "BNB",
+      "roi": 369.4961613020233,
+      "trades": 33,
+      "win_rate": 30.303030303030305
+    },
+    {
+      "asset": "SOL",
+      "roi": 228.61898691693213,
+      "trades": 101,
+      "win_rate": 22.772277227722775
+    },
+    {
+      "asset": "ADA",
+      "roi": 84.50500407047086,
+      "trades": 117,
+      "win_rate": 21.367521367521366
+    },
+    {
+      "asset": "AVAX",
+      "roi": 164.51073036771965,
+      "trades": 128,
+      "win_rate": 21.875
+    },
+    {
+      "asset": "DOGE",
+      "roi": 2632.390537952572,
+      "trades": 123,
+      "win_rate": 26.01626016260163
+    },
+    {
+      "asset": "LINK",
+      "roi": -27.741573338400272,
+      "trades": 122,
+      "win_rate": 19.672131147540984
+    },
+    {
+      "asset": "LTC",
+      "roi": 837.9294962483968,
+      "trades": 80,
+      "win_rate": 26.25
+    },
+    {
+      "asset": "XRP",
+      "roi": 994.6841711728737,
+      "trades": 108,
+      "win_rate": 25.0
+    }
+  ]
+}
