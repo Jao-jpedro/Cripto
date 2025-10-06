@@ -2459,13 +2459,13 @@ class GradientConfig:
     # Execução GENÉTICA (DNA otimizado: +10,910% ROI)
     LEVERAGE: int           = 3           # Leverage 3x - DNA GENÉTICO VENCEDOR
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.015  # 1.5% do preço - DNA GENÉTICO OTIMIZADO
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.12 # 12% do preço - DNA GENÉTICO OTIMIZADO
+    STOP_LOSS_CAPITAL_PCT: float = 0.015  # 1.5% ROI stop loss - DNA GENÉTICO
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.12 # 12% ROI take profit - DNA GENÉTICO
     MAX_LOSS_ABS_USD: float    = 0.05
     
     # Parâmetros GENÉTICOS validados (+10,910% ROI médio)
-    TP_PCT: float = 12.0                  # Take Profit 12% DO PREÇO - DNA GENÉTICO
-    SL_PCT: float = 1.5                   # Stop Loss 1.5% DO PREÇO - DNA GENÉTICO
+    TP_PCT: float = 12.0                  # Take Profit 12% ROI - DNA GENÉTICO
+    SL_PCT: float = 1.5                   # Stop Loss 1.5% ROI - DNA GENÉTICO
     VOLUME_MULTIPLIER: float = 1.8        # Volume 1.8x média - DNA GENÉTICO
     MIN_CONFLUENCIA: int = 3              # Mínimo 3 critérios - DNA GENÉTICO
 
@@ -2493,8 +2493,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.015  # 1.5% stop loss - DNA GENÉTICO OTIMIZADO
-    take_pct: float = 0.12   # 12% take profit - DNA GENÉTICO OTIMIZADO (+10,910% ROI)
+    stop_pct: float = 0.015  # 1.5% ROI stop loss - DNA GENÉTICO OTIMIZADO
+    take_pct: float = 0.12   # 12% ROI take profit - DNA GENÉTICO OTIMIZADO
     usd_env: Optional[str] = None
 
 
@@ -2739,12 +2739,16 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + base_risk_ratio)
             self._log(f"⬇️ DNA STOP: ROI {current_roi_pct:.1f}% < 2.5% → stop DNA -1.5% @ {stop_px:.6f}", level="DEBUG")
         
-        # Take profit GENÉTICO em 12% DO PREÇO para máximo ROI (+10,910%)
-        reward_ratio = 0.12  # DNA GENÉTICO VENCEDOR: TP 12.0% (algoritmo evolutivo)
+        # Take profit GENÉTICO: 12% ROI com leverage 3x = 4% movimento de preço
+        # Fórmula: % movimento de preço = % ROI desejado / leverage
+        target_roi_pct = 0.12  # 12% ROI target (DNA GENÉTICO)
+        leverage = float(self.cfg.LEVERAGE)
+        price_movement_pct = target_roi_pct / leverage  # 12% ÷ 3x = 4% movimento de preço
+        
         if norm_side == "buy":
-            take_px = entry_price * (1.0 + reward_ratio)
+            take_px = entry_price * (1.0 + price_movement_pct)
         else:
-            take_px = entry_price * (1.0 - reward_ratio)
+            take_px = entry_price * (1.0 - price_movement_pct)
         
         return stop_px, take_px
 
@@ -3998,18 +4002,29 @@ class EMAGradientStrategy:
 
         # DEBUG: Verificar configuração de stop loss
         if self.debug:
-            self._log(f"DEBUG STOP CONFIG: STOP_LOSS_CAPITAL_PCT={self.cfg.STOP_LOSS_CAPITAL_PCT} sl_price={sl_price:.6f}", level="DEBUG")
+            leverage = float(self.cfg.LEVERAGE)
+            sl_roi_pct = self.cfg.STOP_LOSS_CAPITAL_PCT * 100
+            sl_price_pct = (self.cfg.STOP_LOSS_CAPITAL_PCT / leverage) * 100
+            self._log(f"🧬 DNA STOP CONFIG: ROI {sl_roi_pct:.1f}% → preço {sl_price_pct:.2f}% (leverage {leverage}x) @ {sl_price:.6f}", level="DEBUG")
 
         if self.debug:
             if manage_take and tp_price is not None:
+                leverage = float(self.cfg.LEVERAGE)
+                tp_roi_pct = self.cfg.TAKE_PROFIT_CAPITAL_PCT * 100
+                tp_price_pct = (self.cfg.TAKE_PROFIT_CAPITAL_PCT / leverage) * 100
+                sl_roi_pct = self.cfg.STOP_LOSS_CAPITAL_PCT * 100
+                sl_price_pct = (self.cfg.STOP_LOSS_CAPITAL_PCT / leverage) * 100
                 self._log(
-                    f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) "
-                    f"take={tp_price:.6f} (+{self.cfg.TAKE_PROFIT_CAPITAL_PCT*100:.1f}% margem)",
+                    f"🧬 DNA Proteções | SL: ROI {sl_roi_pct:.1f}% = preço {sl_price_pct:.2f}% @ {sl_price:.6f} | "
+                    f"TP: ROI {tp_roi_pct:.1f}% = preço {tp_price_pct:.2f}% @ {tp_price:.6f}",
                     level="DEBUG",
                 )
             else:
+                leverage = float(self.cfg.LEVERAGE)
+                sl_roi_pct = self.cfg.STOP_LOSS_CAPITAL_PCT * 100
+                sl_price_pct = (self.cfg.STOP_LOSS_CAPITAL_PCT / leverage) * 100
                 self._log(
-                    f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) | take=standby",
+                    f"🧬 DNA Proteções | SL: ROI {sl_roi_pct:.1f}% = preço {sl_price_pct:.2f}% @ {sl_price:.6f} | TP: standby",
                     level="DEBUG",
                 )
 
