@@ -2439,35 +2439,35 @@ import pandas as pd
 
 @dataclass
 class GradientConfig:
-    # Indicadores SPOT (otimizados para trading sem leverage)
-    EMA_SHORT_SPAN: int     = 9          # EMA rápida otimizada
-    EMA_LONG_SPAN: int      = 21         # EMA lenta tradicional
+    # Indicadores GENÉTICOS (DNA otimizado: EMA 3/34)
+    EMA_SHORT_SPAN: int     = 3           # EMA rápida - DNA GENÉTICO VENCEDOR
+    EMA_LONG_SPAN: int      = 34          # EMA lenta - DNA GENÉTICO VENCEDOR
     N_BARRAS_GRADIENTE: int = 3
     GRAD_CONSISTENCY: int   = 3
     ATR_PERIOD: int         = 14
     VOL_MA_PERIOD: int      = 20
 
-    # Filtros de entrada SPOT (validados: 69.4% ROI, todos assets lucrativos)
-    ATR_PCT_MIN: float      = 0.5        # ATR% mínimo - SPOT
-    ATR_PCT_MAX: float      = 2.0        # ATR% máximo - SPOT
-    BREAKOUT_K_ATR: float   = 0.5        # banda de rompimento - SPOT
+    # Filtros de entrada GENÉTICOS (DNA otimizado: +10,910% ROI)
+    ATR_PCT_MIN: float      = 0.3        # ATR% mínimo - DNA GENÉTICO
+    ATR_PCT_MAX: float      = 8.0        # ATR% máximo - DNA GENÉTICO
+    BREAKOUT_K_ATR: float   = 0.5        # banda de rompimento
     NO_TRADE_EPS_K_ATR: float = 0.07     # zona neutra
 
     # Saídas por gradiente
     INV_GRAD_BARS: int      = 2
 
-    # Execução SPOT (sem leverage - DESCOBERTA CRUCIAL)
-    LEVERAGE: int           = 1           # SEM LEVERAGE - problema resolvido!
+    # Execução GENÉTICA (DNA otimizado: +10,910% ROI)
+    LEVERAGE: int           = 3           # Leverage 3x - DNA GENÉTICO VENCEDOR
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.04   # 4% do preço (OTIMIZADO para +486.5% ROI!)
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.10 # 10% do preço (OTIMIZADO para +486.5% ROI!)
+    STOP_LOSS_CAPITAL_PCT: float = 0.015  # 1.5% do preço - DNA GENÉTICO OTIMIZADO
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.12 # 12% do preço - DNA GENÉTICO OTIMIZADO
     MAX_LOSS_ABS_USD: float    = 0.05
     
-    # Parâmetros SPOT validados (ROI 69.4% médio, todos assets lucrativos)
-    TP_PCT: float = 10.0                  # Take Profit 10% DO PREÇO (OTIMIZADO!)
-    SL_PCT: float = 4.0                   # Stop Loss 4% DO PREÇO (OTIMIZADO!)
-    VOLUME_MULTIPLIER: float = 1.5        # Volume 1.5x média - PERMISSIVO
-    MIN_CONFLUENCIA: int = 2              # Mínimo 2 critérios - BALANCEADO
+    # Parâmetros GENÉTICOS validados (+10,910% ROI médio)
+    TP_PCT: float = 12.0                  # Take Profit 12% DO PREÇO - DNA GENÉTICO
+    SL_PCT: float = 1.5                   # Stop Loss 1.5% DO PREÇO - DNA GENÉTICO
+    VOLUME_MULTIPLIER: float = 1.8        # Volume 1.8x média - DNA GENÉTICO
+    MIN_CONFLUENCIA: int = 3              # Mínimo 3 critérios - DNA GENÉTICO
 
     # Cooldown OTIMIZADO
     COOLDOWN_BARS: int      = 0           # Desativado para maior frequency
@@ -2493,8 +2493,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.10  # 10% stop loss - OTIMIZADO
-    take_pct: float = 0.30  # 30% take profit - OTIMIZADO (configuração 1000% ROI)
+    stop_pct: float = 0.015  # 1.5% stop loss - DNA GENÉTICO OTIMIZADO
+    take_pct: float = 0.12   # 12% take profit - DNA GENÉTICO OTIMIZADO (+10,910% ROI)
     usd_env: Optional[str] = None
 
 
@@ -2675,8 +2675,8 @@ class EMAGradientStrategy:
         base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         
         # Trailing stop dinâmico granular expandido (USANDO HIGH WATER MARK):
-        # ROI < 2.5%: stop em -5%
-        # ROI >= 2.5%: stop em -2.5%
+        # ROI < 2.5%: stop em -1.5% (DNA GENÉTICO)
+        # ROI >= 2.5%: stop em -0.75%
         # ROI >= 5%: stop em 0% (breakeven)
         # ROI >= 7.5%: stop em +2.5%
         # ROI >= 10%: stop em +5%
@@ -2690,7 +2690,7 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 🚀 TRAILING L8: ROI {current_roi_pct:.1f}% >= 17.5% → stop +12.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"🚀 DNA TRAILING L8: ROI {current_roi_pct:.1f}% >= 17.5% → stop +12.5% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 15.0:
             # ROI >= 15%: stop em +10% (conservar mais para alcançar 20%)
             trailing_stop_pct = 0.10 / float(self.cfg.LEVERAGE)
@@ -2698,7 +2698,7 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 🎯 TRAILING L7: ROI {current_roi_pct:.1f}% >= 15% → stop +10% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"🎯 DNA TRAILING L7: ROI {current_roi_pct:.1f}% >= 15% → stop +10% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 12.5:
             # ROI >= 12.5%: stop em +7.5% (dando espaço para 20%)
             trailing_stop_pct = 0.075 / float(self.cfg.LEVERAGE)
@@ -2706,7 +2706,7 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L6: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"📈 DNA TRAILING L6: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 10.0:
             # ROI >= 10%: stop em +2.5% (NÃO mais em +5% para evitar fechamento prematuro)
             trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
@@ -2714,30 +2714,30 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +2.5% @ {stop_px:.6f} (preservando para 20%)", level="DEBUG")
+            self._log(f"📈 DNA TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 7.5:
             # ROI >= 7.5%: stop em breakeven (mais conservador)
             stop_px = entry_price
-            self._log(f"[DEBUG_CLOSE] 📈 TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop breakeven @ {stop_px:.6f} (preservando para 20%)", level="DEBUG")
+            self._log(f"📈 DNA TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 5.0:
             # ROI >= 5%: stop em 0% (breakeven)
             stop_px = entry_price
-            self._log(f"[DEBUG_CLOSE] ⚖️ TRAILING L3: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"⚖️ DNA TRAILING L3: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
         elif current_roi_pct >= 2.5:
-            # ROI >= 2.5%: stop em -2.5%
-            trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
+            # ROI >= 2.5%: stop em -0.75%
+            trailing_stop_pct = 0.0075 / float(self.cfg.LEVERAGE)
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 - trailing_stop_pct)
             else:
                 stop_px = entry_price * (1.0 + trailing_stop_pct)
-            self._log(f"[DEBUG_CLOSE] 📉 TRAILING L2: ROI {current_roi_pct:.1f}% >= 2.5% → stop -2.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"📉 DNA TRAILING L2: ROI {current_roi_pct:.1f}% >= 2.5% → stop -0.75% @ {stop_px:.6f}", level="DEBUG")
         else:
-            # ROI < 2.5%: stop normal em -5%
+            # ROI < 2.5%: stop DNA GENÉTICO em -1.5%
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 - base_risk_ratio)
             else:
                 stop_px = entry_price * (1.0 + base_risk_ratio)
-            self._log(f"[DEBUG_CLOSE] ⬇️ TRAILING L1: ROI {current_roi_pct:.1f}% < 2.5% → stop normal -5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"⬇️ DNA STOP: ROI {current_roi_pct:.1f}% < 2.5% → stop DNA -1.5% @ {stop_px:.6f}", level="DEBUG")
         
         # Take profit GENÉTICO em 12% DO PREÇO para máximo ROI (+10,910%)
         reward_ratio = 0.12  # DNA GENÉTICO VENCEDOR: TP 12.0% (algoritmo evolutivo)
