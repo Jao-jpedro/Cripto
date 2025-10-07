@@ -2510,25 +2510,25 @@ class AssetSetup:
 
 
 ASSET_SETUPS: List[AssetSetup] = [
-    AssetSetup("BTC-USD", "BTCUSDT", "BTC/USDC:USDC", 40, usd_env="USD_PER_TRADE_BTC"),
-    AssetSetup("SOL-USD", "SOLUSDT", "SOL/USDC:USDC", 20, usd_env="USD_PER_TRADE_SOL"),
-    AssetSetup("ETH-USD", "ETHUSDT", "ETH/USDC:USDC", 25, usd_env="USD_PER_TRADE_ETH"),
-    # AssetSetup("HYPE-USD", "HYPEUSDT", "HYPE/USDC:USDC", 10, usd_env="USD_PER_TRADE_HYPE"),  # HYPEUSDT não existe na Binance
-    AssetSetup("XRP-USD", "XRPUSDT", "XRP/USDC:USDC", 20, usd_env="USD_PER_TRADE_XRP"),
-    AssetSetup("DOGE-USD", "DOGEUSDT", "DOGE/USDC:USDC", 10, usd_env="USD_PER_TRADE_DOGE"),
-    AssetSetup("AVAX-USD", "AVAXUSDT", "AVAX/USDC:USDC", 10, usd_env="USD_PER_TRADE_AVAX"),
-    AssetSetup("ENA-USD", "ENAUSDT", "ENA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ENA"),
-    AssetSetup("BNB-USD", "BNBUSDT", "BNB/USDC:USDC", 10, usd_env="USD_PER_TRADE_BNB"),
-    AssetSetup("SUI-USD", "SUIUSDT", "SUI/USDC:USDC", 10, usd_env="USD_PER_TRADE_SUI"),
-    AssetSetup("ADA-USD", "ADAUSDT", "ADA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ADA"),
-    AssetSetup("PUMP-USD", "PUMPUSDT", "PUMP/USDC:USDC", 5, usd_env="USD_PER_TRADE_PUMP"),
-    AssetSetup("AVNT-USD", "AVNTUSDT", "AVNT/USDC:USDC", 5, usd_env="USD_PER_TRADE_AVNT"),
-    AssetSetup("LINK-USD", "LINKUSDT", "LINK/USDC:USDC", 10, usd_env="USD_PER_TRADE_LINK"),
-    AssetSetup("WLD-USD", "WLDUSDT", "WLD/USDC:USDC", 10, usd_env="USD_PER_TRADE_WLD"),
-    AssetSetup("AAVE-USD", "AAVEUSDT", "AAVE/USDC:USDC", 10, usd_env="USD_PER_TRADE_AAVE"),
-    AssetSetup("CRV-USD", "CRVUSDT", "CRV/USDC:USDC", 10, usd_env="USD_PER_TRADE_CRV"),
-    AssetSetup("LTC-USD", "LTCUSDT", "LTC/USDC:USDC", 10, usd_env="USD_PER_TRADE_LTC"),
-    AssetSetup("NEAR-USD", "NEARUSDT", "NEAR/USDC:USDC", 10, usd_env="USD_PER_TRADE_NEAR"),
+    AssetSetup("BTC-USD", "BTCUSDT", "BTC/USDC:USDC", 3, usd_env="USD_PER_TRADE_BTC"),
+    AssetSetup("SOL-USD", "SOLUSDT", "SOL/USDC:USDC", 3, usd_env="USD_PER_TRADE_SOL"),
+    AssetSetup("ETH-USD", "ETHUSDT", "ETH/USDC:USDC", 3, usd_env="USD_PER_TRADE_ETH"),
+    # AssetSetup("HYPE-USD", "HYPEUSDT", "HYPE/USDC:USDC", 3, usd_env="USD_PER_TRADE_HYPE"),  # HYPEUSDT não existe na Binance
+    AssetSetup("XRP-USD", "XRPUSDT", "XRP/USDC:USDC", 3, usd_env="USD_PER_TRADE_XRP"),
+    AssetSetup("DOGE-USD", "DOGEUSDT", "DOGE/USDC:USDC", 3, usd_env="USD_PER_TRADE_DOGE"),
+    AssetSetup("AVAX-USD", "AVAXUSDT", "AVAX/USDC:USDC", 3, usd_env="USD_PER_TRADE_AVAX"),
+    AssetSetup("ENA-USD", "ENAUSDT", "ENA/USDC:USDC", 3, usd_env="USD_PER_TRADE_ENA"),
+    AssetSetup("BNB-USD", "BNBUSDT", "BNB/USDC:USDC", 3, usd_env="USD_PER_TRADE_BNB"),
+    AssetSetup("SUI-USD", "SUIUSDT", "SUI/USDC:USDC", 3, usd_env="USD_PER_TRADE_SUI"),
+    AssetSetup("ADA-USD", "ADAUSDT", "ADA/USDC:USDC", 3, usd_env="USD_PER_TRADE_ADA"),
+    AssetSetup("PUMP-USD", "PUMPUSDT", "PUMP/USDC:USDC", 3, usd_env="USD_PER_TRADE_PUMP"),
+    AssetSetup("AVNT-USD", "AVNTUSDT", "AVNT/USDC:USDC", 3, usd_env="USD_PER_TRADE_AVNT"),
+    AssetSetup("LINK-USD", "LINKUSDT", "LINK/USDC:USDC", 3, usd_env="USD_PER_TRADE_LINK"),
+    AssetSetup("WLD-USD", "WLDUSDT", "WLD/USDC:USDC", 3, usd_env="USD_PER_TRADE_WLD"),
+    AssetSetup("AAVE-USD", "AAVEUSDT", "AAVE/USDC:USDC", 3, usd_env="USD_PER_TRADE_AAVE"),
+    AssetSetup("CRV-USD", "CRVUSDT", "CRV/USDC:USDC", 3, usd_env="USD_PER_TRADE_CRV"),
+    AssetSetup("LTC-USD", "LTCUSDT", "LTC/USDC:USDC", 3, usd_env="USD_PER_TRADE_LTC"),
+    AssetSetup("NEAR-USD", "NEARUSDT", "NEAR/USDC:USDC", 3, usd_env="USD_PER_TRADE_NEAR"),
 ]
 
 
@@ -5854,7 +5854,7 @@ if __name__ == "__main__":
         df_in: pd.DataFrame,
         dex_in,
         trade_logger_in: Optional[TradeLogger],
-        usd_to_spend: float = 1,
+        usd_to_spend: float = 4,
         loop: bool = True,
         sleep_seconds: int = 60,
     ):
@@ -5950,7 +5950,7 @@ if __name__ == "__main__":
                     state = asset_state.get(asset.name)
                     if state is None:
                         cfg = GradientConfig()
-                        cfg.LEVERAGE = asset.leverage
+                        # REMOVIDO: cfg.LEVERAGE = asset.leverage - Agora usa sempre 3x padrão
                         cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
                         cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
                         safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
