@@ -1745,7 +1745,7 @@ class TradingLearner:
             # Calcular se bateu no nível de stop baseado na configuração
             side = features_binned.get("side", "").lower()
             leverage = features_binned.get("leverage_eff", 5.0)
-            stop_loss_pct = float(os.getenv("STOP_LOSS_CAPITAL_PCT", "0.10")) / leverage
+            stop_loss_pct = float(os.getenv("STOP_LOSS_CAPITAL_PCT", "0.025")) / leverage
             
             if side == "buy":
                 stop_level = entry_price * (1.0 - stop_loss_pct)
@@ -3302,8 +3302,8 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.10  # 10% da margem como stop inicial (OTIMIZADO)
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.30   # take profit em 30% da margem (OTIMIZADO: configuração máximo ROI)
+    STOP_LOSS_CAPITAL_PCT: float = 0.025  # 2.5% da margem como stop inicial
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.15   # take profit em 15% da margem
     MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
 
     # down & anti-flip-flop

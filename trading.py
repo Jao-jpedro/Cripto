@@ -2682,73 +2682,82 @@ class EMAGradientStrategy:
             except Exception as e:
                 self._log(f"Erro ao calcular ROI atual: {e}", level="WARN")
         
-        # Calcular stop loss dinâmico baseado no ROI
+        # Calcular stop loss baseado na configuração
         base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         
-        # Trailing stop dinâmico granular expandido (USANDO HIGH WATER MARK):
-        # ROI < 2.5%: stop em -1.5% (DNA GENÉTICO)
-        # ROI >= 2.5%: stop em -0.75%
-        # ROI >= 5%: stop em 0% (breakeven)
-        # ROI >= 7.5%: stop em +2.5%
-        # ROI >= 10%: stop em +5%
-        # ROI >= 12.5%: stop em +7.5%
-        # ROI >= 15%: stop em +10%
-        # ROI >= 17.5%: stop em +12.5%
-        if current_roi_pct >= 17.5:
-            # ROI >= 17.5%: stop em +12.5%
-            trailing_stop_pct = 0.125 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"🚀 DNA TRAILING L8: ROI {current_roi_pct:.1f}% >= 17.5% → stop +12.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 15.0:
-            # ROI >= 15%: stop em +10% (conservar mais para alcançar 20%)
-            trailing_stop_pct = 0.10 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"🎯 DNA TRAILING L7: ROI {current_roi_pct:.1f}% >= 15% → stop +10% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 12.5:
-            # ROI >= 12.5%: stop em +7.5% (dando espaço para 20%)
-            trailing_stop_pct = 0.075 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"📈 DNA TRAILING L6: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 10.0:
-            # ROI >= 10%: stop em +2.5% (NÃO mais em +5% para evitar fechamento prematuro)
-            trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            else:
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
-            self._log(f"📈 DNA TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 7.5:
-            # ROI >= 7.5%: stop em breakeven (mais conservador)
-            stop_px = entry_price
-            self._log(f"📈 DNA TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 5.0:
-            # ROI >= 5%: stop em 0% (breakeven)
-            stop_px = entry_price
-            self._log(f"⚖️ DNA TRAILING L3: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
-        elif current_roi_pct >= 2.5:
+        # Verificar se trailing stop está habilitado
+        if getattr(self.cfg, "ENABLE_TRAILING_STOP", False):
+            # Trailing stop dinâmico granular expandido (USANDO HIGH WATER MARK):
+            # ROI < 2.5%: stop em -1.5% (DNA GENÉTICO)
             # ROI >= 2.5%: stop em -0.75%
-            trailing_stop_pct = 0.0075 / float(self.cfg.LEVERAGE)
-            if norm_side == "buy":
-                stop_px = entry_price * (1.0 - trailing_stop_pct)
+            # ROI >= 5%: stop em 0% (breakeven)
+            # ROI >= 7.5%: stop em +2.5%
+            # ROI >= 10%: stop em +5%
+            # ROI >= 12.5%: stop em +7.5%
+            # ROI >= 15%: stop em +10%
+            # ROI >= 17.5%: stop em +12.5%
+            if current_roi_pct >= 17.5:
+                # ROI >= 17.5%: stop em +12.5%
+                trailing_stop_pct = 0.125 / float(self.cfg.LEVERAGE)
+                if norm_side == "buy":
+                    stop_px = entry_price * (1.0 + trailing_stop_pct)
+                else:
+                    stop_px = entry_price * (1.0 - trailing_stop_pct)
+                self._log(f"🚀 DNA TRAILING L8: ROI {current_roi_pct:.1f}% >= 17.5% → stop +12.5% @ {stop_px:.6f}", level="DEBUG")
+            elif current_roi_pct >= 15.0:
+                # ROI >= 15%: stop em +10% (conservar mais para alcançar 20%)
+                trailing_stop_pct = 0.10 / float(self.cfg.LEVERAGE)
+                if norm_side == "buy":
+                    stop_px = entry_price * (1.0 + trailing_stop_pct)
+                else:
+                    stop_px = entry_price * (1.0 - trailing_stop_pct)
+                self._log(f"🎯 DNA TRAILING L7: ROI {current_roi_pct:.1f}% >= 15% → stop +10% @ {stop_px:.6f}", level="DEBUG")
+            elif current_roi_pct >= 12.5:
+                # ROI >= 12.5%: stop em +7.5% (dando espaço para 20%)
+                trailing_stop_pct = 0.075 / float(self.cfg.LEVERAGE)
+                if norm_side == "buy":
+                    stop_px = entry_price * (1.0 + trailing_stop_pct)
+                else:
+                    stop_px = entry_price * (1.0 - trailing_stop_pct)
+                self._log(f"📈 DNA TRAILING L6: ROI {current_roi_pct:.1f}% >= 12.5% → stop +7.5% @ {stop_px:.6f}", level="DEBUG")
+            elif current_roi_pct >= 10.0:
+                # ROI >= 10%: stop em +2.5% (NÃO mais em +5% para evitar fechamento prematuro)
+                trailing_stop_pct = 0.025 / float(self.cfg.LEVERAGE)
+                if norm_side == "buy":
+                    stop_px = entry_price * (1.0 + trailing_stop_pct)
+                else:
+                    stop_px = entry_price * (1.0 - trailing_stop_pct)
+                self._log(f"📈 DNA TRAILING L5: ROI {current_roi_pct:.1f}% >= 10% → stop +2.5% @ {stop_px:.6f}", level="DEBUG")
+            elif current_roi_pct >= 7.5:
+                # ROI >= 7.5%: stop em breakeven (mais conservador)
+                stop_px = entry_price
+                self._log(f"📈 DNA TRAILING L4: ROI {current_roi_pct:.1f}% >= 7.5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
+            elif current_roi_pct >= 5.0:
+                # ROI >= 5%: stop em 0% (breakeven)
+                stop_px = entry_price
+                self._log(f"⚖️ DNA TRAILING L3: ROI {current_roi_pct:.1f}% >= 5% → stop breakeven @ {stop_px:.6f}", level="DEBUG")
+            elif current_roi_pct >= 2.5:
+                # ROI >= 2.5%: stop em -0.75%
+                trailing_stop_pct = 0.0075 / float(self.cfg.LEVERAGE)
+                if norm_side == "buy":
+                    stop_px = entry_price * (1.0 - trailing_stop_pct)
+                else:
+                    stop_px = entry_price * (1.0 + trailing_stop_pct)
+                self._log(f"📉 DNA TRAILING L2: ROI {current_roi_pct:.1f}% >= 2.5% → stop -0.75% @ {stop_px:.6f}", level="DEBUG")
             else:
-                stop_px = entry_price * (1.0 + trailing_stop_pct)
-            self._log(f"📉 DNA TRAILING L2: ROI {current_roi_pct:.1f}% >= 2.5% → stop -0.75% @ {stop_px:.6f}", level="DEBUG")
+                # ROI < 2.5%: stop DNA GENÉTICO em -1.5%
+                if norm_side == "buy":
+                    stop_px = entry_price * (1.0 - base_risk_ratio)
+                else:
+                    stop_px = entry_price * (1.0 + base_risk_ratio)
+                self._log(f"⬇️ DNA STOP: ROI {current_roi_pct:.1f}% < 2.5% → stop DNA -1.5% @ {stop_px:.6f}", level="DEBUG")
         else:
-            # ROI < 2.5%: stop DNA GENÉTICO em -1.5%
+            # TRAILING STOP DESABILITADO: Usar stop loss fixo em -1.5%
             if norm_side == "buy":
                 stop_px = entry_price * (1.0 - base_risk_ratio)
             else:
                 stop_px = entry_price * (1.0 + base_risk_ratio)
-            self._log(f"⬇️ DNA STOP: ROI {current_roi_pct:.1f}% < 2.5% → stop DNA -1.5% @ {stop_px:.6f}", level="DEBUG")
+            self._log(f"🔒 SL FIXO: -1.5% @ {stop_px:.6f} (trailing desabilitado)", level="DEBUG")
         
         # Take profit GENÉTICO: 12% ROI com leverage 3x = 4% movimento de preço
         # Fórmula: % movimento de preço = % ROI desejado / leverage
@@ -4643,7 +4652,7 @@ class EMAGradientStrategy:
                 # 🧬 GENÉTICO: Condições evolutivas
                 G1 = last.ema_short > last.ema_long  # EMA3 > EMA34
                 G2 = 20 < last.rsi < 85  # RSI21 dinâmico
-                G3 = 0.3 < last.atr_pct < 8.0  # ATR otimizado
+                G3 = 0.2 < last.atr_pct < 8.0  # ATR CALIBRADO (era 0.3)
                 G4 = last.volume > last.vol_ma * 1.3 if last.vol_ma > 0 else False  # Volume 1.3x CALIBRADO
                 G5 = last.valor_fechamento > last.ema_short  # Preço acima EMA3
                 self._log(
@@ -5735,7 +5744,7 @@ if __name__ == "__main__":
                 roi_pct = 0.0
                 try:
                     position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
-                    leverage = float(pos.get("leverage", 10))
+                    leverage = float(pos.get("leverage", 3))  # Usar leverage padrão 3x (DNA genético)
                     
                     if position_value is None:
                         # Calcular position_value manualmente se necessário
