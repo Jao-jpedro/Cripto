@@ -1,3 +1,14 @@
+import sys
+import time
+from datetime import datetime
+
+# HEALTHCHECK RENDER - Para confirmar logs funcionando
+print(f"\n🚀 HEALTHCHECK RENDER: Worker iniciado em {datetime.now().isoformat()}", flush=True)
+print(f"📡 Python version: {sys.version}", flush=True)
+print(f"💻 Platform: {sys.platform}", flush=True)
+sys.stdout.flush()
+sys.stderr.flush()
+
 print("\n========== 🧬 SISTEMA GENÉTICO ULTRA OTIMIZADO ==========", flush=True)
 print("🎯 ROI: +10,910% anual (validado com dados reais)", flush=True)
 print("📊 Configuração: SL 1.5% | TP 12% | Leverage 3x", flush=True)
@@ -318,9 +329,9 @@ class TradingLearner:
             slope_ema100 = None
             slope_ema200 = None
             
-            if not ema3.empty and len(ema7) >= 7:
+            if not ema3.empty and len(ema3) >= 7:
                 slope_ema3 = (ema3.iloc[-1] - ema3.iloc[-7]) / ema3.iloc[-7] * 100
-            if not ema34.empty and len(ema21) >= 21:
+            if not ema34.empty and len(ema34) >= 21:
                 slope_ema34 = (ema34.iloc[-1] - ema34.iloc[-21]) / ema34.iloc[-21] * 100
             if not ema50.empty and len(ema50) >= 50:
                 slope_ema50 = (ema50.iloc[-1] - ema50.iloc[-50]) / ema50.iloc[-50] * 100
@@ -5870,6 +5881,12 @@ if __name__ == "__main__":
         while True:
             iter_count += 1
             current_time = time_module.time()
+            
+            # HEALTHCHECK RENDER - Log periódico para confirmar funcionamento
+            if iter_count % 10 == 1:  # A cada 10 iterações
+                print(f"\n🚀 HEALTHCHECK RENDER #{iter_count}: Worker ativo em {datetime.now().isoformat()}", flush=True)
+                print(f"💻 Sistema funcionando | Iteração: {iter_count} | Tempo: {current_time}", flush=True)
+                sys.stdout.flush()
             
             try:
                 live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
