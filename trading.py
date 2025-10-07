@@ -12,7 +12,7 @@ sys.stderr.flush()
 print("\n========== 🧬 SISTEMA GENÉTICO ULTRA OTIMIZADO ==========", flush=True)
 print("🎯 ROI: +10,910% anual (validado com dados reais)", flush=True)
 print("📊 Configuração: SL 1.5% | TP 12% | Leverage 3x", flush=True)
-print("🧬 DNA: EMA 3/34 | RSI 21 | Volume 1.8x", flush=True)
+print("🧬 DNA: EMA 3/34 | RSI 21 | Volume 1.3x CALIBRADO", flush=True)
 print("🏆 Top Assets: XRP +68,700% | DOGE +16,681% | LINK +8,311%", flush=True)
 print("========================================================", flush=True)
 
@@ -2458,8 +2458,8 @@ class GradientConfig:
     ATR_PERIOD: int         = 14
     VOL_MA_PERIOD: int      = 20
 
-    # Filtros de entrada GENÉTICOS (DNA otimizado: +10,910% ROI)
-    ATR_PCT_MIN: float      = 0.3        # ATR% mínimo - DNA GENÉTICO
+    # Filtros de entrada GENÉTICOS CALIBRADOS (DNA otimizado: +10,910% ROI)
+    ATR_PCT_MIN: float      = 0.2        # ATR% mínimo CALIBRADO (era 0.3%)
     ATR_PCT_MAX: float      = 8.0        # ATR% máximo - DNA GENÉTICO
     BREAKOUT_K_ATR: float   = 0.5        # banda de rompimento
     NO_TRADE_EPS_K_ATR: float = 0.07     # zona neutra
@@ -2474,10 +2474,10 @@ class GradientConfig:
     TAKE_PROFIT_CAPITAL_PCT: float = 0.12 # 12% ROI take profit - DNA GENÉTICO
     MAX_LOSS_ABS_USD: float    = 0.05
     
-    # Parâmetros GENÉTICOS validados (+10,910% ROI médio)
+    # Parâmetros GENÉTICOS CALIBRADOS (+10,910% ROI médio)
     TP_PCT: float = 12.0                  # Take Profit 12% ROI - DNA GENÉTICO
     SL_PCT: float = 1.5                   # Stop Loss 1.5% ROI - DNA GENÉTICO
-    VOLUME_MULTIPLIER: float = 1.8        # Volume 1.8x média - DNA GENÉTICO
+    VOLUME_MULTIPLIER: float = 1.3        # Volume 1.3x média CALIBRADO (era 1.8x)
     MIN_CONFLUENCIA: int = 3              # Mínimo 3 critérios - DNA GENÉTICO
 
     # Cooldown OTIMIZADO
@@ -4636,7 +4636,7 @@ class EMAGradientStrategy:
                 )
                 self._log(
                     f"🧬 DNA check | SL=1.5% TP=12% LEV=3x | ema3/34_cross={last.ema_short > last.ema_long} | "
-                    f"rsi21(20-85)={20 < last.rsi < 85} | atr%_healthy={0.3 < last.atr_pct < 8.0} | vol_boost={last.volume/last.vol_ma > 1.8 if last.vol_ma > 0 else False}",
+                    f"rsi21(20-85)={20 < last.rsi < 85} | atr%_healthy={0.2 < last.atr_pct < 8.0} | vol_boost={last.volume/last.vol_ma > 1.3 if last.vol_ma > 0 else False}",
                     level="DEBUG",
                 )
                 # LONG conds
@@ -4644,7 +4644,7 @@ class EMAGradientStrategy:
                 G1 = last.ema_short > last.ema_long  # EMA3 > EMA34
                 G2 = 20 < last.rsi < 85  # RSI21 dinâmico
                 G3 = 0.3 < last.atr_pct < 8.0  # ATR otimizado
-                G4 = last.volume > last.vol_ma * 1.8 if last.vol_ma > 0 else False  # Volume 1.8x
+                G4 = last.volume > last.vol_ma * 1.3 if last.vol_ma > 0 else False  # Volume 1.3x CALIBRADO
                 G5 = last.valor_fechamento > last.ema_short  # Preço acima EMA3
                 self._log(
                     f"🧬 DNA LONG | EMA3>EMA34={G1} rsi21_ok={G2} atr_genetic={G3} vol_1.8x={G4} price>ema3={G5}",
@@ -4706,7 +4706,7 @@ class EMAGradientStrategy:
                     if diff_nt < eps_nt:
                         reasons_nt.append(f"|ema3-ema34|({diff_nt:.6f})<eps({eps_nt:.6f})")
                     if last.atr_pct < self.cfg.ATR_PCT_MIN:
-                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{0.3} (DNA mínimo)")
+                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{0.2} (DNA mínimo CALIBRADO)")
                     if last.atr_pct > self.cfg.ATR_PCT_MAX:
                         reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{8.0} (DNA máximo)")
                     self._log("🧬 DNA No-Trade Zone: " + "; ".join(reasons_nt), level="INFO")
