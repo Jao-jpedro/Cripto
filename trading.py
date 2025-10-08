@@ -42,10 +42,10 @@ def _is_live_trading():
     print(f"🧬 MODO: {'LIVE TRADING' if is_live else 'SIMULAÇÃO'} | LIVE_TRADING={os.getenv('LIVE_TRADING', 'UNSET')}", flush=True)
     return is_live
 
-ABS_LOSS_HARD_STOP = 0.05  # perda máxima absoluta em USDC permitida antes de zerar
+ABS_LOSS_HARD_STOP = 0.50  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -5.0  # ROI mínimo aceitável (-5%) - em percentual
-UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real
+ROI_HARD_STOP = -10.0  # ROI mínimo aceitável (-10%) - APÓS SL DNA 1.5%
+UNREALIZED_PNL_HARD_STOP = -0.20  # trava dura: perda de 20 cents (4x maior que SL DNA)
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
@@ -138,12 +138,43 @@ class TradingLearner:
     
     MIN_ENTRIES_FOR_CLASSIFICATION = 5  # Mínimo de 5 entradas para classificar padrão
     
+    def _is_render_environment(self) -> bool:
+        """Detecta se está rodando no ambiente Render"""
+        render_indicators = [
+            os.getenv("RENDER"),
+            os.getenv("RENDER_SERVICE_ID"), 
+            os.getenv("RENDER_SERVICE_NAME"),
+            "/opt/render" in (os.getcwd() or ""),
+            "render" in (os.getenv("HOST", "").lower()),
+        ]
+        is_render = any(render_indicators)
+        if is_render:
+            _log_global("LEARNER", "🚀 Ambiente Render detectado - usando configurações otimizadas", "INFO")
+        return is_render
+    
     def __init__(self, db_path: str = None):
-        # Configurações otimizadas com algoritmo genético
+        # Detectar ambiente
+        is_render = self._is_render_environment()
+        
+        # Configurações otimizadas para cada ambiente
         if db_path:
             self.db_path = db_path
         else:
-            self.db_path = os.getenv("LEARN_DB_PATH", "/var/data/hl_learn_optimized.db")
+            if is_render:
+                # Render: priorizar /tmp e banco em memória como fallback
+                render_paths = [
+                    "/tmp/hl_learn_render.db",
+                    ":memory:",  # Fallback para Render
+                ]
+                self.db_path = os.getenv("LEARN_DB_PATH", render_paths[0])
+            else:
+                # Local/outros: usar caminhos tradicionais
+                local_paths = [
+                    "./hl_learn_optimized.db",
+                    os.path.expanduser("~/hl_learn.db"),
+                    "/tmp/hl_learn_local.db",
+                ]
+                self.db_path = os.getenv("LEARN_DB_PATH", local_paths[0])
         # Usar o mesmo webhook das notificações de entrada/saída
         self.discord_webhook = os.getenv("DISCORD_WEBHOOK", 
             "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM")
@@ -169,6 +200,13 @@ class TradingLearner:
         # Timezone BRT
         self.brt_tz = pytz.timezone('America/Sao_Paulo')
         
+        # Configurações específicas para Render
+        if is_render:
+            # Reduzir verbosidade e ajustar thresholds no Render
+            self.min_n_watch = max(self.min_n_watch, 8)  # Aumentar threshold para alertas
+            self.report_interval_trades = max(self.report_interval_trades, 10)  # Menos relatórios frequentes
+            _log_global("LEARNER", "🚀 Render: thresholds ajustados para reduzir logs", "INFO")
+        
         # Contadores
         self.trade_counter = 0
         self.last_report_trade = 0
@@ -178,38 +216,60 @@ class TradingLearner:
         self._setup_database()
         
     def _setup_database(self):
-        """Inicializa banco SQLite com WAL mode e schema"""
-        try:
-            # Criar diretório se não existir
-            db_dir = Path(self.db_path).parent
-            db_dir.mkdir(parents=True, exist_ok=True)
-            
-            self.conn = sqlite3.connect(
-                self.db_path,
-                check_same_thread=False,
-                timeout=10.0
-            )
-            
-            # Configurar WAL mode e otimizações
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            self.conn.execute("PRAGMA synchronous=NORMAL")
-            self.conn.execute("PRAGMA cache_size=-16000")  # 16MB cache
-            self.conn.execute("PRAGMA foreign_keys=ON")
-            
-            # Criar tabelas
-            self._create_tables()
-            
-            _log_global("LEARNER", f"Database initialized at {self.db_path}", "INFO")
-            
-        except Exception as e:
-            # Fallback para /tmp com warning
-            _log_global("LEARNER", f"Failed to create DB at {self.db_path}: {e}", "WARN")
-            fallback_path = "/tmp/hl_learn_fallback.db"
-            _log_global("LEARNER", f"Using fallback path: {fallback_path}", "WARN")
-            
-            self.conn = sqlite3.connect(fallback_path, check_same_thread=False)
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            self._create_tables()
+        """Inicializa banco SQLite com WAL mode e schema - Render friendly"""
+        potential_paths = [
+            self.db_path,  # Caminho preferido
+            "/tmp/hl_learn_render.db",  # Fallback Render
+            "./hl_learn_local.db",     # Fallback local
+            ":memory:",                # Fallback em memória (último recurso)
+        ]
+        
+        for path in potential_paths:
+            try:
+                _log_global("LEARNER", f"Tentando banco em: {path}", "DEBUG")
+                
+                # Para banco em memória, pular criação de diretório
+                if path != ":memory:":
+                    db_dir = Path(path).parent
+                    db_dir.mkdir(parents=True, exist_ok=True)
+                
+                self.conn = sqlite3.connect(
+                    path,
+                    check_same_thread=False,
+                    timeout=10.0
+                )
+                
+                # Configurar otimizações (pular WAL para :memory:)
+                if path != ":memory:":
+                    self.conn.execute("PRAGMA journal_mode=WAL")
+                    self.conn.execute("PRAGMA synchronous=NORMAL")
+                else:
+                    _log_global("LEARNER", "Usando banco em memória (dados serão perdidos ao reiniciar)", "WARN")
+                
+                self.conn.execute("PRAGMA cache_size=-16000")  # 16MB cache
+                self.conn.execute("PRAGMA foreign_keys=ON")
+                
+                # Criar tabelas
+                self._create_tables()
+                
+                # Teste de escrita para verificar se funciona
+                self.conn.execute("SELECT 1").fetchone()
+                
+                self.db_path = path  # Atualizar para o caminho que funcionou
+                _log_global("LEARNER", f"✅ Database inicializado com sucesso: {path}", "INFO")
+                return
+                
+            except Exception as e:
+                _log_global("LEARNER", f"❌ Falha em {path}: {e}", "DEBUG")
+                if hasattr(self, 'conn') and self.conn:
+                    try:
+                        self.conn.close()
+                    except:
+                        pass
+                continue
+        
+        # Se chegou aqui, todos os caminhos falharam
+        raise Exception("Não foi possível inicializar banco SQLite em nenhum local")
             
     def _create_tables(self):
         """Cria schema do banco"""
@@ -310,7 +370,8 @@ class TradingLearner:
                 atr_20_percentile = (atr_series.iloc[-20:] <= atr_series.iloc[-1]).mean() * 100
                 
             # Volatilidade histórica (diferentes períodos)
-            returns = df['close'].pct_change().fillna(0)
+            close_col = 'valor_fechamento' if 'valor_fechamento' in df.columns else 'close'
+            returns = df[close_col].pct_change().fillna(0)
             vol_hist_20 = returns.rolling(20).std() * 100 if len(returns) >= 20 else None
             vol_hist_50 = returns.rolling(50).std() * 100 if len(returns) >= 50 else None
             vol_hist_100 = returns.rolling(100).std() * 100 if len(returns) >= 100 else None
@@ -318,9 +379,9 @@ class TradingLearner:
             # =================== SEÇÃO B: TENDÊNCIA & MOMENTUM ===================
             ema3 = df.get('ema3', pd.Series())
             ema34 = df.get('ema34', pd.Series())
-            ema50 = df.get('ema50', pd.Series()) if 'ema50' in df.columns else df['close'].ewm(span=50).mean()
-            ema100 = df.get('ema100', pd.Series()) if 'ema100' in df.columns else df['close'].ewm(span=100).mean()
-            ema200 = df.get('ema200', pd.Series()) if 'ema200' in df.columns else df['close'].ewm(span=200).mean()
+            ema50 = df.get('ema50', pd.Series()) if 'ema50' in df.columns else df[close_col].ewm(span=50).mean()
+            ema100 = df.get('ema100', pd.Series()) if 'ema100' in df.columns else df[close_col].ewm(span=100).mean()
+            ema200 = df.get('ema200', pd.Series()) if 'ema200' in df.columns else df[close_col].ewm(span=200).mean()
             
             # Slopes de múltiplas EMAs
             slope_ema3 = None
@@ -398,7 +459,10 @@ class TradingLearner:
             candle_lower_shadow_pct = None
             candle_range_atr = None
             
-            if all(col in df.columns for col in ['open', 'close', 'high', 'low']):
+            # Verificar se temos dados OHLC completos
+            has_ohlc = all(col in df.columns for col in ['open', 'close', 'high', 'low'])
+            
+            if has_ohlc:
                 high_low = last_row['high'] - last_row['low']
                 body = abs(last_row['close'] - last_row['open'])
                 upper_shadow = last_row['high'] - max(last_row['open'], last_row['close'])
@@ -414,11 +478,11 @@ class TradingLearner:
                     candle_range_atr = high_low / current_atr if current_atr > 0 else None
                     
             # Padrões de velas recentes (última vs penúltima)
-            bullish_candle = last_row['close'] > last_row['open'] if all(col in df.columns for col in ['open', 'close']) else None
+            bullish_candle = last_row['close'] > last_row['open'] if has_ohlc else None
             prev_bullish = None
             candle_size_ratio = None
             
-            if len(df) >= 2 and all(col in df.columns for col in ['open', 'close', 'high', 'low']):
+            if len(df) >= 2 and has_ohlc:
                 prev_row = df.iloc[-2]
                 prev_bullish = prev_row['close'] > prev_row['open']
                 
@@ -427,15 +491,15 @@ class TradingLearner:
                 candle_size_ratio = current_range / prev_range if prev_range > 0 else None
                     
             # =================== SEÇÃO E: NÍVEIS & ESTRUTURA ===================
-            # Múltiplos períodos de high/low
-            high_10 = df['high'].rolling(10).max() if len(df) >= 10 else None
-            low_10 = df['low'].rolling(10).min() if len(df) >= 10 else None
-            high_20 = df['high'].rolling(20).max() if len(df) >= 20 else None
-            low_20 = df['low'].rolling(20).min() if len(df) >= 20 else None
-            high_50 = df['high'].rolling(50).max() if len(df) >= 50 else None
-            low_50 = df['low'].rolling(50).min() if len(df) >= 50 else None
-            high_100 = df['high'].rolling(100).max() if len(df) >= 100 else None
-            low_100 = df['low'].rolling(100).min() if len(df) >= 100 else None
+            # Múltiplos períodos de high/low (apenas se temos dados OHLC)
+            high_10 = df['high'].rolling(10).max() if has_ohlc and len(df) >= 10 else None
+            low_10 = df['low'].rolling(10).min() if has_ohlc and len(df) >= 10 else None
+            high_20 = df['high'].rolling(20).max() if has_ohlc and len(df) >= 20 else None
+            low_20 = df['low'].rolling(20).min() if has_ohlc and len(df) >= 20 else None
+            high_50 = df['high'].rolling(50).max() if has_ohlc and len(df) >= 50 else None
+            low_50 = df['low'].rolling(50).min() if has_ohlc and len(df) >= 50 else None
+            high_100 = df['high'].rolling(100).max() if has_ohlc and len(df) >= 100 else None
+            low_100 = df['low'].rolling(100).min() if has_ohlc and len(df) >= 100 else None
             
             # Distâncias em ATRs
             dist_hhv10_atr = None
@@ -474,12 +538,12 @@ class TradingLearner:
             month = current_time.month
             
             # =================== SEÇÃO G: MOMENTUM MULTI-TIMEFRAME ===================
-            # Momentum em diferentes períodos
-            mom_3 = ((price - df['close'].iloc[-4]) / df['close'].iloc[-4] * 100) if len(df) >= 4 else None
-            mom_5 = ((price - df['close'].iloc[-6]) / df['close'].iloc[-6] * 100) if len(df) >= 6 else None
-            mom_10 = ((price - df['close'].iloc[-11]) / df['close'].iloc[-11] * 100) if len(df) >= 11 else None
-            mom_20 = ((price - df['close'].iloc[-21]) / df['close'].iloc[-21] * 100) if len(df) >= 21 else None
-            mom_50 = ((price - df['close'].iloc[-51]) / df['close'].iloc[-51] * 100) if len(df) >= 51 else None
+            # Momentum em diferentes períodos (usando coluna de fechamento disponível)
+            mom_3 = ((price - df[close_col].iloc[-4]) / df[close_col].iloc[-4] * 100) if len(df) >= 4 else None
+            mom_5 = ((price - df[close_col].iloc[-6]) / df[close_col].iloc[-6] * 100) if len(df) >= 6 else None
+            mom_10 = ((price - df[close_col].iloc[-11]) / df[close_col].iloc[-11] * 100) if len(df) >= 11 else None
+            mom_20 = ((price - df[close_col].iloc[-21]) / df[close_col].iloc[-21] * 100) if len(df) >= 21 else None
+            mom_50 = ((price - df[close_col].iloc[-51]) / df[close_col].iloc[-51] * 100) if len(df) >= 51 else None
             
             # =================== CONSOLIDAR TODAS AS FEATURES ===================
             features = {
@@ -2459,7 +2523,7 @@ class GradientConfig:
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada GENÉTICOS CALIBRADOS (DNA otimizado: +10,910% ROI)
-    ATR_PCT_MIN: float      = 0.2        # ATR% mínimo CALIBRADO (era 0.3%)
+    ATR_PCT_MIN: float      = 0.45       # ATR% mínimo CALIBRADO (era 0.2%)
     ATR_PCT_MAX: float      = 8.0        # ATR% máximo - DNA GENÉTICO
     BREAKOUT_K_ATR: float   = 0.5        # banda de rompimento
     NO_TRADE_EPS_K_ATR: float = 0.07     # zona neutra
@@ -2951,7 +3015,7 @@ class EMAGradientStrategy:
             return 0.0
         return abs(float(pos.get("contracts", 0)))
 
-    def _notify_trade(self, kind: str, side: Optional[str], price: Optional[float], amount: Optional[float], note: str = "", include_hl: bool = False):
+    def _notify_trade(self, kind: str, side: Optional[str], price: Optional[float], amount: Optional[float], note: str = "", include_hl: bool = False, df_snapshot: Optional[pd.DataFrame] = None):
         base = self.symbol.split("/")[0] if "/" in self.symbol else self.symbol
         side_map = {"buy": "LONG", "sell": "SHORT"}
         side_txt = side_map.get((side or "").lower(), "?") if side else "?"
@@ -2973,6 +3037,38 @@ class EMAGradientStrategy:
             parts.append(f"• Quantidade: {amount}")
         if note:
             parts.append(f"• Obs: {note}")
+
+        # Adicionar informações detalhadas do snapshot para aberturas
+        if kind == "open" and df_snapshot is not None:
+            try:
+                if isinstance(df_snapshot, pd.DataFrame) and len(df_snapshot) > 0:
+                    last = df_snapshot.iloc[-1]
+                    
+                    # Informações genéticas detalhadas
+                    close_price = getattr(last, 'valor_fechamento', getattr(last, 'close', 'N/A'))
+                    ema3 = getattr(last, 'ema_short', getattr(last, 'ema3', getattr(last, 'ema7', 'N/A')))
+                    ema34 = getattr(last, 'ema_long', getattr(last, 'ema34', getattr(last, 'ema21', 'N/A')))
+                    rsi21 = getattr(last, 'rsi', 'N/A')
+                    atr = getattr(last, 'atr', 'N/A')
+                    atr_pct = getattr(last, 'atr_pct', 'N/A')
+                    volume = getattr(last, 'volume', 'N/A')
+                    vol_ma = getattr(last, 'vol_ma', 'N/A')
+                    
+                    # Calcular vol_ratio se ambos estão disponíveis
+                    vol_ratio = 'N/A'
+                    if volume != 'N/A' and vol_ma != 'N/A' and vol_ma > 0:
+                        vol_ratio = f"{volume/vol_ma:.2f}"
+                    
+                    # Adicionar linha de debug genético
+                    debug_line = (
+                        f"🧬 GENÉTICO snapshot | close={close_price:.6f} "
+                        f"ema3={ema3:.6f} ema34={ema34:.6f} rsi21={rsi21:.2f} "
+                        f"atr={atr:.6f} atr%={atr_pct:.3f} "
+                        f"vol={volume:.2f} vol_ma={vol_ma:.2f} vol_ratio={vol_ratio}"
+                    )
+                    parts.append(f"• {debug_line}")
+            except Exception as e:
+                parts.append(f"• Debug info error: {e}")
 
         # Dados opcionais da Hyperliquid (Resultado/Valor da conta)
         if include_hl:
@@ -3986,6 +4082,7 @@ class EMAGradientStrategy:
                 amount=amount,
                 note="entrada executada",
                 include_hl=False,
+                df_snapshot=df_for_log,
             )
         except Exception:
             pass
@@ -4645,14 +4742,14 @@ class EMAGradientStrategy:
                 )
                 self._log(
                     f"🧬 DNA check | SL=1.5% TP=12% LEV=3x | ema3/34_cross={last.ema_short > last.ema_long} | "
-                    f"rsi21(20-85)={20 < last.rsi < 85} | atr%_healthy={0.2 < last.atr_pct < 8.0} | vol_boost={last.volume/last.vol_ma > 1.3 if last.vol_ma > 0 else False}",
+                    f"rsi21(20-85)={20 < last.rsi < 85} | atr%_healthy={self.cfg.ATR_PCT_MIN < last.atr_pct < self.cfg.ATR_PCT_MAX} | vol_boost={last.volume/last.vol_ma > 1.3 if last.vol_ma > 0 else False}",
                     level="DEBUG",
                 )
                 # LONG conds
                 # 🧬 GENÉTICO: Condições evolutivas
                 G1 = last.ema_short > last.ema_long  # EMA3 > EMA34
                 G2 = 20 < last.rsi < 85  # RSI21 dinâmico
-                G3 = 0.2 < last.atr_pct < 8.0  # ATR CALIBRADO (era 0.3)
+                G3 = self.cfg.ATR_PCT_MIN < last.atr_pct < self.cfg.ATR_PCT_MAX  # ATR CALIBRADO (era 0.2)
                 G4 = last.volume > last.vol_ma * 1.3 if last.vol_ma > 0 else False  # Volume 1.3x CALIBRADO
                 G5 = last.valor_fechamento > last.ema_short  # Preço acima EMA3
                 self._log(
@@ -4715,9 +4812,9 @@ class EMAGradientStrategy:
                     if diff_nt < eps_nt:
                         reasons_nt.append(f"|ema3-ema34|({diff_nt:.6f})<eps({eps_nt:.6f})")
                     if last.atr_pct < self.cfg.ATR_PCT_MIN:
-                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{0.2} (DNA mínimo CALIBRADO)")
+                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN} (DNA mínimo CALIBRADO)")
                     if last.atr_pct > self.cfg.ATR_PCT_MAX:
-                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{8.0} (DNA máximo)")
+                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX} (DNA máximo)")
                     self._log("🧬 DNA No-Trade Zone: " + "; ".join(reasons_nt), level="INFO")
                     self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
                     self._last_pos_side = None
@@ -5951,8 +6048,8 @@ if __name__ == "__main__":
                     if state is None:
                         cfg = GradientConfig()
                         # REMOVIDO: cfg.LEVERAGE = asset.leverage - Agora usa sempre 3x padrão
-                        cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
-                        cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
+                        # REMOVIDO: cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct - Agora usa sempre 1.5% fixo
+                        # REMOVIDO: cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct - Agora usa sempre 12% fixo
                         safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
                         csv_path = f"trade_log_{safe_suffix}.csv"
                         xlsx_path = f"trade_log_{safe_suffix}.xlsx"

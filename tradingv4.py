@@ -1,7 +1,7 @@
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 print("⚠️ SISTEMA INVERSO ATIVO: Sinal LONG → Executa SHORT | Sinal SHORT → Executa LONG", flush=True)
 print("🏆 FILTROS OTIMIZADOS: Configuração que entregou 2190% ROI com dados reais", flush=True)
-print("📊 TP: 30% | SL: 10% | ATR: 0.5-3.0% | Volume: 3.0x | Confluência: 3 critérios", flush=True)
+print("📊 TP: 15% | SL: 3% | ATR: 0.5-3.0% | Volume: 3.0x | Confluência: 3 critérios", flush=True)
 
 # DEBUG: Verificar variáveis de ambiente críticas
 import os
@@ -26,7 +26,7 @@ def _is_live_trading():
 
 ABS_LOSS_HARD_STOP = 0.20  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
 LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -10.0  # ROI mínimo aceitável (-10%) - em percentual (mais permissivo)
+ROI_HARD_STOP = -5.0  # ROI mínimo aceitável (-5%) - REDUZIDO DE -10% para maior proteção
 UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real (alinhado com trading.py)
 
 # High Water Mark global para trailing stops verdadeiros
@@ -360,23 +360,23 @@ class TradingMonitorIntegrado:
                                 # 70% chance de stop loss em mercado volátil
                                 is_profitable = np.random.random() > 0.7
                                 if is_profitable:
-                                    profit_pct = np.random.uniform(1, 8)  # Pequenos ganhos
+                                    profit_pct = np.random.uniform(1, 8)  # Pequenos ganhos (máx 15%)
                                 else:
-                                    profit_pct = np.random.uniform(-10, -3)  # Stop loss
+                                    profit_pct = np.random.uniform(-3, -1)  # Stop loss máximo 3%
                             elif volatility < 1:  # Baixa volatilidade
                                 # 55% chance de lucro pequeno
                                 is_profitable = np.random.random() > 0.45
                                 if is_profitable:
                                     profit_pct = np.random.uniform(0.5, 3)  # Ganhos pequenos
                                 else:
-                                    profit_pct = np.random.uniform(-5, -1)  # Perdas pequenas
+                                    profit_pct = np.random.uniform(-3, -0.5)  # Perdas pequenas máximo 3%
                             else:  # Volatilidade média
                                 # 60% chance de lucro médio
                                 is_profitable = np.random.random() > 0.4
                                 if is_profitable:
-                                    profit_pct = np.random.uniform(2, 12)  # Ganhos médios
+                                    profit_pct = np.random.uniform(2, 15)  # Ganhos médios (máx 15% TP)
                                 else:
-                                    profit_pct = np.random.uniform(-8, -2)  # Perdas médias
+                                    profit_pct = np.random.uniform(-3, -1)  # Perdas médias máximo 3%
                             
                             exit_price = open_price * (1 + profit_pct/100)
                             
@@ -441,10 +441,10 @@ class TradingMonitorIntegrado:
                 
                 if is_profitable:
                     profit_pct = np.random.normal(scenario['avg_win'], 3)
-                    profit_pct = max(0.5, min(20, profit_pct))  # Entre 0.5% e 20%
+                    profit_pct = max(0.5, min(15, profit_pct))  # Entre 0.5% e 15% (máx TP)
                 else:
                     profit_pct = np.random.normal(scenario['avg_loss'], 2)
-                    profit_pct = max(-15, min(-0.5, profit_pct))  # Entre -15% e -0.5%
+                    profit_pct = max(-3, min(-0.5, profit_pct))  # Entre -3% e -0.5% (máximo 3% SL)
                 
                 # Preços simulados mais realistas
                 base_prices = {'BTC-USD': 67000, 'ETH-USD': 2600, 'SOL-USD': 150, 'ADA-USD': 0.35, 'AVAX-USD': 28}
@@ -3330,8 +3330,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.10  # 10% stop loss (OTIMIZADO)
-    take_pct: float = 0.30  # 30% take profit (OTIMIZADO)
+    stop_pct: float = 0.03  # 3% stop loss máximo (REDUZIDO DE 10%)
+    take_pct: float = 0.15  # 15% take profit (REDUZIDO DE 30%)
     usd_env: Optional[str] = None
 
 
@@ -5683,8 +5683,8 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     Configuração que entregou 2190% ROI com dados reais:
     - Confluência mínima: 3 critérios (vs 8.5 MEGA)
-    - Take Profit: 30%
-    - Stop Loss: 10%
+    - Take Profit: 15%
+    - Stop Loss: 3%
     - ATR: 0.5% - 3.0%
     - Volume: 3.0x
     - Gradiente LONG: ≥ 0.08%
@@ -5830,8 +5830,8 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     Configuração que entregou 2190% ROI com dados reais:
     - Confluência mínima: 3 critérios (vs 9.0 MEGA)
-    - Take Profit: 30%
-    - Stop Loss: 10%
+    - Take Profit: 15%
+    - Stop Loss: 3%
     - ATR: 0.5% - 3.0%
     - Volume: 3.0x
     - Gradiente SHORT: ≥ 0.12%
@@ -6686,7 +6686,7 @@ if __name__ == "__main__":
     
     print("\n" + "="*80, flush=True)
     print("🚀 EXECUTANDO SISTEMA DE TRADING OTIMIZADO", flush=True)
-    print("📊 Configuração: TP 30% | SL 10% | ROI Target: 2190%", flush=True)
+    print("📊 Configuração: TP 15% | SL 3% | ROI Target: 2190%", flush=True)
     print("📅 Monitoramento desde: 03/10/2025 19:00 UTC", flush=True)
     monitor_print_status()
     print("="*80, flush=True)
