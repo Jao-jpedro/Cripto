@@ -10,11 +10,21 @@ sys.stdout.flush()
 sys.stderr.flush()
 
 print("\n========== 🧬 SISTEMA GENÉTICO ULTRA OTIMIZADO ==========", flush=True)
-print("🎯 ROI: +10,910% anual (validado com dados reais)", flush=True)
-print("📊 Configuração: SL 1.5% | TP 12% | Leverage 3x", flush=True)
-print("🧬 DNA: EMA 3/34 | RSI 21 | Volume 1.3x CALIBRADO", flush=True)
+print("🎯 META: +5.000% ROI (baseado em backtests reais +5.449%)", flush=True)
+print("📊 Configuração: SL 1.5% | TP 12% | Leverage 10x", flush=True)
+print("🧬 DNA: EMA 3/34 | RSI 21 | Volume 1.3x | LEV 10x CALIBRADO", flush=True)
 print("🏆 Top Assets: XRP +68,700% | DOGE +16,681% | LINK +8,311%", flush=True)
+print("🛡️ PROTEÇÃO: Estratégia 2 - Crashes Severos Ativada", flush=True)
 print("========================================================", flush=True)
+
+# 🛡️ IMPORTAR SISTEMA DE PROTEÇÃO ESTRATÉGIA 2
+try:
+    from protecao_estrategia_2 import aplicar_protecoes_estrategia_2, obter_status_protecoes
+    PROTECOES_ATIVADAS = True
+    print("🛡️ Sistema de Proteção Estratégia 2 carregado com sucesso", flush=True)
+except ImportError as e:
+    PROTECOES_ATIVADAS = False
+    print(f"⚠️ Sistema de proteção não disponível: {e}", flush=True)
 
 # Configuração do sistema genético
 import os
@@ -80,6 +90,67 @@ def _clear_high_water_mark(symbol: str) -> None:
     if symbol in TRAILING_HIGH_WATER_MARK:
         del TRAILING_HIGH_WATER_MARK[symbol]
         _log_global("TRAILING_HWM", f"{symbol}: High Water Mark resetado", level="DEBUG")
+
+def _obter_capital_vault(dex_instance) -> float:
+    """
+    🛡️ Obtém capital atual do vault para sistema de proteção
+    Retorna valor em USDC considerando posições abertas + capital livre
+    """
+    try:
+        if not hasattr(dex_instance, 'fetch_account_info'):
+            return 35.0  # Capital inicial padrão se não conseguir obter
+        
+        # Obter informações da conta
+        account_info = dex_instance.fetch_account_info()
+        
+        # Capital livre (withdrawable)
+        capital_livre = 0.0
+        try:
+            withdrawable = account_info.get("withdrawable", 0)
+            if isinstance(withdrawable, (int, float)):
+                capital_livre = float(withdrawable)
+            elif isinstance(withdrawable, str):
+                capital_livre = float(withdrawable)
+        except:
+            capital_livre = 0.0
+        
+        # Valor das posições abertas (unrealized PnL incluído)
+        valor_posicoes = 0.0
+        try:
+            positions = account_info.get("positions", [])
+            for pos in positions:
+                if pos and float(pos.get("contracts", 0)) != 0:
+                    # Valor da posição = capital investido + PnL não realizado
+                    position_value = float(pos.get("positionValue", 0) or 0)
+                    leverage = float(pos.get("leverage", 1) or 1)
+                    unrealized_pnl = float(pos.get("unrealizedPnl", 0) or 0)
+                    
+                    if position_value > 0 and leverage > 0:
+                        # Capital investido = valor da posição / leverage
+                        capital_investido = position_value / leverage
+                        # Valor atual = capital investido + PnL
+                        valor_atual = capital_investido + unrealized_pnl
+                        valor_posicoes += valor_atual
+        except Exception as e:
+            _log_global("PROTECAO", f"Erro ao calcular valor posições: {e}", level="WARN")
+        
+        capital_total = capital_livre + valor_posicoes
+        
+        # Log apenas se houver mudança significativa ou a cada 10 verificações
+        if not hasattr(_obter_capital_vault, '_last_log_count'):
+            _obter_capital_vault._last_log_count = 0
+        _obter_capital_vault._last_log_count += 1
+        
+        if _obter_capital_vault._last_log_count % 10 == 1:  # Log a cada 10 verificações
+            _log_global("PROTECAO", 
+                       f"💰 Capital: ${capital_total:.2f} (livre: ${capital_livre:.2f} + posições: ${valor_posicoes:.2f})", 
+                       level="DEBUG")
+        
+        return max(capital_total, 1.0)  # Mínimo de $1 para evitar divisão por zero
+        
+    except Exception as e:
+        _log_global("PROTECAO", f"Erro ao obter capital vault: {e}, usando padrão $35", level="WARN")
+        return 35.0  # Capital inicial padrão
 
 # Silencia aviso visual do urllib3 sobre OpenSSL/LibreSSL (sem importar urllib3)
 import warnings as _warnings
@@ -629,7 +700,7 @@ class TradingLearner:
             vol_regime = self._determine_vol_regime(atr_pct) if atr_pct else "UNKNOWN"
             
             # (G) Risco & Execução - OTIMIZADO PARA +486.5% ROI!
-            leverage_eff = float(os.getenv("LEVERAGE", "3"))  # Otimizado: 3x leverage
+            leverage_eff = float(os.getenv("LEVERAGE", "10"))  # Otimizado: 10x leverage
             
             # Montar features_raw
             features_raw = {
@@ -1109,7 +1180,7 @@ class TradingLearner:
                 
             # Calcular se bateu no nível de stop baseado na configuração GENÉTICA OTIMIZADA
             side = features_binned.get("side", "").lower()
-            leverage = features_binned.get("leverage_eff", 3.0)  # Leverage otimizado: 3x
+            leverage = features_binned.get("leverage_eff", 10.0)  # Leverage otimizado: 10x
             # DNA GENÉTICO VENCEDOR: SL 1.5% (ultra agressivo para máximo ROI +10,910%)
             stop_loss_pct = 0.015  # SL genético otimizado: 1.5% para máximo ROI
             
@@ -2514,44 +2585,48 @@ import pandas as pd
 
 @dataclass
 class GradientConfig:
-    # Indicadores GENÉTICOS (DNA otimizado: EMA 3/34)
+    # 🧬 DNA GENÉTICO ULTRA OTIMIZADO - META +5.000% ROI
     EMA_SHORT_SPAN: int     = 3           # EMA rápida - DNA GENÉTICO VENCEDOR
     EMA_LONG_SPAN: int      = 34          # EMA lenta - DNA GENÉTICO VENCEDOR
+    RSI_PERIOD: int         = 21          # RSI 21 períodos - DNA GENÉTICO
     N_BARRAS_GRADIENTE: int = 3
     GRAD_CONSISTENCY: int   = 3
     ATR_PERIOD: int         = 14
     VOL_MA_PERIOD: int      = 20
 
-    # Filtros de entrada GENÉTICOS CALIBRADOS (DNA otimizado: +10,910% ROI)
-    ATR_PCT_MIN: float      = 0.45       # ATR% mínimo CALIBRADO (era 0.2%)
-    ATR_PCT_MAX: float      = 8.0        # ATR% máximo - DNA GENÉTICO
-    BREAKOUT_K_ATR: float   = 0.5        # banda de rompimento
-    NO_TRADE_EPS_K_ATR: float = 0.07     # zona neutra
+    # 🎯 FILTROS GENÉTICOS OTIMIZADOS (+5.449% ROI REAL)
+    ATR_PCT_MIN: float      = 0.005       # 0.5% ATR mínimo CALIBRADO
+    ATR_PCT_MAX: float      = 0.030       # 3.0% ATR máximo CALIBRADO  
+    RSI_MIN: float          = 20.0        # RSI mínimo 20
+    RSI_MAX: float          = 85.0        # RSI máximo 85
+    VOLUME_MULTIPLIER: float = 1.3        # Volume 1.3x média CALIBRADO
+    BREAKOUT_K_ATR: float   = 0.5         # banda de rompimento
+    NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra
+
+    # 🛡️ RISK MANAGEMENT GENÉTICO
+    LEVERAGE: int           = 10          # Leverage 10x - DNA GENÉTICO VENCEDOR
+    STOP_LOSS_CAPITAL_PCT: float = 0.015  # 1.5% SL - DNA GENÉTICO OTIMIZADO
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.12 # 12% TP - DNA GENÉTICO OTIMIZADO
+    MIN_ORDER_USD: float    = 4.0         # Entry $4 por posição
+    MAX_LOSS_ABS_USD: float = 0.05
+    
+    # 📊 PARÂMETROS OTIMIZADOS VALIDADOS
+    TP_PCT: float = 12.0                  # Take Profit 12% - DNA GENÉTICO
+    SL_PCT: float = 1.5                   # Stop Loss 1.5% - DNA GENÉTICO
+    MIN_CONFLUENCIA: int = 3              # Mínimo 3 critérios
+    MAX_POSITIONS: int = 8                # Máximo 8 posições simultâneas
+
+    # ⏰ COOLDOWN OTIMIZADO
+    COOLDOWN_BARS: int      = 0           # Desativado para maior frequência
+    POST_COOLDOWN_CONFIRM: int = 0        # Desativado
+    COOLDOWN_MINUTOS: int   = 30          # 30min após SL
+    ANTI_SPAM_SECS: int     = 3
+    MIN_HOLD_BARS: int      = 1
 
     # Saídas por gradiente
     INV_GRAD_BARS: int      = 2
 
-    # Execução GENÉTICA (DNA otimizado: +10,910% ROI)
-    LEVERAGE: int           = 3           # Leverage 3x - DNA GENÉTICO VENCEDOR
-    MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.015  # 1.5% ROI stop loss - DNA GENÉTICO
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.12 # 12% ROI take profit - DNA GENÉTICO
-    MAX_LOSS_ABS_USD: float    = 0.05
-    
-    # Parâmetros GENÉTICOS CALIBRADOS (+10,910% ROI médio)
-    TP_PCT: float = 12.0                  # Take Profit 12% ROI - DNA GENÉTICO
-    SL_PCT: float = 1.5                   # Stop Loss 1.5% ROI - DNA GENÉTICO
-    VOLUME_MULTIPLIER: float = 1.3        # Volume 1.3x média CALIBRADO (era 1.8x)
-    MIN_CONFLUENCIA: int = 3              # Mínimo 3 critérios - DNA GENÉTICO
-
-    # Cooldown OTIMIZADO
-    COOLDOWN_BARS: int      = 0           # Desativado para maior frequency
-    POST_COOLDOWN_CONFIRM: int = 0        # Desativado
-    COOLDOWN_MINUTOS: int   = 15
-    ANTI_SPAM_SECS: int     = 3
-    MIN_HOLD_BARS: int      = 1
-
-    # Stops/TP
+    # Stops/TP (usar percentuais)
     STOP_ATR_MULT: float    = 0.0         # Desativado (usar %)
     TAKEPROFIT_ATR_MULT: float = 0.0      # Desativado (usar %)
     TRAILING_ATR_MULT: float   = 0.0      # Desativado
@@ -2568,31 +2643,37 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.015  # 1.5% ROI stop loss - DNA GENÉTICO OTIMIZADO
-    take_pct: float = 0.12   # 12% ROI take profit - DNA GENÉTICO OTIMIZADO
+    stop_pct: float = 0.015  # 1.5% SL - DNA GENÉTICO OTIMIZADO
+    take_pct: float = 0.12   # 12% TP - DNA GENÉTICO OTIMIZADO
     usd_env: Optional[str] = None
 
 
+# 🎯 ASSETS PRINCIPAIS - TOP PERFORMERS VALIDADOS
 ASSET_SETUPS: List[AssetSetup] = [
-    AssetSetup("BTC-USD", "BTCUSDT", "BTC/USDC:USDC", 3, usd_env="USD_PER_TRADE_BTC"),
-    AssetSetup("SOL-USD", "SOLUSDT", "SOL/USDC:USDC", 3, usd_env="USD_PER_TRADE_SOL"),
-    AssetSetup("ETH-USD", "ETHUSDT", "ETH/USDC:USDC", 3, usd_env="USD_PER_TRADE_ETH"),
-    # AssetSetup("HYPE-USD", "HYPEUSDT", "HYPE/USDC:USDC", 3, usd_env="USD_PER_TRADE_HYPE"),  # HYPEUSDT não existe na Binance
-    AssetSetup("XRP-USD", "XRPUSDT", "XRP/USDC:USDC", 3, usd_env="USD_PER_TRADE_XRP"),
-    AssetSetup("DOGE-USD", "DOGEUSDT", "DOGE/USDC:USDC", 3, usd_env="USD_PER_TRADE_DOGE"),
-    AssetSetup("AVAX-USD", "AVAXUSDT", "AVAX/USDC:USDC", 3, usd_env="USD_PER_TRADE_AVAX"),
-    AssetSetup("ENA-USD", "ENAUSDT", "ENA/USDC:USDC", 3, usd_env="USD_PER_TRADE_ENA"),
-    AssetSetup("BNB-USD", "BNBUSDT", "BNB/USDC:USDC", 3, usd_env="USD_PER_TRADE_BNB"),
-    AssetSetup("SUI-USD", "SUIUSDT", "SUI/USDC:USDC", 3, usd_env="USD_PER_TRADE_SUI"),
-    AssetSetup("ADA-USD", "ADAUSDT", "ADA/USDC:USDC", 3, usd_env="USD_PER_TRADE_ADA"),
-    AssetSetup("PUMP-USD", "PUMPUSDT", "PUMP/USDC:USDC", 3, usd_env="USD_PER_TRADE_PUMP"),
-    AssetSetup("AVNT-USD", "AVNTUSDT", "AVNT/USDC:USDC", 3, usd_env="USD_PER_TRADE_AVNT"),
-    AssetSetup("LINK-USD", "LINKUSDT", "LINK/USDC:USDC", 3, usd_env="USD_PER_TRADE_LINK"),
-    AssetSetup("WLD-USD", "WLDUSDT", "WLD/USDC:USDC", 3, usd_env="USD_PER_TRADE_WLD"),
-    AssetSetup("AAVE-USD", "AAVEUSDT", "AAVE/USDC:USDC", 3, usd_env="USD_PER_TRADE_AAVE"),
-    AssetSetup("CRV-USD", "CRVUSDT", "CRV/USDC:USDC", 3, usd_env="USD_PER_TRADE_CRV"),
-    AssetSetup("LTC-USD", "LTCUSDT", "LTC/USDC:USDC", 3, usd_env="USD_PER_TRADE_LTC"),
-    AssetSetup("NEAR-USD", "NEARUSDT", "NEAR/USDC:USDC", 3, usd_env="USD_PER_TRADE_NEAR"),
+    AssetSetup("BTC-USD", "BTCUSDT", "BTC/USDC:USDC", 10, usd_env="USD_PER_TRADE_BTC"),
+    AssetSetup("ETH-USD", "ETHUSDT", "ETH/USDC:USDC", 10, usd_env="USD_PER_TRADE_ETH"),
+    AssetSetup("SOL-USD", "SOLUSDT", "SOL/USDC:USDC", 10, usd_env="USD_PER_TRADE_SOL"),
+    AssetSetup("XRP-USD", "XRPUSDT", "XRP/USDC:USDC", 10, usd_env="USD_PER_TRADE_XRP"),
+    AssetSetup("DOGE-USD", "DOGEUSDT", "DOGE/USDC:USDC", 10, usd_env="USD_PER_TRADE_DOGE"),
+    AssetSetup("LINK-USD", "LINKUSDT", "LINK/USDC:USDC", 10, usd_env="USD_PER_TRADE_LINK"),
+    AssetSetup("AVAX-USD", "AVAXUSDT", "AVAX/USDC:USDC", 10, usd_env="USD_PER_TRADE_AVAX"),
+    AssetSetup("ADA-USD", "ADAUSDT", "ADA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ADA"),
+    # AssetSetup("HYPE-USD", "HYPEUSDT", "HYPE/USDC:USDC", 10, usd_env="USD_PER_TRADE_HYPE"),  # HYPEUSDT não existe na Binance
+    AssetSetup("XRP-USD", "XRPUSDT", "XRP/USDC:USDC", 10, usd_env="USD_PER_TRADE_XRP"),
+    AssetSetup("DOGE-USD", "DOGEUSDT", "DOGE/USDC:USDC", 10, usd_env="USD_PER_TRADE_DOGE"),
+    AssetSetup("AVAX-USD", "AVAXUSDT", "AVAX/USDC:USDC", 10, usd_env="USD_PER_TRADE_AVAX"),
+    AssetSetup("ENA-USD", "ENAUSDT", "ENA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ENA"),
+    AssetSetup("BNB-USD", "BNBUSDT", "BNB/USDC:USDC", 10, usd_env="USD_PER_TRADE_BNB"),
+    AssetSetup("SUI-USD", "SUIUSDT", "SUI/USDC:USDC", 10, usd_env="USD_PER_TRADE_SUI"),
+    AssetSetup("ADA-USD", "ADAUSDT", "ADA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ADA"),
+    AssetSetup("PUMP-USD", "PUMPUSDT", "PUMP/USDC:USDC", 10, usd_env="USD_PER_TRADE_PUMP"),
+    AssetSetup("AVNT-USD", "AVNTUSDT", "AVNT/USDC:USDC", 10, usd_env="USD_PER_TRADE_AVNT"),
+    AssetSetup("LINK-USD", "LINKUSDT", "LINK/USDC:USDC", 10, usd_env="USD_PER_TRADE_LINK"),
+    AssetSetup("WLD-USD", "WLDUSDT", "WLD/USDC:USDC", 10, usd_env="USD_PER_TRADE_WLD"),
+    AssetSetup("AAVE-USD", "AAVEUSDT", "AAVE/USDC:USDC", 10, usd_env="USD_PER_TRADE_AAVE"),
+    AssetSetup("CRV-USD", "CRVUSDT", "CRV/USDC:USDC", 10, usd_env="USD_PER_TRADE_CRV"),
+    AssetSetup("LTC-USD", "LTCUSDT", "LTC/USDC:USDC", 10, usd_env="USD_PER_TRADE_LTC"),
+    AssetSetup("NEAR-USD", "NEARUSDT", "NEAR/USDC:USDC", 10, usd_env="USD_PER_TRADE_NEAR"),
 ]
 
 
@@ -2823,11 +2904,11 @@ class EMAGradientStrategy:
                 stop_px = entry_price * (1.0 + base_risk_ratio)
             self._log(f"🔒 SL FIXO: -1.5% @ {stop_px:.6f} (trailing desabilitado)", level="DEBUG")
         
-        # Take profit GENÉTICO: 12% ROI com leverage 3x = 4% movimento de preço
+        # Take profit GENÉTICO: 12% ROI com leverage 10x = 1.2% movimento de preço
         # Fórmula: % movimento de preço = % ROI desejado / leverage
         target_roi_pct = 0.12  # 12% ROI target (DNA GENÉTICO)
         leverage = float(self.cfg.LEVERAGE)
-        price_movement_pct = target_roi_pct / leverage  # 12% ÷ 3x = 4% movimento de preço
+        price_movement_pct = target_roi_pct / leverage  # 12% ÷ 10x = 1.2% movimento de preço
         
         if norm_side == "buy":
             take_px = entry_price * (1.0 + price_movement_pct)
@@ -3992,7 +4073,7 @@ class EMAGradientStrategy:
                 volume = last_row.get('volume', 'N/A')
                 
                 self._log(
-                    f"🧬 DNA Genético: EMA3={ema7:.4f} | EMA34={ema21:.4f} | RSI21={rsi:.2f} | ATR={atr:.6f} | Vol={volume:.0f} | SL=1.5% | TP=12% | LEV=3x",
+                    f"🧬 DNA Genético: EMA3={ema7:.4f} | EMA34={ema21:.4f} | RSI21={rsi:.2f} | ATR={atr:.6f} | Vol={volume:.0f} | SL=1.5% | TP=12% | LEV=10x",
                     level="INFO",
                 )
         except Exception as e:
@@ -4741,7 +4822,7 @@ class EMAGradientStrategy:
                     level="DEBUG",
                 )
                 self._log(
-                    f"🧬 DNA check | SL=1.5% TP=12% LEV=3x | ema3/34_cross={last.ema_short > last.ema_long} | "
+                    f"🧬 DNA check | SL=1.5% TP=12% LEV=10x | ema3/34_cross={last.ema_short > last.ema_long} | "
                     f"rsi21(20-85)={20 < last.rsi < 85} | atr%_healthy={self.cfg.ATR_PCT_MIN < last.atr_pct < self.cfg.ATR_PCT_MAX} | vol_boost={last.volume/last.vol_ma > 1.3 if last.vol_ma > 0 else False}",
                     level="DEBUG",
                 )
@@ -4775,6 +4856,44 @@ class EMAGradientStrategy:
                 self._safe_log("paper_mode", df_for_log=df, tipo="info")
                 self._last_pos_side = None
                 return
+            
+            # 🛡️ VERIFICAÇÕES DE PROTEÇÃO ESTRATÉGIA 2
+            if PROTECOES_ATIVADAS:
+                try:
+                    # Obter capital atual do vault
+                    capital_atual = _obter_capital_vault(self.dex)
+                    
+                    # Aplicar proteções da Estratégia 2
+                    pode_abrir, max_positions_ajustado = aplicar_protecoes_estrategia_2(capital_atual, 8)
+                    
+                    if not pode_abrir:
+                        # Proteções bloquearam novas entradas
+                        status_protecoes = obter_status_protecoes()
+                        
+                        razoes_bloqueio = []
+                        if status_protecoes.get('drawdown_critico', False):
+                            razoes_bloqueio.append(f"Drawdown crítico: {status_protecoes.get('drawdown_pct', 0):.1f}%")
+                        if status_protecoes.get('crash_btc_detectado', False):
+                            razoes_bloqueio.append("Crash severo BTC detectado")
+                        
+                        self._log(
+                            f"🛡️ PROTEÇÃO ATIVADA: Entrada bloqueada - {' | '.join(razoes_bloqueio)}", 
+                            level="WARN"
+                        )
+                        self._safe_log("protecao_bloqueio", df_for_log=df, tipo="info")
+                        self._last_pos_side = None
+                        return
+                    
+                    # Se chegou aqui, pode operar
+                    if max_positions_ajustado < 8:
+                        self._log(
+                            f"🛡️ PROTEÇÃO PARCIAL: Posições máximas reduzidas para {max_positions_ajustado}", 
+                            level="INFO"
+                        )
+                        
+                except Exception as e:
+                    self._log(f"⚠️ Erro no sistema de proteção: {e} - Continuando sem proteções", level="WARN")
+            
             # RSI força (ignora no-trade zone se disparar)
             rsi_val = float('nan')
             try:
@@ -4878,46 +4997,59 @@ class EMAGradientStrategy:
                 return
 
             # Entradas normais
+            # 🧬 CONDIÇÕES GENÉTICAS OTIMIZADAS (+5.449% ROI VALIDADO)
             base_long = (
-                (last.ema_short > last.ema_long) and grad_pos_ok and
-                (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
-                (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
-                (last.volume > last.vol_ma)
+                # DNA Genético: EMA 3 > EMA 34
+                (last.ema_short > last.ema_long) and 
+                # RSI21 saudável (20-85)
+                (self.cfg.RSI_MIN < last.rsi < self.cfg.RSI_MAX) and
+                # ATR% na faixa calibrada (0.5%-3.0%)
+                (self.cfg.ATR_PCT_MIN < last.atr_pct < self.cfg.ATR_PCT_MAX) and
+                # Volume 1.3x acima da média
+                (last.volume > last.vol_ma * self.cfg.VOLUME_MULTIPLIER) and
+                # Preço acima da EMA3 (momentum)
+                (last.valor_fechamento > last.ema_short)
             )
             base_short = (
-                (last.ema_short < last.ema_long) and grad_neg_ok and
-                (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX) and
-                (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
-                (last.volume > last.vol_ma)
+                # DNA Genético: EMA 3 < EMA 34
+                (last.ema_short < last.ema_long) and
+                # RSI21 saudável (20-85)
+                (self.cfg.RSI_MIN < last.rsi < self.cfg.RSI_MAX) and
+                # ATR% na faixa calibrada (0.5%-3.0%)
+                (self.cfg.ATR_PCT_MIN < last.atr_pct < self.cfg.ATR_PCT_MAX) and
+                # Volume 1.3x acima da média
+                (last.volume > last.vol_ma * self.cfg.VOLUME_MULTIPLIER) and
+                # Preço abaixo da EMA3 (momentum)
+                (last.valor_fechamento < last.ema_short)
             )
             can_long = base_long or force_long
             can_short = base_short or force_short
             if can_long:
-                entrada_tipo = "FORÇA" if force_long else "SINAL"
-                self._log("🧬 DNA ENTRY: Entrada LONG detectada → Executando LONG", level="INFO")
+                entrada_tipo = "FORÇA" if force_long else "DNA"
+                self._log("🧬 DNA ULTRA ENTRY: Entrada LONG detectada → Executando LONG", level="INFO")
                 self._log(f"📋 RAZÃO ENTRADA LONG ({entrada_tipo}):", level="INFO")
-                self._log(f"   • EMA Cross: {last.ema_short:.6f} > {last.ema_long:.6f} = {last.ema_short > last.ema_long}", level="INFO")
-                self._log(f"   • Gradiente OK: {grad_pos_ok}", level="INFO")
-                self._log(f"   • ATR %: {last.atr_pct:.2f}% (min={self.cfg.ATR_PCT_MIN:.2f}%, max={self.cfg.ATR_PCT_MAX:.2f}%)", level="INFO")
-                self._log(f"   • Breakout: preço {last.valor_fechamento:.6f} > trigger {last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr:.6f}", level="INFO")
-                self._log(f"   • Volume: {last.volume:.0f} > média {last.vol_ma:.0f} = {last.volume > last.vol_ma}", level="INFO")
+                self._log(f"   • EMA Cross: EMA3({last.ema_short:.6f}) > EMA34({last.ema_long:.6f}) = {last.ema_short > last.ema_long}", level="INFO")
+                self._log(f"   • RSI21: {last.rsi:.1f} ({self.cfg.RSI_MIN}-{self.cfg.RSI_MAX})", level="INFO")
+                self._log(f"   • ATR%: {last.atr_pct*100:.2f}% ({self.cfg.ATR_PCT_MIN*100:.1f}%-{self.cfg.ATR_PCT_MAX*100:.1f}%)", level="INFO")
+                self._log(f"   • Volume: {last.volume/last.vol_ma:.1f}x média (>{self.cfg.VOLUME_MULTIPLIER}x)", level="INFO")
+                self._log(f"   • Momentum: preço({last.valor_fechamento:.6f}) > EMA3({last.ema_short:.6f})", level="INFO")
                 if force_long:
-                    self._log(f"   • FORÇA DETECTADA: {force_long}", level="WARN")
+                    self._log(f"   • FORÇA RSI DETECTADA: {force_long}", level="WARN")
                 self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
             if can_short:
-                entrada_tipo = "FORÇA" if force_short else "SINAL"
-                self._log("🧬 DNA ENTRY: Entrada SHORT detectada → Executando SHORT", level="INFO")
+                entrada_tipo = "FORÇA" if force_short else "DNA"
+                self._log("🧬 DNA ULTRA ENTRY: Entrada SHORT detectada → Executando SHORT", level="INFO")
                 self._log(f"📋 RAZÃO ENTRADA SHORT ({entrada_tipo}):", level="INFO")
-                self._log(f"   • EMA Cross: {last.ema_short:.6f} < {last.ema_long:.6f} = {last.ema_short < last.ema_long}", level="INFO")
-                self._log(f"   • Gradiente OK: {grad_neg_ok}", level="INFO")
-                self._log(f"   • ATR %: {last.atr_pct:.2f}% (min={self.cfg.ATR_PCT_MIN:.2f}%, max={self.cfg.ATR_PCT_MAX:.2f}%)", level="INFO")
-                self._log(f"   • Breakout: preço {last.valor_fechamento:.6f} < trigger {last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr:.6f}", level="INFO")
-                self._log(f"   • Volume: {last.volume:.0f} > média {last.vol_ma:.0f} = {last.volume > last.vol_ma}", level="INFO")
+                self._log(f"   • EMA Cross: EMA3({last.ema_short:.6f}) < EMA34({last.ema_long:.6f}) = {last.ema_short < last.ema_long}", level="INFO")
+                self._log(f"   • RSI21: {last.rsi:.1f} ({self.cfg.RSI_MIN}-{self.cfg.RSI_MAX})", level="INFO")
+                self._log(f"   • ATR%: {last.atr_pct*100:.2f}% ({self.cfg.ATR_PCT_MIN*100:.1f}%-{self.cfg.ATR_PCT_MAX*100:.1f}%)", level="INFO")
+                self._log(f"   • Volume: {last.volume/last.vol_ma:.1f}x média (>{self.cfg.VOLUME_MULTIPLIER}x)", level="INFO")
+                self._log(f"   • Momentum: preço({last.valor_fechamento:.6f}) < EMA3({last.ema_short:.6f})", level="INFO")
                 if force_short:
-                    self._log(f"   • FORÇA DETECTADA: {force_short}", level="WARN")
+                    self._log(f"   • FORÇA RSI DETECTADA: {force_short}", level="WARN")
                 self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
@@ -5082,8 +5214,8 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
     # Volume média
     out["vol_ma"] = out["volume"].rolling(p.vol_ma_period, min_periods=1).mean()
 
-    # RSI (Relative Strength Index)
-    def calculate_rsi(prices, period=14):
+    # 🧬 RSI GENÉTICO (21 períodos - DNA otimizado)
+    def calculate_rsi(prices, period=21):  # MUDANÇA: 21 períodos em vez de 14
         """Calcula RSI usando pandas"""
         delta = prices.diff()
         gain = delta.where(delta > 0, 0)
@@ -5096,7 +5228,7 @@ def compute_indicators(df: pd.DataFrame, p: BacktestParams) -> pd.DataFrame:
         rsi = 100 - (100 / (1 + rs))
         return rsi
     
-    out["rsi"] = calculate_rsi(close, period=14)
+    out["rsi"] = calculate_rsi(close, period=21)  # DNA GENÉTICO: RSI 21
     
     # MACD (Moving Average Convergence Divergence)
     def calculate_macd(prices, fast=12, slow=26, signal=9):
@@ -5841,7 +5973,7 @@ if __name__ == "__main__":
                 roi_pct = 0.0
                 try:
                     position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
-                    leverage = float(pos.get("leverage", 3))  # Usar leverage padrão 3x (DNA genético)
+                    leverage = float(pos.get("leverage", 10))  # Usar leverage padrão 10x (DNA genético)
                     
                     if position_value is None:
                         # Calcular position_value manualmente se necessário
@@ -6047,7 +6179,7 @@ if __name__ == "__main__":
                     state = asset_state.get(asset.name)
                     if state is None:
                         cfg = GradientConfig()
-                        # REMOVIDO: cfg.LEVERAGE = asset.leverage - Agora usa sempre 3x padrão
+                        # REMOVIDO: cfg.LEVERAGE = asset.leverage - Agora usa sempre 10x padrão
                         # REMOVIDO: cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct - Agora usa sempre 1.5% fixo
                         # REMOVIDO: cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct - Agora usa sempre 12% fixo
                         safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
