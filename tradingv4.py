@@ -24,10 +24,10 @@ def _is_live_trading():
     print(f"[DEBUG] [LIVE_CHECK_V4] LIVE_TRADING='{os.getenv('LIVE_TRADING', 'UNSET')}' → {is_live}", flush=True)
     return is_live
 
-ABS_LOSS_HARD_STOP = 0.20  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
-LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -5.0  # ROI mínimo aceitável (-5%) - REDUZIDO DE -10% para maior proteção
-UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real (alinhado com trading.py)
+ABS_LOSS_HARD_STOP = 0.40  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
+LIQUIDATION_BUFFER_PCT = 0.40  # 0,2% de margem de segurança sobre o preço de liquidação
+ROI_HARD_STOP = -40.0  # ROI mínimo aceitável (-5%) - REDUZIDO DE -10% para maior proteção
+UNREALIZED_PNL_HARD_STOP = -0.40  # trava dura: perda de 5 cents do capital real (alinhado com trading.py)
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
@@ -3302,9 +3302,9 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.025  # 2.5% da margem como stop inicial
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.15   # take profit em 15% da margem
-    MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
+    STOP_LOSS_CAPITAL_PCT: float = 0.40  # 2.5% da margem como stop inicial
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.05   # take profit em 15% da margem
+    MAX_LOSS_ABS_USD: float    = 0.40     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -3330,8 +3330,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.03  # 3% stop loss máximo (REDUZIDO DE 10%)
-    take_pct: float = 0.15  # 15% take profit (REDUZIDO DE 30%)
+    stop_pct: float = 0.40  # 3% stop loss máximo (REDUZIDO DE 10%)
+    take_pct: float = 0.05  # 15% take profit (REDUZIDO DE 30%)
     usd_env: Optional[str] = None
 
 
