@@ -1,7 +1,7 @@
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 print("⚠️ SISTEMA INVERSO ATIVO: Sinal LONG → Executa SHORT | Sinal SHORT → Executa LONG", flush=True)
 print("🏆 FILTROS OTIMIZADOS: Configuração que entregou 2190% ROI com dados reais", flush=True)
-print("📊 TP: 15% | SL: 3% | ATR: 0.5-3.0% | Volume: 3.0x | Confluência: 3 critérios", flush=True)
+print("📊 TP: 15% | SL: 3% | ATR: 0.8-5.0% | Volume: 3.0x | Confluência: 3 critérios", flush=True)
 
 # DEBUG: Verificar variáveis de ambiente críticas
 import os
@@ -24,10 +24,10 @@ def _is_live_trading():
     print(f"[DEBUG] [LIVE_CHECK_V4] LIVE_TRADING='{os.getenv('LIVE_TRADING', 'UNSET')}' → {is_live}", flush=True)
     return is_live
 
-ABS_LOSS_HARD_STOP = 0.20  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
-LIQUIDATION_BUFFER_PCT = 0.002  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -5.0  # ROI mínimo aceitável (-5%) - REDUZIDO DE -10% para maior proteção
-UNREALIZED_PNL_HARD_STOP = -0.05  # trava dura: perda de 5 cents do capital real (alinhado com trading.py)
+ABS_LOSS_HARD_STOP = 0.40  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
+LIQUIDATION_BUFFER_PCT = 0.40  # 0,2% de margem de segurança sobre o preço de liquidação
+ROI_HARD_STOP = -40.0  # ROI mínimo aceitável (-5%) - REDUZIDO DE -10% para maior proteção
+UNREALIZED_PNL_HARD_STOP = -0.40  # trava dura: perda de 5 cents do capital real (alinhado com trading.py)
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
@@ -3291,8 +3291,8 @@ class GradientConfig:
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada (OTIMIZADOS para máximo ROI)
-    ATR_PCT_MIN: float      = 0.5        # ATR% saudável (min) - OTIMIZADO
-    ATR_PCT_MAX: float      = 3.0        # ATR% saudável (max) - OTIMIZADO
+    ATR_PCT_MIN: float      = 0.8        # ATR% saudável (min) - OTIMIZADO
+    ATR_PCT_MAX: float      = 5.0        # ATR% saudável (max) - OTIMIZADO
     BREAKOUT_K_ATR: float   = 0.8        # banda de rompimento: k*ATR - OTIMIZADO
     NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra: |EMA7-EMA21| < eps*ATR
 
@@ -3302,9 +3302,9 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.025  # 2.5% da margem como stop inicial
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.15   # take profit em 15% da margem
-    MAX_LOSS_ABS_USD: float    = 0.05     # limite absoluto de perda por posição
+    STOP_LOSS_CAPITAL_PCT: float = 0.40  # 2.5% da margem como stop inicial
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.05   # take profit em 15% da margem
+    MAX_LOSS_ABS_USD: float    = 0.40     # limite absoluto de perda por posição
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -3330,8 +3330,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.03  # 3% stop loss máximo (REDUZIDO DE 10%)
-    take_pct: float = 0.15  # 15% take profit (REDUZIDO DE 30%)
+    stop_pct: float = 0.40  # 3% stop loss máximo (REDUZIDO DE 10%)
+    take_pct: float = 0.05  # 15% take profit (REDUZIDO DE 30%)
     usd_env: Optional[str] = None
 
 
@@ -5685,10 +5685,10 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     - Confluência mínima: 3 critérios (vs 8.5 MEGA)
     - Take Profit: 15%
     - Stop Loss: 3%
-    - ATR: 0.5% - 3.0%
+    - ATR: 0.8% - 5.0%
     - Volume: 3.0x
     - Gradiente LONG: ≥ 0.08%
-    - RSI: 20-70
+    - RSI: 10-90
     """
     reasons = []
     conds = []
@@ -5707,7 +5707,7 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
         reasons.append("❌ EMA/gradiente fraco")
     
     # CRITÉRIO 2: ATR otimizado (range expandido)
-    c2 = (row.atr_pct >= 0.5) and (row.atr_pct <= 3.0)  # OTIMIZADO: 0.5%-3.0%
+    c2 = (row.atr_pct >= 0.8) and (row.atr_pct <= 5.0)  # OTIMIZADO: 0.8%-5.0%
     conds.append(c2)
     if c2:
         confluence_score += 1
@@ -5736,7 +5736,7 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     # CRITÉRIO 5: RSI otimizado (range expandido)
     if hasattr(row, 'rsi') and row.rsi is not None:
-        c5 = 20 <= row.rsi <= 70  # OTIMIZADO: 20-70 (vs 45-55 MEGA)
+        c5 = 10 <= row.rsi <= 90  # OTIMIZADO: 10-90 (vs 20-70 anterior)
         conds.append(c5)
         if c5:
             confluence_score += 1
@@ -5832,10 +5832,10 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     - Confluência mínima: 3 critérios (vs 9.0 MEGA)
     - Take Profit: 15%
     - Stop Loss: 3%
-    - ATR: 0.5% - 3.0%
+    - ATR: 0.8% - 5.0%
     - Volume: 3.0x
     - Gradiente SHORT: ≥ 0.12%
-    - RSI: 20-70
+    - RSI: 10-90
     """
     reasons = []
     conds = []
@@ -5854,7 +5854,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
         reasons.append("❌ EMA/gradiente fraco")
     
     # CRITÉRIO 2: ATR otimizado (range expandido)
-    c2 = (row.atr_pct >= 0.5) and (row.atr_pct <= 3.0)  # OTIMIZADO: 0.5%-3.0%
+    c2 = (row.atr_pct >= 0.8) and (row.atr_pct <= 5.0)  # OTIMIZADO: 0.8%-5.0%
     conds.append(c2)
     if c2:
         confluence_score += 1
@@ -5883,7 +5883,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     
     # CRITÉRIO 5: RSI otimizado (range expandido)
     if hasattr(row, 'rsi') and row.rsi is not None:
-        c5 = 20 <= row.rsi <= 70  # OTIMIZADO: 20-70 (vs 45-55 MEGA)
+        c5 = 10 <= row.rsi <= 90  # OTIMIZADO: 10-90 (vs 20-70 anterior)
         conds.append(c5)
         if c5:
             confluence_score += 1
