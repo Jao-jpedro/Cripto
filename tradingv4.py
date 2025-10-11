@@ -3258,6 +3258,19 @@ def _hl_get_account_value(wallet: str) -> float:
     except Exception:
         return 0.0
 
+# Versões específicas para vault (tradingv4)
+def _hl_get_latest_fill_vault():
+    """Obtém últimos fills do vault."""
+    return _http_post_json(_HL_INFO_URL, {"type": "userFills", "user": VAULT_ADDRESS})
+
+def _hl_get_account_value_vault() -> float:
+    """Obtém valor da conta do vault."""
+    data = _http_post_json(_HL_INFO_URL, {"type": "clearinghouseState", "user": VAULT_ADDRESS})
+    try:
+        return float(data["marginSummary"]["accountValue"]) if data else 0.0
+    except Exception:
+        return 0.0
+
 # COMMAND ----------
 
 
@@ -3729,10 +3742,9 @@ class EMAGradientStrategy:
         if note:
             parts.append(f"• Obs: {note}")
 
-        # Dados opcionais da Hyperliquid (Resultado/Valor da conta)
+        # Dados opcionais da Hyperliquid (Resultado/Valor da conta do VAULT)
         if include_hl:
-            wallet = self._wallet_address()
-            fills = _hl_get_latest_fill(wallet)
+            fills = _hl_get_latest_fill_vault()
             try:
                 last = fills[0] if isinstance(fills, list) and fills else None
                 if last:
@@ -3745,9 +3757,9 @@ class EMAGradientStrategy:
             except Exception:
                 pass
             try:
-                acc_val = _hl_get_account_value(wallet)
+                acc_val = _hl_get_account_value_vault()
                 if acc_val:
-                    parts.append(f"• Valor da Conta: {acc_val:.2f} USDC")
+                    parts.append(f"• Valor da Conta (Vault): {acc_val:.2f} USDC")
             except Exception:
                 pass
 

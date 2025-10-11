@@ -3327,8 +3327,8 @@ class AssetSetup:
     data_symbol: str
     hl_symbol: str
     leverage: int
-    stop_pct: float = 0.40  # 3% stop loss máximo (REDUZIDO DE 10%)
-    take_pct: float = 0.05  # 10% take profit (REDUZIDO DE 15%)
+    stop_pct: float = 0.40  # 40% stop loss máximo (REDUZIDO DE 10%)
+    take_pct: float = 0.10  # 10% take profit (REDUZIDO DE 15%)
     usd_env: Optional[str] = None
 
 
