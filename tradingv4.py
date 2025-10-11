@@ -4037,8 +4037,18 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
         try:
+            # DEBUG: Log para verificar se está consultando vault corretamente
+            self._log(f"[DEBUG_VAULT] Verificando posição no vault {VAULT_ADDRESS} para {self.symbol}", level="DEBUG")
+            
             pos = self.dex.fetch_positions([self.symbol], {"vaultAddress": VAULT_ADDRESS})
             current_pos = pos[0] if pos and float(pos[0].get("contracts", 0)) > 0 else None
+            
+            if current_pos:
+                contracts = float(current_pos.get("contracts", 0))
+                side = current_pos.get("side", "unknown")
+                self._log(f"[DEBUG_VAULT] Posição encontrada no vault: {side} {contracts} contratos", level="DEBUG")
+            else:
+                self._log(f"[DEBUG_VAULT] Nenhuma posição encontrada no vault para {self.symbol}", level="DEBUG")
             
             # Verificar se posição foi fechada externamente
             self._check_external_position_closure(current_pos)
@@ -4297,6 +4307,9 @@ class EMAGradientStrategy:
         amt = self._round_amount(amount)
         px  = float(stop_price)
         
+        # DEBUG: Log para verificar de onde vem a decisão de criar stop
+        self._log(f"[DEBUG_VAULT] _place_stop chamado: {side} {amt} @ {px} - símbolo: {self.symbol}", level="DEBUG")
+        
         # Determinar se é price_below ou price_above baseado no lado da posição
         current_price = self._preco_atual()
         if side.lower() == "sell":  # Fechar posição LONG
@@ -4313,6 +4326,8 @@ class EMAGradientStrategy:
             "trigger": "mark",
             "vaultAddress": VAULT_ADDRESS
         }
+        
+        self._log(f"[DEBUG_VAULT] Criando stop {order_type} com VAULT_ADDRESS: {VAULT_ADDRESS}", level="DEBUG")
         
         if self.debug:
             self._log(f"Criando STOP {order_type} {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
