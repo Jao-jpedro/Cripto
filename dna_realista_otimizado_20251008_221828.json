@@ -1,0 +1,877 @@
+{
+  "config": {
+    "min_confluence": 8.5,
+    "volume_multiplier": 3.0,
+    "min_atr_breakout": 1.0,
+    "max_timing_distance": 1.0,
+    "min_ema_gradient": 0.1
+  },
+  "summary": {
+    "roi_total_bruto": 7.03920727178311,
+    "roi_total_liquido": 6.516057859226065,
+    "impacto_taxas": 0.5231494125570446,
+    "total_trades": 32,
+    "avg_win_rate": 8.184523809523808,
+    "assets_positivos": 4,
+    "total_fees": 5.357049984584103,
+    "vs_dna_realista": -1370.783942140774
+  },
+  "results_by_asset": [
+    {
+      "symbol": "btc",
+      "trades": 4,
+      "win_rate": 0.0,
+      "roi_bruto": -16.760162446092,
+      "roi_liquido": -17.654037776550236,
+      "total_fees": 0.5720802114932736,
+      "final_capital": 52.70141582300785,
+      "trades_detail": [
+        {
+          "symbol": "btc",
+          "side": "short",
+          "entry_time": "2025-05-24 23:00:00",
+          "exit_time": "2025-05-26 00:00:00",
+          "entry_price": 107761.91,
+          "exit_price": 109540.46,
+          "size": 0.0017817056137924801,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.88,
+          "fees": 0.15360000000000001,
+          "pnl_net": -3.0336,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "btc",
+          "side": "short",
+          "entry_time": "2025-06-21 23:00:00",
+          "exit_time": "2025-06-23 20:00:00",
+          "entry_price": 102120.01,
+          "exit_price": 103739.99,
+          "size": 0.001791022151290428,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.743488,
+          "fees": 0.14631936,
+          "pnl_net": -2.8898073600000003,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "btc",
+          "side": "long",
+          "entry_time": "2025-08-13 14:00:00",
+          "exit_time": "2025-08-14 12:00:00",
+          "entry_price": 120890.73,
+          "exit_price": 118866.37,
+          "size": 0.0014412170223473712,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.6134466688,
+          "fees": 0.139383822336,
+          "pnl_net": -2.7528304911359998,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "btc",
+          "side": "short",
+          "entry_time": "2025-08-22 12:00:00",
+          "exit_time": "2025-08-22 14:00:00",
+          "entry_price": 112341.5,
+          "exit_price": 115808.23,
+          "size": 0.001477381790759354,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.4895692966988796,
+          "fees": 0.1327770291572736,
+          "pnl_net": -2.622346325856153,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        }
+      ],
+      "equity_curve": [
+        64.0,
+        60.9664,
+        58.07659264,
+        55.323762148864,
+        52.70141582300785
+      ]
+    },
+    {
+      "symbol": "sol",
+      "trades": 2,
+      "win_rate": 50.0,
+      "roi_bruto": 29.890800000000002,
+      "roi_liquido": 29.324975999999992,
+      "total_fees": 0.36212736,
+      "final_capital": 82.76798464,
+      "trades_detail": [
+        {
+          "symbol": "sol",
+          "side": "long",
+          "entry_time": "2024-11-10 02:00:00",
+          "exit_time": "2024-11-17 04:00:00",
+          "entry_price": 202.39,
+          "exit_price": 235.08,
+          "size": 0.9486634715153911,
+          "pnl_pct": 0.12,
+          "pnl_raw": 23.04,
+          "fees": 0.15360000000000001,
+          "pnl_net": 22.8864,
+          "close_reason": "TP",
+          "confluence": 9.0,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "sol",
+          "side": "short",
+          "entry_time": "2025-09-17 18:00:00",
+          "exit_time": "2025-09-17 19:00:00",
+          "entry_price": 233.67,
+          "exit_price": 238.74,
+          "size": 1.1155013480549494,
+          "pnl_pct": -0.015,
+          "pnl_raw": -3.909888,
+          "fees": 0.20852735999999997,
+          "pnl_net": -4.11841536,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        }
+      ],
+      "equity_curve": [
+        64.0,
+        86.8864,
+        82.76798464
+      ]
+    },
+    {
+      "symbol": "eth",
+      "trades": 6,
+      "win_rate": 16.666666666666664,
+      "roi_bruto": 8.118523939030508,
+      "roi_liquido": 6.493895882445488,
+      "total_fees": 1.0397619562144254,
+      "final_capital": 68.15609336476511,
+      "trades_detail": [
+        {
+          "symbol": "eth",
+          "side": "short",
+          "entry_time": "2024-12-03 14:00:00",
+          "exit_time": "2024-12-04 00:00:00",
+          "entry_price": 3580.36,
+          "exit_price": 3691.87,
+          "size": 0.05362589236836519,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.88,
+          "fees": 0.15360000000000001,
+          "pnl_net": -3.0336,
+          "close_reason": "SL",
+          "confluence": 9.0,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "eth",
+          "side": "short",
+          "entry_time": "2025-02-26 14:00:00",
+          "exit_time": "2025-02-28 04:00:00",
+          "entry_price": 2435.88,
+          "exit_price": 2136.71,
+          "size": 0.0750854721907483,
+          "pnl_pct": 0.12,
+          "pnl_raw": 21.947904,
+          "fees": 0.14631936,
+          "pnl_net": 21.80158464,
+          "close_reason": "TP",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "eth",
+          "side": "long",
+          "entry_time": "2025-05-27 06:00:00",
+          "exit_time": "2025-05-30 22:00:00",
+          "entry_price": 2569.59,
+          "exit_price": 2526.71,
+          "size": 0.09663174044108204,
+          "pnl_pct": -0.015,
+          "pnl_raw": -3.7245593088000004,
+          "fees": 0.19864316313600003,
+          "pnl_net": -3.9232024719360004,
+          "close_reason": "SL",
+          "confluence": 9.0,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "eth",
+          "side": "short",
+          "entry_time": "2025-07-30 19:00:00",
+          "exit_time": "2025-07-31 00:00:00",
+          "entry_price": 3760.68,
+          "exit_price": 3843.92,
+          "size": 0.06289669594440156,
+          "pnl_pct": -0.015,
+          "pnl_raw": -3.5480151975628806,
+          "fees": 0.18922747720335364,
+          "pnl_net": -3.737242674766234,
+          "close_reason": "SL",
+          "confluence": 9.0,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "eth",
+          "side": "long",
+          "entry_time": "2025-08-24 19:00:00",
+          "exit_time": "2025-08-25 00:00:00",
+          "entry_price": 4813.04,
+          "exit_price": 4701.04,
+          "size": 0.04681503134814864,
+          "pnl_pct": -0.015,
+          "pnl_raw": -3.3798392771984,
+          "fees": 0.18025809478391466,
+          "pnl_net": -3.5600973719823146,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "eth",
+          "side": "short",
+          "entry_time": "2025-09-06 16:00:00",
+          "exit_time": "2025-09-08 15:00:00",
+          "entry_price": 4289.97,
+          "exit_price": 4371.64,
+          "size": 0.05003352619341077,
+          "pnl_pct": -0.015,
+          "pnl_raw": -3.2196348954591962,
+          "fees": 0.17171386109115713,
+          "pnl_net": -3.3913487565503533,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        }
+      ],
+      "equity_curve": [
+        64.0,
+        60.9664,
+        82.76798464000001,
+        78.84478216806401,
+        75.10753949329778,
+        71.54744212131547,
+        68.15609336476511
+      ]
+    },
+    {
+      "symbol": "xrp",
+      "trades": 0,
+      "roi_bruto": 0,
+      "roi_liquido": 0,
+      "win_rate": 0,
+      "total_fees": 0,
+      "final_capital": 64.0
+    },
+    {
+      "symbol": "doge",
+      "trades": 0,
+      "roi_bruto": 0,
+      "roi_liquido": 0,
+      "win_rate": 0,
+      "total_fees": 0,
+      "final_capital": 64.0
+    },
+    {
+      "symbol": "avax",
+      "trades": 6,
+      "win_rate": 50.0,
+      "roi_bruto": 118.27951522243461,
+      "roi_liquido": 116.29536820065441,
+      "total_fees": 1.2698540939393492,
+      "final_capital": 138.42903564841882,
+      "trades_detail": [
+        {
+          "symbol": "avax",
+          "side": "long",
+          "entry_time": "2024-10-28 22:00:00",
+          "exit_time": "2024-10-31 06:00:00",
+          "entry_price": 26.33,
+          "exit_price": 25.85,
+          "size": 7.292062286365363,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.88,
+          "fees": 0.15360000000000001,
+          "pnl_net": -3.0336,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "avax",
+          "side": "short",
+          "entry_time": "2025-04-05 20:00:00",
+          "exit_time": "2025-04-07 06:00:00",
+          "entry_price": 17.82,
+          "exit_price": 14.82,
+          "size": 10.263703703703705,
+          "pnl_pct": 0.12,
+          "pnl_raw": 21.947904,
+          "fees": 0.14631936,
+          "pnl_net": 21.80158464,
+          "close_reason": "TP",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "avax",
+          "side": "long",
+          "entry_time": "2025-07-09 14:00:00",
+          "exit_time": "2025-07-11 01:00:00",
+          "entry_price": 18.53,
+          "exit_price": 20.83,
+          "size": 13.400105446303293,
+          "pnl_pct": 0.12,
+          "pnl_raw": 29.796474470400003,
+          "fees": 0.19864316313600003,
+          "pnl_net": 29.597831307264002,
+          "close_reason": "TP",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "avax",
+          "side": "short",
+          "entry_time": "2025-07-31 13:00:00",
+          "exit_time": "2025-07-31 16:00:00",
+          "entry_price": 23.02,
+          "exit_price": 23.39,
+          "size": 14.643677143431452,
+          "pnl_pct": -0.015,
+          "pnl_raw": -5.05646171762688,
+          "fees": 0.2696779582734336,
+          "pnl_net": -5.326139675900314,
+          "close_reason": "SL",
+          "confluence": 9.0,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u2705 Rompimento forte"
+          ]
+        },
+        {
+          "symbol": "avax",
+          "side": "long",
+          "entry_time": "2025-08-17 16:00:00",
+          "exit_time": "2025-08-18 02:00:00",
+          "entry_price": 24.99,
+          "exit_price": 24.05,
+          "size": 12.84990111300885,
+          "pnl_pct": -0.015,
+          "pnl_raw": -4.816785432211367,
+          "fees": 0.2568952230512729,
+          "pnl_net": -5.073680655262639,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "avax",
+          "side": "long",
+          "entry_time": "2025-09-07 23:00:00",
+          "exit_time": "2025-09-10 12:00:00",
+          "entry_price": 24.68,
+          "exit_price": 28.12,
+          "size": 12.39456996954227,
+          "pnl_pct": 0.12,
+          "pnl_raw": 36.707758421796385,
+          "fees": 0.24471838947864258,
+          "pnl_net": 36.46304003231774,
+          "close_reason": "TP",
+          "confluence": 9.0,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        }
+      ],
+      "equity_curve": [
+        64.0,
+        60.9664,
+        82.76798464000001,
+        112.36581594726401,
+        107.0396762713637,
+        101.96599561610107,
+        138.42903564841882
+      ]
+    },
+    {
+      "symbol": "ena",
+      "trades": 0,
+      "roi_bruto": 0,
+      "roi_liquido": 0,
+      "win_rate": 0,
+      "total_fees": 0,
+      "final_capital": 64.0
+    },
+    {
+      "symbol": "bnb",
+      "trades": 7,
+      "win_rate": 14.285714285714285,
+      "roi_bruto": 3.1455020792484563,
+      "roi_liquido": 1.4460852176175543,
+      "total_fees": 1.0876267914437816,
+      "final_capital": 64.92549453927523,
+      "trades_detail": [
+        {
+          "symbol": "bnb",
+          "side": "long",
+          "entry_time": "2024-11-10 05:00:00",
+          "exit_time": "2024-11-10 20:00:00",
+          "entry_price": 631.6,
+          "exit_price": 618.83,
+          "size": 0.3039898670044332,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.88,
+          "fees": 0.15360000000000001,
+          "pnl_net": -3.0336,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "bnb",
+          "side": "long",
+          "entry_time": "2024-12-26 07:00:00",
+          "exit_time": "2024-12-26 09:00:00",
+          "entry_price": 706.81,
+          "exit_price": 696.0,
+          "size": 0.2587671368543173,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.743488,
+          "fees": 0.14631936,
+          "pnl_net": -2.8898073600000003,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "bnb",
+          "side": "long",
+          "entry_time": "2025-03-06 06:00:00",
+          "exit_time": "2025-03-06 16:00:00",
+          "entry_price": 605.64,
+          "exit_price": 594.47,
+          "size": 0.2876787826431544,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.6134466688,
+          "fees": 0.139383822336,
+          "pnl_net": -2.7528304911359998,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "bnb",
+          "side": "long",
+          "entry_time": "2025-03-12 14:00:00",
+          "exit_time": "2025-03-17 06:00:00",
+          "entry_price": 560.15,
+          "exit_price": 629.41,
+          "size": 0.29629793170863516,
+          "pnl_pct": 0.12,
+          "pnl_raw": 19.916554373591037,
+          "fees": 0.1327770291572736,
+          "pnl_net": 19.783777344433762,
+          "close_reason": "TP",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "bnb",
+          "side": "long",
+          "entry_time": "2025-04-01 14:00:00",
+          "exit_time": "2025-04-02 02:00:00",
+          "entry_price": 615.32,
+          "exit_price": 601.06,
+          "size": 0.36618770473882417,
+          "pnl_pct": -0.015,
+          "pnl_raw": -3.3798392771983994,
+          "fees": 0.18025809478391464,
+          "pnl_net": -3.560097371982314,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "bnb",
+          "side": "long",
+          "entry_time": "2025-05-11 00:00:00",
+          "exit_time": "2025-05-11 13:00:00",
+          "entry_price": 663.77,
+          "exit_price": 649.81,
+          "size": 0.3233685257904792,
+          "pnl_pct": -0.015,
+          "pnl_raw": -3.219634895459196,
+          "fees": 0.1717138610911571,
+          "pnl_net": -3.391348756550353,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "bnb",
+          "side": "long",
+          "entry_time": "2025-05-21 17:00:00",
+          "exit_time": "2025-05-31 00:00:00",
+          "entry_price": 662.59,
+          "exit_price": 650.35,
+          "size": 0.3085894445951422,
+          "pnl_pct": -0.015,
+          "pnl_raw": -3.067024201414429,
+          "fees": 0.16357462407543624,
+          "pnl_net": -3.2305988254898654,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        }
+      ],
+      "equity_curve": [
+        64.0,
+        60.9664,
+        58.07659264,
+        55.323762148864,
+        75.10753949329776,
+        71.54744212131546,
+        68.1560933647651,
+        64.92549453927523
+      ]
+    },
+    {
+      "symbol": "sui",
+      "trades": 0,
+      "roi_bruto": 0,
+      "roi_liquido": 0,
+      "win_rate": 0,
+      "total_fees": 0,
+      "final_capital": 64.0
+    },
+    {
+      "symbol": "ada",
+      "trades": 0,
+      "roi_bruto": 0,
+      "roi_liquido": 0,
+      "win_rate": 0,
+      "total_fees": 0,
+      "final_capital": 64.0
+    },
+    {
+      "symbol": "link",
+      "trades": 0,
+      "roi_bruto": 0,
+      "roi_liquido": 0,
+      "win_rate": 0,
+      "total_fees": 0,
+      "final_capital": 64.0
+    },
+    {
+      "symbol": "wld",
+      "trades": 0,
+      "roi_bruto": 0,
+      "roi_liquido": 0,
+      "win_rate": 0,
+      "total_fees": 0,
+      "final_capital": 64.0
+    },
+    {
+      "symbol": "aave",
+      "trades": 2,
+      "win_rate": 0.0,
+      "roi_bruto": -8.7867,
+      "roi_liquido": -9.255323999999998,
+      "total_fees": 0.29991936,
+      "final_capital": 58.07659264,
+      "trades_detail": [
+        {
+          "symbol": "aave",
+          "side": "short",
+          "entry_time": "2024-10-24 11:00:00",
+          "exit_time": "2024-10-28 04:00:00",
+          "entry_price": 147.35,
+          "exit_price": 150.36,
+          "size": 1.3030200203596878,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.88,
+          "fees": 0.15360000000000001,
+          "pnl_net": -3.0336,
+          "close_reason": "SL",
+          "confluence": 9.0,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "aave",
+          "side": "long",
+          "entry_time": "2025-08-04 11:00:00",
+          "exit_time": "2025-08-05 04:00:00",
+          "entry_price": 263.89,
+          "exit_price": 257.34,
+          "size": 0.6930887869945811,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.743488,
+          "fees": 0.14631936,
+          "pnl_net": -2.8898073600000003,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        }
+      ],
+      "equity_curve": [
+        64.0,
+        60.9664,
+        58.07659264
+      ]
+    },
+    {
+      "symbol": "crv",
+      "trades": 0,
+      "roi_bruto": 0,
+      "roi_liquido": 0,
+      "win_rate": 0,
+      "total_fees": 0,
+      "final_capital": 64.0
+    },
+    {
+      "symbol": "ltc",
+      "trades": 4,
+      "win_rate": 0.0,
+      "roi_bruto": -16.760162446092,
+      "roi_liquido": -17.654037776550236,
+      "total_fees": 0.5720802114932736,
+      "final_capital": 52.70141582300785,
+      "trades_detail": [
+        {
+          "symbol": "ltc",
+          "side": "long",
+          "entry_time": "2024-11-10 06:00:00",
+          "exit_time": "2024-11-13 03:00:00",
+          "entry_price": 75.65,
+          "exit_price": 73.75,
+          "size": 2.538003965631196,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.88,
+          "fees": 0.15360000000000001,
+          "pnl_net": -3.0336,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "ltc",
+          "side": "short",
+          "entry_time": "2025-01-12 12:00:00",
+          "exit_time": "2025-01-15 14:00:00",
+          "entry_price": 102.52,
+          "exit_price": 104.94,
+          "size": 1.7840343347639487,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.743488,
+          "fees": 0.14631936,
+          "pnl_net": -2.8898073600000003,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "ltc",
+          "side": "short",
+          "entry_time": "2025-08-29 06:00:00",
+          "exit_time": "2025-09-05 12:00:00",
+          "entry_price": 111.78,
+          "exit_price": 114.09,
+          "size": 1.5586847192699946,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.6134466688,
+          "fees": 0.139383822336,
+          "pnl_net": -2.7528304911359998,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        },
+        {
+          "symbol": "ltc",
+          "side": "short",
+          "entry_time": "2025-09-17 18:00:00",
+          "exit_time": "2025-09-17 21:00:00",
+          "entry_price": 113.73,
+          "exit_price": 115.56,
+          "size": 1.4593448205978368,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.4895692966988796,
+          "fees": 0.1327770291572736,
+          "pnl_net": -2.622346325856153,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3<EMA34+grad<-0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        }
+      ],
+      "equity_curve": [
+        64.0,
+        60.9664,
+        58.07659264,
+        55.323762148864,
+        52.70141582300785
+      ]
+    },
+    {
+      "symbol": "near",
+      "trades": 1,
+      "win_rate": 0.0,
+      "roi_bruto": -4.5,
+      "roi_liquido": -4.74,
+      "total_fees": 0.15360000000000001,
+      "final_capital": 60.9664,
+      "trades_detail": [
+        {
+          "symbol": "near",
+          "side": "long",
+          "entry_time": "2025-01-26 05:00:00",
+          "exit_time": "2025-01-26 17:00:00",
+          "entry_price": 5.046,
+          "exit_price": 4.966,
+          "size": 38.049940546967896,
+          "pnl_pct": -0.015,
+          "pnl_raw": -2.88,
+          "fees": 0.15360000000000001,
+          "pnl_net": -3.0336,
+          "close_reason": "SL",
+          "confluence": 8.5,
+          "reasons": [
+            "\u2705 EMA3>EMA34+grad>0.1%",
+            "\u2705 ATR saud\u00e1vel",
+            "\u274c Rompimento fraco"
+          ]
+        }
+      ],
+      "equity_curve": [
+        64.0,
+        60.9664
+      ]
+    }
+  ]
+}

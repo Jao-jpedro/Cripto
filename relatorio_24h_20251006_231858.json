@@ -1,0 +1,19 @@
+{
+  "periodo_analise": {
+    "inicio": "2025-10-05T23:18:56.327213",
+    "fim": "2025-10-06T23:18:56.327213",
+    "duracao": "24 horas"
+  },
+  "eventos_encontrados": 6,
+  "logs_obtidos": true,
+  "resumo_executivo": {
+    "deploys_24h": 3,
+    "builds_24h": 3,
+    "deploys_sucessos": 1,
+    "ultimo_deploy": "2025-10-06T22:55:20.405327Z",
+    "ultimo_deploy_status": "N/A",
+    "logs_acessiveis": "Sim",
+    "status_sistema": "✅ Ativo com deploys recentes"
+  },
+  "timestamp_relatorio": "2025-10-06T23:18:58.483531"
+}

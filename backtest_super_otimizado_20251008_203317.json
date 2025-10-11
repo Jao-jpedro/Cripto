@@ -1,0 +1,96 @@
+{
+  "timestamp": "20251008_203317",
+  "dna_config": {
+    "stop_loss": 1.5,
+    "take_profit": 12.0,
+    "leverage": 3.0,
+    "ema_fast": 3,
+    "ema_slow": 34,
+    "rsi_period": 21,
+    "rsi_buy_max": 85,
+    "rsi_sell_min": 20,
+    "volume_multiplier": 1.82,
+    "atr_period": 14,
+    "atr_threshold": 0.45
+  },
+  "portfolio_roi": 1.849682287044043,
+  "target_roi": 10910,
+  "precision": 0.016954008130559514,
+  "total_trades": 3347,
+  "assets_results": {
+    "XRP-USD": {
+      "trades": 321,
+      "win_rate": 48.598130841121495,
+      "roi": -8.54409037323921,
+      "final_capital": 0.9145590962676079,
+      "total_pnl": -0.08544090373239237
+    },
+    "DOGE-USD": {
+      "trades": 351,
+      "win_rate": 47.57834757834758,
+      "roi": -23.692640429389865,
+      "final_capital": 0.7630735957061013,
+      "total_pnl": -0.23692640429389825
+    },
+    "LINK-USD": {
+      "trades": 358,
+      "win_rate": 49.72067039106145,
+      "roi": 17.693173990865564,
+      "final_capital": 1.1769317399086556,
+      "total_pnl": 0.1769317399086548
+    },
+    "AVAX-USD": {
+      "trades": 363,
+      "win_rate": 46.5564738292011,
+      "roi": -42.93903822620494,
+      "final_capital": 0.5706096177379506,
+      "total_pnl": -0.42939038226204895
+    },
+    "ADA-USD": {
+      "trades": 366,
+      "win_rate": 51.63934426229508,
+      "roi": 51.08271934706834,
+      "final_capital": 1.5108271934706834,
+      "total_pnl": 0.510827193470685
+    },
+    "ETH-USD": {
+      "trades": 354,
+      "win_rate": 50.0,
+      "roi": 84.17954743584008,
+      "final_capital": 1.8417954743584009,
+      "total_pnl": 0.8417954743583983
+    },
+    "SOL-USD": {
+      "trades": 330,
+      "win_rate": 46.96969696969697,
+      "roi": -46.39994661373314,
+      "final_capital": 0.5360005338626685,
+      "total_pnl": -0.4639994661373306
+    },
+    "BTC-USD": {
+      "trades": 240,
+      "win_rate": 47.5,
+      "roi": -10.227628015663848,
+      "final_capital": 0.8977237198433615,
+      "total_pnl": -0.1022762801566392
+    },
+    "LTC-USD": {
+      "trades": 368,
+      "win_rate": 42.66304347826087,
+      "roi": -44.03495656283274,
+      "final_capital": 0.5596504343716726,
+      "total_pnl": -0.44034956562832733
+    },
+    "BNB-USD": {
+      "trades": 296,
+      "win_rate": 52.702702702702695,
+      "roi": 41.379682317730236,
+      "final_capital": 1.4137968231773024,
+      "total_pnl": 0.4137968231773028
+    }
+  },
+  "capital_evolution": {
+    "initial": 10.0,
+    "final": 10.184968228704404
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "timestamp": "2025-10-06T23:10:09.408760",
+  "service_id": "srv-d31n3pumcj7s738sddi0",
+  "dashboard_url": "https://dashboard.render.com/worker/srv-d31n3pumcj7s738sddi0",
+  "verificacoes": {
+    "sistema_ativo": {
+      "descricao": "Sistema está rodando e gerando logs",
+      "como_verificar": "Logs recentes (últimos 5-10 minutos)",
+      "status": "❓ Não verificado"
+    },
+    "parametros_dna": {
+      "descricao": "Parâmetros DNA genético corretos",
+      "valores_esperados": {
+        "SL": "1.5%",
+        "TP": "12%",
+        "leverage": "3x",
+        "EMA": "3/34"
+      },
+      "como_verificar": "Procurar por 'DNA' ou 'genetic' nos logs",
+      "status": "❓ Não verificado"
+    },
+    "conexao_hyperliquid": {
+      "descricao": "Conexão ativa com Hyperliquid",
+      "como_verificar": "Procurar por 'Hyperliquid', 'API', 'connected'",
+      "status": "❓ Não verificado"
+    },
+    "trades_ativos": {
+      "descricao": "Sistema executando trades",
+      "como_verificar": "Procurar por 'trade', 'buy', 'sell', 'position'",
+      "status": "❓ Não verificado"
+    },
+    "sem_erros_criticos": {
+      "descricao": "Ausência de erros que impedem funcionamento",
+      "como_verificar": "Procurar por 'error', 'exception', 'failed'",
+      "status": "❓ Não verificado"
+    }
+  },
+  "commits_implementados": {
+    "662f8e1": "FIX CRÍTICO: Parâmetros DNA Genético",
+    "56e3f06": "FIX MATEMÁTICO: TP/SL com Alavancagem"
+  }
+}

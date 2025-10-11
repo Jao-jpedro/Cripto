@@ -1,0 +1,90 @@
+{
+  "timestamp": "20251008_204249",
+  "strategy": "TRADING_PY_EXACT",
+  "config": {
+    "stop_loss_pct": 0.015,
+    "take_profit_pct": 0.12,
+    "leverage": 3,
+    "ema_fast": 3,
+    "ema_slow": 34,
+    "rsi_period": 21
+  },
+  "portfolio_roi": 0.0,
+  "total_trades": 0,
+  "total_wins": 0,
+  "win_rate": 0,
+  "total_pnl": 0,
+  "assets_results": {
+    "BTC-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "SOL-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "ETH-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "XRP-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "DOGE-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "AVAX-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "BNB-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "ADA-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "LINK-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    },
+    "LTC-USD": {
+      "trades": 0,
+      "wins": 0,
+      "win_rate": 0,
+      "total_pnl": 0,
+      "roi": 0
+    }
+  },
+  "detailed_trades": []
+}

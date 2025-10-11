@@ -1,0 +1,58 @@
+{
+  "period": "2025-10-05 23:18:56.327213 até 2025-10-06 23:18:56.327213",
+  "total_events": 6,
+  "event_types": {
+    "build_ended": 2,
+    "deploy_started": 2,
+    "build_started": 1,
+    "deploy_ended": 1
+  },
+  "deploy_timeline": [
+    {
+      "timestamp": "2025-10-06T22:55:20.405327Z",
+      "type": "deploy_started",
+      "status": "unknown",
+      "details": {
+        "deployId": "dep-d3i4hljuibrs739ba450",
+        "trigger": {
+          "clearCache": false,
+          "deployedByRender": false,
+          "envUpdated": false,
+          "firstBuild": false,
+          "manual": false,
+          "newCommit": "56e3f062f127e949c743a7c85a8a65dde65bb4b7",
+          "rollback": false
+        }
+      }
+    },
+    {
+      "timestamp": "2025-10-06T19:54:43.481176Z",
+      "type": "deploy_ended",
+      "status": "succeeded",
+      "details": {
+        "deployId": "dep-d3i1rrh5pdvs73831hng",
+        "deployStatus": "succeeded",
+        "reason": {},
+        "status": 2
+      }
+    },
+    {
+      "timestamp": "2025-10-06T19:52:15.882116Z",
+      "type": "deploy_started",
+      "status": "unknown",
+      "details": {
+        "deployId": "dep-d3i1rrh5pdvs73831hng",
+        "trigger": {
+          "clearCache": false,
+          "deployedByRender": false,
+          "envUpdated": false,
+          "firstBuild": false,
+          "manual": false,
+          "newCommit": "662f8e16c022ed9b8f226832cd4bb9b51f9036a1",
+          "rollback": false
+        }
+      }
+    }
+  ],
+  "analysis_timestamp": "2025-10-06T23:18:56.684694"
+}

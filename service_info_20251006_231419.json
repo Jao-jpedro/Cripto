@@ -1,0 +1,35 @@
+{
+  "autoDeploy": "yes",
+  "autoDeployTrigger": "commit",
+  "branch": "main",
+  "createdAt": "2025-09-12T01:05:43.841846Z",
+  "dashboardUrl": "https://dashboard.render.com/worker/srv-d31n3pumcj7s738sddi0",
+  "id": "srv-d31n3pumcj7s738sddi0",
+  "name": "Cripto",
+  "notifyOnFail": "default",
+  "ownerId": "tea-d21ug4u3jp1c738b3n80",
+  "repo": "https://github.com/Jao-jpedro/Cripto",
+  "rootDir": "",
+  "serviceDetails": {
+    "buildPlan": "performance",
+    "env": "python",
+    "envSpecificDetails": {
+      "buildCommand": "pip install -r requirements.txt",
+      "startCommand": "python trading.py"
+    },
+    "numInstances": 1,
+    "plan": "pro",
+    "previews": {
+      "generation": "off"
+    },
+    "pullRequestPreviewsEnabled": "no",
+    "region": "frankfurt",
+    "runtime": "python",
+    "sshAddress": "srv-d31n3pumcj7s738sddi0@ssh.frankfurt.render.com"
+  },
+  "slug": "cripto-twnc",
+  "suspended": "not_suspended",
+  "suspenders": [],
+  "type": "background_worker",
+  "updatedAt": "2025-10-06T22:57:36.36293Z"
+}

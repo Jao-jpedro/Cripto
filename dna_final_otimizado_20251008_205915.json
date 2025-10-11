@@ -1,0 +1,107 @@
+[
+  {
+    "config_name": "ULTRA_AGRESSIVO",
+    "config": {
+      "name": "DNA Ultra Agressivo",
+      "stop_loss": 0.015,
+      "take_profit": 0.22,
+      "leverage": 5,
+      "ema_fast": 3,
+      "ema_slow": 34,
+      "rsi_period": 21,
+      "min_confluence": 5.0,
+      "volume_multiplier": 1.2,
+      "atr_min": 0.25,
+      "atr_max": 3.0
+    },
+    "portfolio_roi": 386.29516512366723,
+    "total_pnl": 247.22890567914703,
+    "total_trades": 3101,
+    "win_rate": 15.99484037407288,
+    "profitable_assets": 14
+  },
+  {
+    "config_name": "MEGA_TP",
+    "config": {
+      "name": "DNA Mega Take Profit",
+      "stop_loss": 0.025,
+      "take_profit": 0.3,
+      "leverage": 4,
+      "ema_fast": 3,
+      "ema_slow": 34,
+      "rsi_period": 21,
+      "min_confluence": 6.5,
+      "volume_multiplier": 2.0,
+      "atr_min": 0.4,
+      "atr_max": 2.0
+    },
+    "portfolio_roi": 270.5187361987055,
+    "total_pnl": 173.13199116717152,
+    "total_trades": 1642,
+    "win_rate": 22.0462850182704,
+    "profitable_assets": 15
+  },
+  {
+    "config_name": "BALANCEADO_PLUS",
+    "config": {
+      "name": "DNA Balanceado Plus",
+      "stop_loss": 0.018,
+      "take_profit": 0.2,
+      "leverage": 4,
+      "ema_fast": 3,
+      "ema_slow": 34,
+      "rsi_period": 21,
+      "min_confluence": 6.0,
+      "volume_multiplier": 1.4,
+      "atr_min": 0.35,
+      "atr_max": 2.2
+    },
+    "portfolio_roi": 188.26364581428413,
+    "total_pnl": 120.48873332114185,
+    "total_trades": 2514,
+    "win_rate": 16.746221161495626,
+    "profitable_assets": 13
+  },
+  {
+    "config_name": "VENCEDOR",
+    "config": {
+      "name": "DNA Agressivo Original",
+      "stop_loss": 0.02,
+      "take_profit": 0.18,
+      "leverage": 4,
+      "ema_fast": 3,
+      "ema_slow": 34,
+      "rsi_period": 21,
+      "min_confluence": 5.5,
+      "volume_multiplier": 1.3,
+      "atr_min": 0.3,
+      "atr_max": 2.5
+    },
+    "portfolio_roi": 185.25618262542332,
+    "total_pnl": 118.56395688027092,
+    "total_trades": 2766,
+    "win_rate": 18.402024584237164,
+    "profitable_assets": 12
+  },
+  {
+    "config_name": "VOLUME_HUNTER",
+    "config": {
+      "name": "DNA Volume Hunter",
+      "stop_loss": 0.02,
+      "take_profit": 0.18,
+      "leverage": 4,
+      "ema_fast": 3,
+      "ema_slow": 34,
+      "rsi_period": 21,
+      "min_confluence": 5.0,
+      "volume_multiplier": 3.0,
+      "atr_min": 0.5,
+      "atr_max": 2.5
+    },
+    "portfolio_roi": 179.79313137463876,
+    "total_pnl": 115.0676040797688,
+    "total_trades": 2716,
+    "win_rate": 18.078055964653903,
+    "profitable_assets": 14
+  }
+]

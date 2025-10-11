@@ -1,0 +1,25 @@
+{
+  "timestamp": "20251008_203240",
+  "dna_config": {
+    "stop_loss": 1.5,
+    "take_profit": 12.0,
+    "leverage": 3.0,
+    "ema_fast": 3,
+    "ema_slow": 34,
+    "rsi_period": 21,
+    "rsi_buy_max": 85,
+    "rsi_sell_min": 20,
+    "volume_multiplier": 1.82,
+    "atr_period": 14,
+    "atr_threshold": 0.45
+  },
+  "portfolio_roi": -100.0,
+  "target_roi": 10910,
+  "precision": -0.916590284142988,
+  "total_trades": 0,
+  "assets_results": {},
+  "capital_evolution": {
+    "initial": 10.0,
+    "final": 0
+  }
+}

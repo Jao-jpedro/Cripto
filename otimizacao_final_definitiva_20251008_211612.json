@@ -1,0 +1,170 @@
+[
+  {
+    "config_name": "GIGA_TRADER",
+    "config": {
+      "name": "DNA Giga Trader",
+      "stop_loss": 0.002,
+      "take_profit": 1.2,
+      "leverage": 25,
+      "ema_fast": 1,
+      "ema_slow": 2,
+      "rsi_period": 1,
+      "min_confluence": 0.3,
+      "volume_multiplier": 0.01,
+      "atr_min": 0.001,
+      "atr_max": 30.0
+    },
+    "portfolio_roi": 2459.6736713939863,
+    "total_pnl": 1574.1911496921512,
+    "total_trades": 23892,
+    "win_rate": 22.116189519504438,
+    "profitable_assets": 16
+  },
+  {
+    "config_name": "SINGULARITY_V2",
+    "config": {
+      "name": "DNA Singularity V2",
+      "stop_loss": 0.002,
+      "take_profit": 1.2,
+      "leverage": 20,
+      "ema_fast": 1,
+      "ema_slow": 2,
+      "rsi_period": 1,
+      "min_confluence": 0.8,
+      "volume_multiplier": 0.05,
+      "atr_min": 0.01,
+      "atr_max": 20.0
+    },
+    "portfolio_roi": 1967.7389371151871,
+    "total_pnl": 1259.3529197537198,
+    "total_trades": 23892,
+    "win_rate": 22.116189519504438,
+    "profitable_assets": 16
+  },
+  {
+    "config_name": "MEGA_PROFIT",
+    "config": {
+      "name": "DNA Mega Profit",
+      "stop_loss": 0.003,
+      "take_profit": 1.0,
+      "leverage": 20,
+      "ema_fast": 1,
+      "ema_slow": 2,
+      "rsi_period": 1,
+      "min_confluence": 0.5,
+      "volume_multiplier": 0.05,
+      "atr_min": 0.005,
+      "atr_max": 25.0
+    },
+    "portfolio_roi": 1705.468419215875,
+    "total_pnl": 1091.49978829816,
+    "total_trades": 22469,
+    "win_rate": 24.09987093328586,
+    "profitable_assets": 15
+  },
+  {
+    "config_name": "HYPERSPACE_V2",
+    "config": {
+      "name": "DNA HyperSpace V2",
+      "stop_loss": 0.003,
+      "take_profit": 1.0,
+      "leverage": 18,
+      "ema_fast": 1,
+      "ema_slow": 3,
+      "rsi_period": 2,
+      "min_confluence": 0.6,
+      "volume_multiplier": 0.08,
+      "atr_min": 0.008,
+      "atr_max": 18.0
+    },
+    "portfolio_roi": 1534.9215772942887,
+    "total_pnl": 982.3498094683448,
+    "total_trades": 22469,
+    "win_rate": 24.09987093328586,
+    "profitable_assets": 15
+  },
+  {
+    "config_name": "TERA_ENGINE",
+    "config": {
+      "name": "DNA Tera Engine",
+      "stop_loss": 0.004,
+      "take_profit": 0.9,
+      "leverage": 18,
+      "ema_fast": 1,
+      "ema_slow": 3,
+      "rsi_period": 2,
+      "min_confluence": 0.8,
+      "volume_multiplier": 0.08,
+      "atr_min": 0.01,
+      "atr_max": 15.0
+    },
+    "portfolio_roi": 1526.2118816771049,
+    "total_pnl": 976.7756042733471,
+    "total_trades": 21191,
+    "win_rate": 26.327214383464682,
+    "profitable_assets": 16
+  },
+  {
+    "config_name": "ULTIMATE_SCALPER",
+    "config": {
+      "name": "DNA Ultimate Scalper",
+      "stop_loss": 0.005,
+      "take_profit": 0.8,
+      "leverage": 15,
+      "ema_fast": 1,
+      "ema_slow": 3,
+      "rsi_period": 2,
+      "min_confluence": 1.0,
+      "volume_multiplier": 0.1,
+      "atr_min": 0.01,
+      "atr_max": 20.0
+    },
+    "portfolio_roi": 1408.1254390970225,
+    "total_pnl": 901.2002810220944,
+    "total_trades": 19939,
+    "win_rate": 28.562114449069664,
+    "profitable_assets": 16
+  },
+  {
+    "config_name": "QUANTUM_V2",
+    "config": {
+      "name": "DNA Quantum V2",
+      "stop_loss": 0.004,
+      "take_profit": 0.85,
+      "leverage": 15,
+      "ema_fast": 1,
+      "ema_slow": 4,
+      "rsi_period": 2,
+      "min_confluence": 1.0,
+      "volume_multiplier": 0.12,
+      "atr_min": 0.015,
+      "atr_max": 15.0
+    },
+    "portfolio_roi": 1260.1752804467571,
+    "total_pnl": 806.5121794859245,
+    "total_trades": 21182,
+    "win_rate": 26.324237560192614,
+    "profitable_assets": 16
+  },
+  {
+    "config_name": "PETA_HUNTER",
+    "config": {
+      "name": "DNA Peta Hunter",
+      "stop_loss": 0.006,
+      "take_profit": 0.7,
+      "leverage": 12,
+      "ema_fast": 1,
+      "ema_slow": 4,
+      "rsi_period": 3,
+      "min_confluence": 1.2,
+      "volume_multiplier": 0.15,
+      "atr_min": 0.02,
+      "atr_max": 12.0
+    },
+    "portfolio_roi": 1124.1225127699981,
+    "total_pnl": 719.4384081727987,
+    "total_trades": 19016,
+    "win_rate": 30.30605805637358,
+    "profitable_assets": 15
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "timestamp": "2025-10-06T23:03:33.846518",
+  "commits_corrigidos": {
+    "662f8e1": {
+      "descricao": "FIX CRÍTICO: Parâmetros DNA Genético",
+      "parametros": {
+        "SL": "1.5%",
+        "TP": "12%",
+        "leverage": "3x",
+        "ema": "3/34"
+      },
+      "status": "✅ Implementado"
+    },
+    "56e3f06": {
+      "descricao": "FIX MATEMÁTICO: TP/SL com Alavancagem",
+      "correcoes": {
+        "tp_real": "4% movimento (12% ÷ 3x)",
+        "sl_real": "0.5% movimento (1.5% ÷ 3x)",
+        "formulas": "Corrigidas para considerar alavancagem"
+      },
+      "status": "✅ Implementado"
+    }
+  },
+  "performance_esperada": {
+    "roi_anual": "+10,910%",
+    "assets": 18,
+    "timeframe": "15min",
+    "trades_dia_estimado": "5-20"
+  }
+}

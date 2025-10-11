@@ -1,0 +1,691 @@
+{
+  "configuracao": {
+    "caixa_inicial": 36.0,
+    "usd_per_trade": 4.0,
+    "leverage": 3,
+    "sl_roi": -0.015,
+    "tp_roi": 0.12,
+    "atr_min_pct": 0.45
+  },
+  "resultados": {
+    "caixa_final": 34.783086569772436,
+    "pnl_total": -1.216913430227561,
+    "roi_total": -3.3803150839654474,
+    "total_trades": 49,
+    "wins": 8,
+    "losses": 41,
+    "win_rate": 0.0
+  },
+  "trades": [
+    {
+      "symbol": "NEARUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 04:00:00",
+      "entry_price": 2.922,
+      "exit_price": 2.942,
+      "duration_min": 45.0,
+      "roi_pct": -2.0533880903490775,
+      "pnl_usd": -0.0821355236139631,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "FILUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 04:00:00",
+      "entry_price": 2.264,
+      "exit_price": 2.278,
+      "duration_min": 45.0,
+      "roi_pct": -1.855123674911692,
+      "pnl_usd": -0.07420494699646768,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "BNBUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 04:15:00",
+      "entry_price": 1274.56,
+      "exit_price": 1282.0,
+      "duration_min": 60.0,
+      "roi_pct": -1.7511925684157799,
+      "pnl_usd": -0.07004770273663119,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 04:30:00",
+      "entry_price": 218.88,
+      "exit_price": 220.13,
+      "duration_min": 75.0,
+      "roi_pct": -1.7132675438596492,
+      "pnl_usd": -0.06853070175438597,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 04:30:00",
+      "entry_price": 0.24494,
+      "exit_price": 0.24669,
+      "duration_min": 75.0,
+      "roi_pct": -2.1433820527476133,
+      "pnl_usd": -0.08573528210990454,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "LINKUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 04:30:00",
+      "entry_price": 21.75,
+      "exit_price": 21.93,
+      "duration_min": 75.0,
+      "roi_pct": -2.4827586206896513,
+      "pnl_usd": -0.09931034482758605,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "UNIUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 04:30:00",
+      "entry_price": 7.729,
+      "exit_price": 7.777,
+      "duration_min": 75.0,
+      "roi_pct": -1.8631129512226694,
+      "pnl_usd": -0.07452451804890678,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "DOTUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 06:00:00",
+      "entry_price": 4.097,
+      "exit_price": 4.12,
+      "duration_min": 165.0,
+      "roi_pct": -1.6841591408347338,
+      "pnl_usd": -0.06736636563338935,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "APTUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 05:00:00",
+      "exit_time": "2025-10-08 06:15:00",
+      "entry_price": 5.332,
+      "exit_price": 5.3,
+      "duration_min": 75.0,
+      "roi_pct": -1.8004501125281336,
+      "pnl_usd": -0.07201800450112535,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 05:15:00",
+      "exit_time": "2025-10-08 06:45:00",
+      "entry_price": 218.99,
+      "exit_price": 220.26,
+      "duration_min": 90.0,
+      "roi_pct": -1.7398054705694075,
+      "pnl_usd": -0.0695922188227763,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 06:15:00",
+      "exit_time": "2025-10-08 07:45:00",
+      "entry_price": 0.24502,
+      "exit_price": 0.24663,
+      "duration_min": 90.0,
+      "roi_pct": -1.9712676516202763,
+      "pnl_usd": -0.07885070606481105,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "NEARUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 05:15:00",
+      "exit_time": "2025-10-08 07:45:00",
+      "entry_price": 2.922,
+      "exit_price": 2.955,
+      "duration_min": 150.0,
+      "roi_pct": -3.3880903490759664,
+      "pnl_usd": -0.13552361396303866,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "UNIUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 05:00:00",
+      "exit_time": "2025-10-08 07:45:00",
+      "entry_price": 7.735,
+      "exit_price": 7.779,
+      "duration_min": 165.0,
+      "roi_pct": -1.706528765352279,
+      "pnl_usd": -0.06826115061409116,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "ADAUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 03:15:00",
+      "exit_time": "2025-10-08 08:15:00",
+      "entry_price": 0.8142,
+      "exit_price": 0.8185,
+      "duration_min": 300.0,
+      "roi_pct": -1.5843773028739758,
+      "pnl_usd": -0.06337509211495904,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "ICPUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 04:00:00",
+      "exit_time": "2025-10-08 08:15:00",
+      "entry_price": 4.398,
+      "exit_price": 4.421,
+      "duration_min": 255.0,
+      "roi_pct": -1.5688949522510627,
+      "pnl_usd": -0.0627557980900425,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "NEARUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 08:00:00",
+      "exit_time": "2025-10-08 08:30:00",
+      "entry_price": 2.937,
+      "exit_price": 2.968,
+      "duration_min": 30.0,
+      "roi_pct": -3.1664964249234053,
+      "pnl_usd": -0.12665985699693622,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "UNIUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 08:30:00",
+      "exit_time": "2025-10-08 08:45:00",
+      "entry_price": 7.824,
+      "exit_price": 7.783,
+      "duration_min": 15.0,
+      "roi_pct": -1.5720858895705323,
+      "pnl_usd": -0.06288343558282129,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 08:30:00",
+      "exit_time": "2025-10-08 09:00:00",
+      "entry_price": 28.45,
+      "exit_price": 28.28,
+      "duration_min": 30.0,
+      "roi_pct": -1.7926186291739703,
+      "pnl_usd": -0.07170474516695881,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 08:30:00",
+      "exit_time": "2025-10-08 09:15:00",
+      "entry_price": 0.24924,
+      "exit_price": 0.24781,
+      "duration_min": 45.0,
+      "roi_pct": -1.7212325469426901,
+      "pnl_usd": -0.0688493018777076,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "LINKUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 08:30:00",
+      "exit_time": "2025-10-08 09:15:00",
+      "entry_price": 22.09,
+      "exit_price": 21.94,
+      "duration_min": 45.0,
+      "roi_pct": -2.0371208691715514,
+      "pnl_usd": -0.08148483476686205,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 10:30:00",
+      "exit_time": "2025-10-08 11:30:00",
+      "entry_price": 0.25015,
+      "exit_price": 0.24887,
+      "duration_min": 60.0,
+      "roi_pct": -1.5350789526283937,
+      "pnl_usd": -0.06140315810513575,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "ARBUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 08:45:00",
+      "exit_time": "2025-10-08 11:30:00",
+      "entry_price": 0.4247,
+      "exit_price": 0.4222,
+      "duration_min": 165.0,
+      "roi_pct": -1.7659524370143647,
+      "pnl_usd": -0.07063809748057459,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "NEARUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 11:45:00",
+      "exit_time": "2025-10-08 12:30:00",
+      "entry_price": 2.936,
+      "exit_price": 2.954,
+      "duration_min": 45.0,
+      "roi_pct": -1.8392370572207328,
+      "pnl_usd": -0.07356948228882931,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "NEARUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 13:00:00",
+      "exit_time": "2025-10-08 13:15:00",
+      "entry_price": 2.952,
+      "exit_price": 2.936,
+      "duration_min": 15.0,
+      "roi_pct": -1.6260162601626031,
+      "pnl_usd": -0.06504065040650413,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 12:30:00",
+      "exit_time": "2025-10-08 13:30:00",
+      "entry_price": 0.25241,
+      "exit_price": 0.25039,
+      "duration_min": 60.0,
+      "roi_pct": -2.400855750564584,
+      "pnl_usd": -0.09603423002258335,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "BNBUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 06:45:00",
+      "exit_time": "2025-10-08 13:30:00",
+      "entry_price": 1307.02,
+      "exit_price": 1300.46,
+      "duration_min": 405.0,
+      "roi_pct": -1.5057152912732656,
+      "pnl_usd": -0.06022861165093062,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "APTUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 11:15:00",
+      "exit_time": "2025-10-08 13:45:00",
+      "entry_price": 5.183,
+      "exit_price": 5.227,
+      "duration_min": 150.0,
+      "roi_pct": -2.546787574763678,
+      "pnl_usd": -0.10187150299054713,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "ARBUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 13:30:00",
+      "exit_time": "2025-10-08 13:45:00",
+      "entry_price": 0.4215,
+      "exit_price": 0.4247,
+      "duration_min": 15.0,
+      "roi_pct": -2.277580071174403,
+      "pnl_usd": -0.09110320284697612,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "NEARUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 13:15:00",
+      "exit_time": "2025-10-08 14:00:00",
+      "entry_price": 2.936,
+      "exit_price": 2.952,
+      "duration_min": 45.0,
+      "roi_pct": -1.6348773841961868,
+      "pnl_usd": -0.06539509536784748,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 14:00:00",
+      "exit_time": "2025-10-08 14:30:00",
+      "entry_price": 222.42,
+      "exit_price": 220.92,
+      "duration_min": 30.0,
+      "roi_pct": -2.0231993525762073,
+      "pnl_usd": -0.08092797410304829,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "ADAUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 14:00:00",
+      "exit_time": "2025-10-08 14:30:00",
+      "entry_price": 0.825,
+      "exit_price": 0.8199,
+      "duration_min": 30.0,
+      "roi_pct": -1.8545454545454525,
+      "pnl_usd": -0.0741818181818181,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "DOTUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 14:00:00",
+      "exit_time": "2025-10-08 14:30:00",
+      "entry_price": 4.173,
+      "exit_price": 4.143,
+      "duration_min": 30.0,
+      "roi_pct": -2.156721782890025,
+      "pnl_usd": -0.086268871315601,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 13:45:00",
+      "exit_time": "2025-10-08 14:45:00",
+      "entry_price": 28.52,
+      "exit_price": 28.36,
+      "duration_min": 60.0,
+      "roi_pct": -1.683029453015429,
+      "pnl_usd": -0.06732117812061716,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "ETHUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 14:45:00",
+      "exit_time": "2025-10-08 16:45:00",
+      "entry_price": 4450.09,
+      "exit_price": 4496.35,
+      "duration_min": 120.0,
+      "roi_pct": -3.118588612814587,
+      "pnl_usd": -0.12474354451258349,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "BNBUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 15:15:00",
+      "exit_time": "2025-10-08 16:45:00",
+      "entry_price": 1295.27,
+      "exit_price": 1302.89,
+      "duration_min": 90.0,
+      "roi_pct": -1.7648829973673716,
+      "pnl_usd": -0.07059531989469486,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "NEARUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 14:30:00",
+      "exit_time": "2025-10-08 16:45:00",
+      "entry_price": 2.921,
+      "exit_price": 2.95,
+      "duration_min": 135.0,
+      "roi_pct": -2.978432043820646,
+      "pnl_usd": -0.11913728175282584,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "LTCUSDT",
+      "side": "SHORT",
+      "entry_time": "2025-10-08 04:15:00",
+      "exit_time": "2025-10-08 17:00:00",
+      "entry_price": 117.1,
+      "exit_price": 118.03,
+      "duration_min": 765.0,
+      "roi_pct": -2.3825789923142793,
+      "pnl_usd": -0.09530315969257117,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "UNIUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 09:30:00",
+      "exit_time": "2025-10-08 17:15:00",
+      "entry_price": 7.779,
+      "exit_price": 8.098,
+      "duration_min": 465.0,
+      "roi_pct": 12.302352487466287,
+      "pnl_usd": 0.49209409949865146,
+      "motivo": "TP"
+    },
+    {
+      "symbol": "FILUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 15:15:00",
+      "exit_time": "2025-10-08 17:45:00",
+      "entry_price": 2.303,
+      "exit_price": 2.408,
+      "duration_min": 150.0,
+      "roi_pct": 13.677811550151976,
+      "pnl_usd": 0.547112462006079,
+      "motivo": "TP"
+    },
+    {
+      "symbol": "UNIUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 17:15:00",
+      "exit_time": "2025-10-08 18:15:00",
+      "entry_price": 8.098,
+      "exit_price": 8.04,
+      "duration_min": 60.0,
+      "roi_pct": -2.1486786860953915,
+      "pnl_usd": -0.08594714744381565,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "FILUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 17:45:00",
+      "exit_time": "2025-10-08 18:15:00",
+      "entry_price": 2.408,
+      "exit_price": 2.394,
+      "duration_min": 30.0,
+      "roi_pct": -1.744186046511602,
+      "pnl_usd": -0.06976744186046407,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 18:45:00",
+      "exit_time": "2025-10-08 19:00:00",
+      "entry_price": 29.34,
+      "exit_price": 29.15,
+      "duration_min": 15.0,
+      "roi_pct": -1.9427402862985814,
+      "pnl_usd": -0.07770961145194326,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "DOTUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 19:15:00",
+      "exit_time": "2025-10-08 20:45:00",
+      "entry_price": 4.219,
+      "exit_price": 4.194,
+      "duration_min": 90.0,
+      "roi_pct": -1.777672434226145,
+      "pnl_usd": -0.0711068973690458,
+      "motivo": "SL"
+    },
+    {
+      "symbol": "LINKUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 10:30:00",
+      "exit_time": "2025-10-08 22:00:00",
+      "entry_price": 22.05,
+      "exit_price": 22.62,
+      "duration_min": 690.0,
+      "roi_pct": 7.755102040816331,
+      "pnl_usd": 0.31020408163265323,
+      "motivo": "TIMEOUT"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 13:45:00",
+      "exit_time": "2025-10-08 22:00:00",
+      "entry_price": 0.25289,
+      "exit_price": 0.25847,
+      "duration_min": 495.0,
+      "roi_pct": 6.619478824785449,
+      "pnl_usd": 0.26477915299141797,
+      "motivo": "TIMEOUT"
+    },
+    {
+      "symbol": "ETHUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 16:45:00",
+      "exit_time": "2025-10-08 22:00:00",
+      "entry_price": 4496.35,
+      "exit_price": 4537.47,
+      "duration_min": 315.0,
+      "roi_pct": 2.743558664249884,
+      "pnl_usd": 0.10974234656999536,
+      "motivo": "TIMEOUT"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 17:00:00",
+      "exit_time": "2025-10-08 22:00:00",
+      "entry_price": 225.12,
+      "exit_price": 229.28,
+      "duration_min": 300.0,
+      "roi_pct": 5.543710021321957,
+      "pnl_usd": 0.22174840085287828,
+      "motivo": "TIMEOUT"
+    },
+    {
+      "symbol": "ADAUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 17:00:00",
+      "exit_time": "2025-10-08 22:00:00",
+      "entry_price": 0.8343,
+      "exit_price": 0.8411,
+      "duration_min": 300.0,
+      "roi_pct": 2.445163610212124,
+      "pnl_usd": 0.09780654440848496,
+      "motivo": "TIMEOUT"
+    },
+    {
+      "symbol": "ATOMUSDT",
+      "side": "LONG",
+      "entry_time": "2025-10-08 17:00:00",
+      "exit_time": "2025-10-08 22:00:00",
+      "entry_price": 4.163,
+      "exit_price": 4.174,
+      "duration_min": 300.0,
+      "roi_pct": 0.7926975738650098,
+      "pnl_usd": 0.031707902954600395,
+      "motivo": "TIMEOUT"
+    }
+  ],
+  "asset_stats": {
+    "NEARUSDT": {
+      "trades": 7,
+      "wins": 0,
+      "pnl": -0.6674615043899448
+    },
+    "FILUSDT": {
+      "trades": 3,
+      "wins": 1,
+      "pnl": 0.40314007314914724
+    },
+    "BNBUSDT": {
+      "trades": 3,
+      "wins": 0,
+      "pnl": -0.20087163428225668
+    },
+    "SOLUSDT": {
+      "trades": 4,
+      "wins": 1,
+      "pnl": 0.0026975061726677296
+    },
+    "DOGEUSDT": {
+      "trades": 6,
+      "wins": 1,
+      "pnl": -0.1260935251887243
+    },
+    "LINKUSDT": {
+      "trades": 3,
+      "wins": 1,
+      "pnl": 0.12940890203820513
+    },
+    "UNIUSDT": {
+      "trades": 5,
+      "wins": 1,
+      "pnl": 0.20047784780901656
+    },
+    "DOTUSDT": {
+      "trades": 3,
+      "wins": 0,
+      "pnl": -0.22474213431803614
+    },
+    "APTUSDT": {
+      "trades": 2,
+      "wins": 0,
+      "pnl": -0.17388950749167248
+    },
+    "ADAUSDT": {
+      "trades": 3,
+      "wins": 1,
+      "pnl": -0.03975036588829217
+    },
+    "ICPUSDT": {
+      "trades": 1,
+      "wins": 0,
+      "pnl": -0.0627557980900425
+    },
+    "AVAXUSDT": {
+      "trades": 3,
+      "wins": 0,
+      "pnl": -0.21673553473951923
+    },
+    "ARBUSDT": {
+      "trades": 2,
+      "wins": 0,
+      "pnl": -0.1617413003275507
+    },
+    "ETHUSDT": {
+      "trades": 2,
+      "wins": 1,
+      "pnl": -0.015001197942588126
+    },
+    "LTCUSDT": {
+      "trades": 1,
+      "wins": 0,
+      "pnl": -0.09530315969257117
+    },
+    "ATOMUSDT": {
+      "trades": 1,
+      "wins": 1,
+      "pnl": 0.031707902954600395
+    }
+  }
+}

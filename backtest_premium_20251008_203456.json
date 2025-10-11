@@ -1,0 +1,107 @@
+{
+  "timestamp": "20251008_203456",
+  "strategy": "PREMIUM_COMPOUND",
+  "dna_config": {
+    "stop_loss": 2.0,
+    "take_profit": 15.0,
+    "leverage": 4.0,
+    "ema_fast": 5,
+    "ema_slow": 21,
+    "rsi_period": 14,
+    "rsi_buy_max": 70,
+    "rsi_sell_min": 30,
+    "volume_multiplier": 2.5,
+    "atr_period": 14,
+    "atr_threshold": 0.8
+  },
+  "portfolio_roi_final": -15.125703538909491,
+  "portfolio_roi_max": 332.3168685028746,
+  "target_roi": 10910,
+  "target_achieved": "False",
+  "target_achieved_max": "False",
+  "precision_final": -0.1386407290459165,
+  "precision_max": 3.0459841292655785,
+  "total_trades": 2802,
+  "assets_results": {
+    "XRP-USD": {
+      "trades": 292,
+      "win_rate": 34.58904109589041,
+      "roi": 130.83270727611028,
+      "max_roi": 1761.9921361723584,
+      "final_capital": 23.083270727611026,
+      "max_capital": 186.19921361723584
+    },
+    "DOGE-USD": {
+      "trades": 375,
+      "win_rate": 32.800000000000004,
+      "roi": -71.16941976420608,
+      "max_roi": 341.855751271648,
+      "final_capital": 2.883058023579393,
+      "max_capital": 44.185575127164796
+    },
+    "LINK-USD": {
+      "trades": 357,
+      "win_rate": 29.971988795518207,
+      "roi": -81.4157629419943,
+      "max_roi": 341.1510796345824,
+      "final_capital": 1.8584237058005706,
+      "max_capital": 44.115107963458236
+    },
+    "ADA-USD": {
+      "trades": 340,
+      "win_rate": 30.0,
+      "roi": -87.48549622794908,
+      "max_roi": 259.2283029997783,
+      "final_capital": 1.2514503772050931,
+      "max_capital": 35.92283029997783
+    },
+    "ETH-USD": {
+      "trades": 254,
+      "win_rate": 31.496062992125985,
+      "roi": -69.30994035675357,
+      "max_roi": 54.80116785489923,
+      "final_capital": 3.0690059643246417,
+      "max_capital": 15.480116785489923
+    },
+    "AVAX-USD": {
+      "trades": 347,
+      "win_rate": 32.27665706051873,
+      "roi": -42.068642230179684,
+      "max_roi": 59.78152213804135,
+      "final_capital": 5.793135776982032,
+      "max_capital": 15.978152213804135
+    },
+    "SOL-USD": {
+      "trades": 312,
+      "win_rate": 34.61538461538461,
+      "roi": -36.50541441479141,
+      "max_roi": 13.268651956564135,
+      "final_capital": 6.349458558520859,
+      "max_capital": 11.326865195656413
+    },
+    "BNB-USD": {
+      "trades": 139,
+      "win_rate": 39.568345323741006,
+      "roi": 67.00829336721827,
+      "max_roi": 125.24707979035674,
+      "final_capital": 16.700829336721828,
+      "max_capital": 22.524707979035675
+    },
+    "BTC-USD": {
+      "trades": 82,
+      "win_rate": 42.68292682926829,
+      "roi": 126.88865070209006,
+      "max_roi": 140.83480753099516,
+      "final_capital": 22.688865070209005,
+      "max_capital": 24.083480753099515
+    },
+    "LTC-USD": {
+      "trades": 304,
+      "win_rate": 30.92105263157895,
+      "roi": -88.03201079863939,
+      "max_roi": 225.00818567952265,
+      "final_capital": 1.19679892013606,
+      "max_capital": 32.500818567952265
+    }
+  }
+}

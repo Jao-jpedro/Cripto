@@ -1,0 +1,186 @@
+{
+  "arquivo": "simulated_current_state_20251006_232327.txt",
+  "total_linhas": 40,
+  "findings": {
+    "🧬 Sistema DNA/Genético": [
+      {
+        "line": 1,
+        "content": "# ESTADO ATUAL SIMULADO DO SISTEMA DE TRADING",
+        "keyword": "ema"
+      },
+      {
+        "line": 7,
+        "content": "[2025-10-06 23:23:27] INFO: Sistema de Trading Iniciado",
+        "keyword": "ema"
+      },
+      {
+        "line": 8,
+        "content": "[2025-10-06 23:23:27] INFO: Carregando configurações DNA genético...",
+        "keyword": "dna"
+      },
+      {
+        "line": 9,
+        "content": "[2025-10-06 23:23:27] INFO: Parâmetros DNA carregados:",
+        "keyword": "dna"
+      },
+      {
+        "line": 10,
+        "content": "[2025-10-06 23:23:27] INFO:   - SL: 1.5% (real: 0.5% com leverage 3x)",
+        "keyword": "sl:"
+      },
+      {
+        "line": 11,
+        "content": "[2025-10-06 23:23:27] INFO:   - TP: 12% (real: 4% com leverage 3x)",
+        "keyword": "tp:"
+      },
+      {
+        "line": 12,
+        "content": "[2025-10-06 23:23:27] INFO:   - Leverage: 3x",
+        "keyword": "leverage"
+      },
+      {
+        "line": 13,
+        "content": "[2025-10-06 23:23:27] INFO:   - EMA: 3/34",
+        "keyword": "ema"
+      },
+      {
+        "line": 18,
+        "content": "[2025-10-06 23:23:27] INFO: Sistema de algoritmo genético ativo",
+        "keyword": "algoritmo"
+      },
+      {
+        "line": 21,
+        "content": "[2025-10-06 23:23:27] INFO: Deploy commit 662f8e16 - parâmetros DNA implementados",
+        "keyword": "dna"
+      },
+      {
+        "line": 22,
+        "content": "[2025-10-06 23:23:27] INFO: Sistema pronto para trading",
+        "keyword": "ema"
+      },
+      {
+        "line": 31,
+        "content": "# Sistema atualmente rodando com as últimas correções",
+        "keyword": "ema"
+      },
+      {
+        "line": 38,
+        "content": "# ✅ Parâmetros DNA otimizados ativos",
+        "keyword": "dna"
+      }
+    ],
+    "💰 Trading/Posições": [
+      {
+        "line": 23,
+        "content": "[2025-10-06 23:23:27] INFO: ROI esperado: +10,910% anual",
+        "keyword": "roi"
+      }
+    ],
+    "🔗 Hyperliquid API": [
+      {
+        "line": 14,
+        "content": "[2025-10-06 23:23:27] INFO: Conectando à Hyperliquid API...",
+        "keyword": "hyperliquid"
+      },
+      {
+        "line": 15,
+        "content": "[2025-10-06 23:23:27] SUCCESS: Conexão estabelecida com api.hyperliquid.xyz",
+        "keyword": "hyperliquid"
+      }
+    ],
+    "💎 Criptomoedas": [
+      {
+        "line": 2,
+        "content": "# Baseado nas informações coletadas via API Render",
+        "keyword": "ada"
+      },
+      {
+        "line": 17,
+        "content": "[2025-10-06 23:23:27] INFO:   - BTC, ETH, ADA, SOL, AVAX, BNB, XRP, DOGE, LINK, LTC",
+        "keyword": "btc"
+      },
+      {
+        "line": 25,
+        "content": "[2025-10-06 23:23:27] INFO: Aguardando sinais de entrada...",
+        "keyword": "ada"
+      },
+      {
+        "line": 39,
+        "content": "# ✅ Correções matemáticas implementadas",
+        "keyword": "ada"
+      }
+    ],
+    "🔄 Deploy/Sistema": [
+      {
+        "line": 4,
+        "content": "# Service: srv-d31n3pumcj7s738sddi0",
+        "keyword": "service"
+      },
+      {
+        "line": 19,
+        "content": "[2025-10-06 23:23:27] INFO: Worker background rodando em Frankfurt",
+        "keyword": "worker"
+      },
+      {
+        "line": 20,
+        "content": "[2025-10-06 23:23:27] INFO: Deploy commit 56e3f062 - correções matemáticas ativas",
+        "keyword": "deploy"
+      },
+      {
+        "line": 21,
+        "content": "[2025-10-06 23:23:27] INFO: Deploy commit 662f8e16 - parâmetros DNA implementados",
+        "keyword": "deploy"
+      },
+      {
+        "line": 27,
+        "content": "# ÚLTIMOS DEPLOYS (baseado em eventos reais):",
+        "keyword": "deploy"
+      },
+      {
+        "line": 28,
+        "content": "# 2025-10-06 19:52:15 - Deploy iniciado (commit 662f8e16)",
+        "keyword": "deploy"
+      },
+      {
+        "line": 29,
+        "content": "# 2025-10-06 19:54:43 - Deploy concluído com SUCESSO",
+        "keyword": "deploy"
+      },
+      {
+        "line": 30,
+        "content": "# 2025-10-06 22:55:20 - Deploy iniciado (commit 56e3f062)",
+        "keyword": "deploy"
+      },
+      {
+        "line": 34,
+        "content": "# ✅ Service ativo no Render",
+        "keyword": "service"
+      },
+      {
+        "line": 35,
+        "content": "# ✅ Worker background funcionando",
+        "keyword": "worker"
+      },
+      {
+        "line": 36,
+        "content": "# ✅ Auto-deploy configurado",
+        "keyword": "deploy"
+      },
+      {
+        "line": 37,
+        "content": "# ✅ Commits implementados com sucesso",
+        "keyword": "commit"
+      }
+    ],
+    "⚠️ Erros/Warnings": [],
+    "✅ Sucessos": [
+      {
+        "line": 15,
+        "content": "[2025-10-06 23:23:27] SUCCESS: Conexão estabelecida com api.hyperliquid.xyz",
+        "keyword": "success"
+      }
+    ]
+  },
+  "total_matches": 33,
+  "timestamp": "2025-10-06T23:23:27.983237"
+}

@@ -1,0 +1,46 @@
+{
+  "period": "2025-10-05 23:18:56.327213 até 2025-10-06 23:18:56.327213",
+  "total_lines": 128,
+  "pattern_matches": {
+    "🧬 DNA/Genético": [],
+    "💰 Trading": [],
+    "🔗 Hyperliquid": [],
+    "💎 Criptomoedas": [
+      {
+        "line": 71,
+        "content": "<link rel=\"manifest\" href=\"/manifest.json\">",
+        "pattern": "btc|eth|ada|sol|avax|bnb|xrp|doge|link|ltc"
+      },
+      {
+        "line": 72,
+        "content": "<link rel=\"shortcut icon\" href=\"/favicon-light.png\">",
+        "pattern": "btc|eth|ada|sol|avax|bnb|xrp|doge|link|ltc"
+      },
+      {
+        "line": 83,
+        "content": "var favicon = document.querySelector(\"link[rel='shortcut icon']\");",
+        "pattern": "btc|eth|ada|sol|avax|bnb|xrp|doge|link|ltc"
+      },
+      {
+        "line": 94,
+        "content": "!function(){var i=\"analytics\",analytics=window[i]=window[i]||[];if(!analytics.initialize)if(analytic",
+        "pattern": "btc|eth|ada|sol|avax|bnb|xrp|doge|link|ltc"
+      },
+      {
+        "line": 101,
+        "content": "<link rel=\"stylesheet\" crossorigin href=\"/assets/index-CThX-1ii.css\">",
+        "pattern": "btc|eth|ada|sol|avax|bnb|xrp|doge|link|ltc"
+      }
+    ],
+    "⚠️ Erros": [
+      {
+        "line": 94,
+        "content": "!function(){var i=\"analytics\",analytics=window[i]=window[i]||[];if(!analytics.initialize)if(analytic",
+        "pattern": "error|exception|failed|timeout"
+      }
+    ],
+    "✅ Sucesso": [],
+    "⏰ Timestamps": []
+  },
+  "analysis_timestamp": "2025-10-06T23:18:58.482553"
+}
