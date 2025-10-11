@@ -2412,7 +2412,7 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
                             exit_side, 
                             qty, 
                             order_price,
-                            {"reduceOnly": True}
+                            {"reduceOnly": True, order_type: order_price}
                         )
                         print(f"[DEBUG_CLOSE] ✅ ORDEM STOP CRIADA: {order.get('id')} - {exit_side.upper()} {qty:.4f} @ {order_price:.4f}", flush=True)
                         print(f"[INFO] Ordem {order_type} criada (carteira mãe): {order.get('id')} - {side.upper()} exit @ {order_price:.4f}", flush=True)
