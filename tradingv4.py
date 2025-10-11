@@ -4298,7 +4298,7 @@ class EMAGradientStrategy:
         px  = float(stop_price)
         
         # Determinar se é price_below ou price_above baseado no lado da posição
-        current_price = self._get_current_price()
+        current_price = self._preco_atual()
         if side.lower() == "sell":  # Fechar posição LONG
             # Para fechar LONG, precisamos vender quando preço cair (price_below)
             order_type = "price_below"
@@ -4369,7 +4369,7 @@ class EMAGradientStrategy:
         px = float(target_price)
         
         # Determinar se é price_below ou price_above baseado no lado da posição
-        current_price = self._get_current_price()
+        current_price = self._preco_atual()
         if side.lower() == "sell":  # Fechar posição LONG - vender quando preço subir
             order_type = "price_above"
         else:  # side.lower() == "buy" - Fechar posição SHORT - comprar quando preço cair
