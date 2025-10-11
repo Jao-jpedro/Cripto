@@ -2396,13 +2396,13 @@ def cancel_triggered_orders_and_create_price_below(dex, symbol, current_px: floa
                         # LÓGICA CORRETA: price below para LONG, price above para SHORT
                         if side in ("long", "buy"):
                             # Para LONG: SELL order 5% ABAIXO (stop loss)
-                            order_price = current_px * 0.95
-                            order_type = "price_below"
+                            order_price = current_px * 0.80
+                            order_type = "price_above"
                             print(f"[DEBUG_CLOSE] 📉 LONG: criando SELL stop @ {order_price:.4f} (5% abaixo de {current_px:.4f})", flush=True)
                         else:
                             # Para SHORT: BUY order 5% ACIMA (stop loss)  
-                            order_price = current_px * 1.05
-                            order_type = "price_above"
+                            order_price = current_px * 1.20
+                            order_type = "price_below"
                             print(f"[DEBUG_CLOSE] 📈 SHORT: criando BUY stop @ {order_price:.4f} (5% acima de {current_px:.4f})", flush=True)
                         
                         # Criar ordem limit para saída (carteira mãe)
