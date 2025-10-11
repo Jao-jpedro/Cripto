@@ -4284,15 +4284,25 @@ class EMAGradientStrategy:
                     existing_orders: Optional[List[Dict[str, Any]]] = None):
         amt = self._round_amount(amount)
         px  = float(stop_price)
-        # Apenas ordem de gatilho (stop), nunca market
+        
+        # Determinar se é price_below ou price_above baseado no lado da posição
+        current_price = self._get_current_price()
+        if side.lower() == "sell":  # Fechar posição LONG
+            # Para fechar LONG, precisamos vender quando preço cair (price_below)
+            order_type = "price_below"
+        else:  # side.lower() == "buy" - Fechar posição SHORT
+            # Para fechar SHORT, precisamos comprar quando preço subir (price_above)
+            order_type = "price_above"
+        
+        # Apenas ordem limit com trigger, nunca stop_market
         params = {
             "reduceOnly": True,
-            "triggerPrice": px,
-            "stopLossPrice": px,
+            order_type: px,
             "trigger": "mark",
         }
+        
         if self.debug:
-            self._log(f"Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+            self._log(f"Criando STOP {order_type} {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
         if existing_orders is None:
             existing = self._find_matching_protection("stop", side, px)
         else:
@@ -4307,10 +4317,10 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            # Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)  # Carteira mãe
+            # Usar ordem limit com price_below/price_above ao invés de stop_market
+            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)  # Carteira mãe
         except Exception as e:
-            msg = f"Falha ao criar STOP gatilho: {type(e).__name__}: {e}"
+            msg = f"Falha ao criar STOP {order_type}: {type(e).__name__}: {e}"
             text = str(e).lower()
             if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
                 self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
@@ -4344,9 +4354,22 @@ class EMAGradientStrategy:
                            existing_orders: Optional[List[Dict[str, Any]]] = None):
         amt = self._round_amount(amount)
         px = float(target_price)
-        params = {"reduceOnly": True}
+        
+        # Determinar se é price_below ou price_above baseado no lado da posição
+        current_price = self._get_current_price()
+        if side.lower() == "sell":  # Fechar posição LONG - vender quando preço subir
+            order_type = "price_above"
+        else:  # side.lower() == "buy" - Fechar posição SHORT - comprar quando preço cair
+            order_type = "price_below"
+            
+        params = {
+            "reduceOnly": True,
+            order_type: px,
+            "trigger": "mark"
+        }
+        
         if self.debug:
-            self._log(f"Criando TAKE PROFIT {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+            self._log(f"Criando TAKE PROFIT {order_type} {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
         if existing_orders is None:
             existing = self._find_matching_protection("take", side, px)
         else:
@@ -4363,7 +4386,7 @@ class EMAGradientStrategy:
         try:
             ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)  # Carteira mãe
         except Exception as e:
-            msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
+            msg = f"Falha ao criar TAKE PROFIT {order_type}: {type(e).__name__}: {e}"
             text = str(e).lower()
             if any(flag in text for flag in ("insufficient", "not enough", "margin", "balance")):
                 self._log(msg + " (ignorando por saldo insuficiente)", level="WARN")
