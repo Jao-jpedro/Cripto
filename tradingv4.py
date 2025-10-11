@@ -3002,7 +3002,7 @@ def _init_dex_if_needed():
         return dex
         
     # Lê credenciais fixas/env (recomendado definir a chave privada via variável de ambiente)
-    WALLET_TRADINGV4 = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
+    WALLET_TRADINGV4 = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
     _wallet_env = WALLET_TRADINGV4
     _priv_env = os.getenv("HYPERLIQUID_PRIVATE_KEY")
     
@@ -3680,7 +3680,7 @@ class EMAGradientStrategy:
 
     def _wallet_address(self) -> Optional[str]:
         # Busca carteira: env > dex attributes/options > None
-        fixed = "0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
+        fixed = "0x08183aa09eF03Cf8475D909F507606F5044cBdAB"
         for key in ("WALLET_TRADINGV4", "WALLET_ADDRESS", "HYPERLIQUID_WALLET_ADDRESS"):
             val = os.getenv(key)
             if val:
