@@ -1,7 +1,7 @@
 print("\n========== INÍCIO DO BLOCO: HISTÓRICO DE TRADES ==========", flush=True)
 print("⚠️ SISTEMA INVERSO ATIVO: Sinal LONG → Executa SHORT | Sinal SHORT → Executa LONG", flush=True)
 print("🏆 FILTROS OTIMIZADOS: Configuração que entregou 2190% ROI com dados reais", flush=True)
-print("📊 TP: 10% | SL: 40% | ATR: 0.8-5.0% | Volume: 3.0x | Confluência: 3 critérios", flush=True)
+print("📊 TP: 10% | SL: 40% | ATR: 0.6-5.0% | Volume: 3.0x | Confluência: 3 critérios", flush=True)
 
 # DEBUG: Verificar variáveis de ambiente críticas
 import os
@@ -26,8 +26,8 @@ def _is_live_trading():
 
 ABS_LOSS_HARD_STOP = 0.40  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
 LIQUIDATION_BUFFER_PCT = 0.40  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -40.0  # ROI mínimo aceitável (-5%) - REDUZIDO DE -10% para maior proteção
-UNREALIZED_PNL_HARD_STOP = -0.40  # trava dura: perda de 5 cents do capital real (alinhado com trading.py)
+ROI_HARD_STOP = -40.0  # ROI mínimo aceitável (-40%) - REDUZIDO DE -10% para maior proteção
+UNREALIZED_PNL_HARD_STOP = -0.50  # trava dura: perda de 50 cents do capital real (aumentado de 40 cents)
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
@@ -3268,7 +3268,7 @@ def _hl_get_account_value(wallet: str) -> float:
 
 # DBTITLE 1,Gatilho de entrada
 # =========================
-# 🧠 ESTRATÉGIA (HL + stop inicial 40% da margem + trailing BE±0,05% + logger com fallback + DEBUG)
+# 🧠 ESTRATÉGIA (HL + stop inicial 40% da margem + TP/SL fixos + logger com fallback + DEBUG)
 # =========================
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
@@ -3288,7 +3288,7 @@ class GradientConfig:
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada (OTIMIZADOS para máximo ROI)
-    ATR_PCT_MIN: float      = 0.8        # ATR% saudável (min) - OTIMIZADO
+    ATR_PCT_MIN: float      = 0.6        # ATR% saudável (min) - OTIMIZADO (reduzido de 0.8 para 0.6)
     ATR_PCT_MAX: float      = 5.0        # ATR% saudável (max) - OTIMIZADO
     BREAKOUT_K_ATR: float   = 0.8        # banda de rompimento: k*ATR - OTIMIZADO
     NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra: |EMA7-EMA21| < eps*ATR
@@ -3301,7 +3301,7 @@ class GradientConfig:
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.40  # 40% da margem como stop inicial
     TAKE_PROFIT_CAPITAL_PCT: float = 0.10   # take profit em 10% da margem
-    MAX_LOSS_ABS_USD: float    = 0.40     # limite absoluto de perda por posição
+    MAX_LOSS_ABS_USD: float    = 0.50     # limite absoluto de perda por posição (aumentado para $0.50)
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -3490,18 +3490,21 @@ class EMAGradientStrategy:
                     capital_real = position_value / leverage
                     current_roi_pct = (unrealized_pnl / capital_real) * 100
                     
-                    # *** TRAILING STOP VERDADEIRO: Usar High Water Mark ***
-                    trailing_roi_pct = _update_high_water_mark(self.symbol, current_roi_pct)
-                    
-                    self._log(
-                        f"DEBUG trailing: unrealized_pnl={unrealized_pnl:.4f} position_value={position_value:.4f} "
-                        f"leverage={leverage:.1f} capital_real=${capital_real:.4f} ROI={current_roi_pct:.2f}% "
-                        f"HWM={trailing_roi_pct:.2f}%", 
-                        level="DEBUG"
-                    )
-                    
-                    # Usar o ROI máximo (High Water Mark) para determinar o trailing stop
-                    current_roi_pct = trailing_roi_pct
+                    # *** TRAILING STOP: Verificar se está habilitado ***
+                    if getattr(self.cfg, "ENABLE_TRAILING_STOP", False):
+                        trailing_roi_pct = _update_high_water_mark(self.symbol, current_roi_pct)
+                        
+                        self._log(
+                            f"DEBUG trailing: unrealized_pnl={unrealized_pnl:.4f} position_value={position_value:.4f} "
+                            f"leverage={leverage:.1f} capital_real=${capital_real:.4f} ROI={current_roi_pct:.2f}% "
+                            f"HWM={trailing_roi_pct:.2f}%", 
+                            level="DEBUG"
+                        )
+                        
+                        # Usar o ROI máximo (High Water Mark) para determinar o trailing stop
+                        current_roi_pct = trailing_roi_pct
+                    else:
+                        self._log(f"[DEBUG_CLOSE] 📊 ROI atual: {current_roi_pct:.2f}% (trailing DESABILITADO)", level="DEBUG")
             except Exception as e:
                 self._log(f"Erro ao calcular ROI atual: {e}", level="WARN")
         
@@ -5679,7 +5682,7 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     - Confluência mínima: 3 critérios (vs 8.5 MEGA)
     - Take Profit: 10%
     - Stop Loss: 40%
-    - ATR: 0.8% - 5.0%
+    - ATR: 0.6% - 5.0%
     - Volume: 3.0x
     - Gradiente LONG: ≥ 0.08%
     - RSI: 10-90
@@ -5701,7 +5704,7 @@ def _entry_long_condition(row, p: BacktestParams) -> Tuple[bool, str]:
         reasons.append("❌ EMA/gradiente fraco")
     
     # CRITÉRIO 2: ATR otimizado (range expandido)
-    c2 = (row.atr_pct >= 0.8) and (row.atr_pct <= 5.0)  # OTIMIZADO: 0.8%-5.0%
+    c2 = (row.atr_pct >= 0.6) and (row.atr_pct <= 5.0)  # OTIMIZADO: 0.6%-5.0%
     conds.append(c2)
     if c2:
         confluence_score += 1
@@ -5826,7 +5829,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
     - Confluência mínima: 3 critérios (vs 9.0 MEGA)
     - Take Profit: 10%
     - Stop Loss: 40%
-    - ATR: 0.8% - 5.0%
+    - ATR: 0.6% - 5.0%
     - Volume: 3.0x
     - Gradiente SHORT: ≥ 0.12%
     - RSI: 10-90
@@ -5848,7 +5851,7 @@ def _entry_short_condition(row, p: BacktestParams) -> Tuple[bool, str]:
         reasons.append("❌ EMA/gradiente fraco")
     
     # CRITÉRIO 2: ATR otimizado (range expandido)
-    c2 = (row.atr_pct >= 0.8) and (row.atr_pct <= 5.0)  # OTIMIZADO: 0.8%-5.0%
+    c2 = (row.atr_pct >= 0.6) and (row.atr_pct <= 5.0)  # OTIMIZADO: 0.6%-5.0%
     conds.append(c2)
     if c2:
         confluence_score += 1
@@ -6653,8 +6656,8 @@ if __name__ == "__main__":
                 # Fast safety check para todos os assets
                 fast_safety_check_v4(dex_in, asset_state)
                 
-                # Trailing stop check para todas as posições
-                check_all_trailing_stops_v4(dex_in, asset_state)
+                # Trailing stop check para todas as posições (DESABILITADO)
+                # check_all_trailing_stops_v4(dex_in, asset_state)
                 
                 # Limpar cache expirado
                 DATA_CACHE.clear_expired()
