@@ -23,10 +23,10 @@ import threading
 # =========================
 _API_CACHE = {}
 _CACHE_LOCK = threading.Lock()
-CACHE_DURATION_SECONDS = 10  # Cache de 10 segundos para reduzir rate limit drasticamente
+CACHE_DURATION_SECONDS = 30  # Cache de 30 segundos para eliminar rate limit
 
 def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
-    """Cache genérico para chamadas de API com TTL"""
+    """Cache genérico para chamadas de API com TTL e backoff exponencial"""
     with _CACHE_LOCK:
         now = _time.time()
         if cache_key in _API_CACHE:
@@ -34,20 +34,34 @@ def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
             if now - timestamp < CACHE_DURATION_SECONDS:
                 return data
         
-        try:
-            # RATE LIMITING: Sleep antes de fazer chamada real
-            _time.sleep(0.2)  # 200ms de delay antes de cada chamada
-            
-            # Fazer a chamada real da API
-            result = api_call_func(*args, **kwargs)
-            _API_CACHE[cache_key] = (result, now)
-            return result
-        except Exception as e:
-            # Se temos cache expirado, usar ele em caso de erro
-            if cache_key in _API_CACHE:
-                data, timestamp = _API_CACHE[cache_key]
-                print(f"[CACHE] API falhou, usando cache expirado: {e}", flush=True)
-                return data
+        # Backoff exponencial para rate limiting
+        max_retries = 3
+        base_delay = 0.5
+        
+        for attempt in range(max_retries):
+            try:
+                # RATE LIMITING: Sleep progressivo
+                delay = base_delay * (2 ** attempt)  # 0.5s, 1s, 2s
+                _time.sleep(delay)
+                
+                # Fazer a chamada real da API
+                result = api_call_func(*args, **kwargs)
+                _API_CACHE[cache_key] = (result, now)
+                return result
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "rate" in error_str:
+                    if attempt < max_retries - 1:
+                        backoff_time = base_delay * (3 ** attempt)  # 0.5s, 1.5s, 4.5s
+                        print(f"[RATE_LIMIT] 429 detectado, tentativa {attempt+1}/{max_retries}, aguardando {backoff_time}s", flush=True)
+                        _time.sleep(backoff_time)
+                        continue
+                
+                # Se temos cache expirado, usar ele em caso de erro
+                if cache_key in _API_CACHE:
+                    data, timestamp = _API_CACHE[cache_key]
+                    print(f"[CACHE] API falhou, usando cache expirado: {e}", flush=True)
+                    return data
             raise
 
 # FUNÇÃO GLOBAL PARA VERIFICAR LIVE_TRADING - CENTRALIZADA
@@ -6756,7 +6770,7 @@ if __name__ == "__main__":
                 for asset in ASSET_SETUPS:
                     try:
                         # RATE LIMITING: Sleep entre assets para evitar 429
-                        _time.sleep(0.5)  # 500ms entre cada asset - mais agressivo
+                        _time.sleep(1.0)  # 1 segundo entre cada asset - ultra agressivo
                         
                         # Verificar se há posição aberta usando cache
                         cache_key = f"positions_{asset.hl_symbol}"
