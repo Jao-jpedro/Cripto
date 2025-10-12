@@ -23,7 +23,7 @@ import threading
 # =========================
 _API_CACHE = {}
 _CACHE_LOCK = threading.Lock()
-CACHE_DURATION_SECONDS = 2  # Cache de 2 segundos para reduzir rate limit
+CACHE_DURATION_SECONDS = 10  # Cache de 10 segundos para reduzir rate limit drasticamente
 
 def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
     """Cache genérico para chamadas de API com TTL"""
@@ -35,6 +35,9 @@ def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
                 return data
         
         try:
+            # RATE LIMITING: Sleep antes de fazer chamada real
+            _time.sleep(0.2)  # 200ms de delay antes de cada chamada
+            
             # Fazer a chamada real da API
             result = api_call_func(*args, **kwargs)
             _API_CACHE[cache_key] = (result, now)
@@ -4082,7 +4085,10 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return False
-            for o in self.dex.fetch_open_orders(self.symbol):  # Opera na carteira mãe
+            # Usar cache para fetch_open_orders
+            cache_key = f"open_orders_{self.symbol}"
+            orders = _get_cached_api_call(cache_key, self.dex.fetch_open_orders, self.symbol)  # Opera na carteira mãe
+            for o in orders:
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -4209,7 +4215,9 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return []
         try:
-            orders = self.dex.fetch_open_orders(self.symbol)  # Opera na carteira mãe
+            # Usar cache para fetch_open_orders
+            cache_key = f"open_orders_{self.symbol}"
+            orders = _get_cached_api_call(cache_key, self.dex.fetch_open_orders, self.symbol)  # Opera na carteira mãe
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao obter open_orders para verificação de proteções: {type(e).__name__}: {e}", level="WARN")
@@ -4298,7 +4306,10 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return
-            for o in self.dex.fetch_open_orders(self.symbol):  # Opera na carteira mãe
+            # Usar cache para fetch_open_orders
+            cache_key = f"open_orders_{self.symbol}"
+            orders = _get_cached_api_call(cache_key, self.dex.fetch_open_orders, self.symbol)  # Opera na carteira mãe
+            for o in orders:
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -6686,7 +6697,7 @@ if __name__ == "__main__":
                 for asset in ASSET_SETUPS:
                     try:
                         # RATE LIMITING: Sleep entre assets para evitar 429
-                        _time.sleep(0.1)  # 100ms entre cada asset
+                        _time.sleep(0.5)  # 500ms entre cada asset - mais agressivo
                         
                         # Verificar se há posição aberta usando cache
                         cache_key = f"positions_{asset.hl_symbol}"
