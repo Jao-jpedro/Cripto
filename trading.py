@@ -4427,8 +4427,8 @@ class EMAGradientStrategy:
                 f"fetch_ticker_{self.symbol}"
             ]
             for key in cache_keys_to_clear:
-                if key in _api_cache:
-                    del _api_cache[key]
+                if key in _API_CACHE:
+                    del _API_CACHE[key]
                     self._log(f"[DEBUG_CACHE] Cache invalidado: {key}", level="DEBUG")
             
         except Exception as e:
@@ -4776,8 +4776,8 @@ class EMAGradientStrategy:
             f"fetch_ticker_{self.symbol}"
         ]
         for key in cache_keys_to_clear:
-            if key in _api_cache:
-                del _api_cache[key]
+            if key in _API_CACHE:
+                del _API_CACHE[key]
                 self._log(f"[DEBUG_CACHE] Cache invalidado após entrada: {key}", level="DEBUG")
         
         # CRÍTICO: Atualizar _last_pos_side IMEDIATAMENTE após entrada para evitar falso "fechamento externo"
