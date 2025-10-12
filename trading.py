@@ -24,6 +24,7 @@ import threading
 _API_CACHE = {}
 _CACHE_LOCK = threading.Lock()
 CACHE_DURATION_SECONDS = 30  # Cache de 30 segundos para eliminar rate limit
+EMERGENCY_MODE = False  # Modo emergência durante rate limiting severo
 
 def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
     """Cache genérico para chamadas de API com TTL e backoff exponencial"""
@@ -51,6 +52,12 @@ def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
             except Exception as e:
                 error_str = str(e).lower()
                 if "429" in error_str or "rate" in error_str:
+                    # ATIVAR MODO EMERGÊNCIA após múltiplas falhas 429
+                    global EMERGENCY_MODE
+                    if attempt >= 1:  # Após segunda tentativa
+                        EMERGENCY_MODE = True
+                        print(f"[EMERGENCY] Modo emergência ATIVADO - rate limiting severo detectado", flush=True)
+                    
                     if attempt < max_retries - 1:
                         backoff_time = base_delay * (3 ** attempt)  # 0.5s, 1.5s, 4.5s
                         print(f"[RATE_LIMIT] 429 detectado, tentativa {attempt+1}/{max_retries}, aguardando {backoff_time}s", flush=True)
@@ -60,7 +67,12 @@ def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
                 # Se temos cache expirado, usar ele em caso de erro
                 if cache_key in _API_CACHE:
                     data, timestamp = _API_CACHE[cache_key]
-                    print(f"[CACHE] API falhou, usando cache expirado: {e}", flush=True)
+                    # EXTENSÃO DE CACHE: Durante rate limiting, estender TTL automaticamente
+                    if "429" in error_str or "rate" in error_str:
+                        _API_CACHE[cache_key] = (data, now)  # Renovar timestamp
+                        print(f"[CACHE] EXTENSÃO AUTOMÁTICA durante 429: {cache_key} renovado", flush=True)
+                    else:
+                        print(f"[CACHE] API falhou, usando cache expirado: {e}", flush=True)
                     return data
             raise
 
@@ -4116,17 +4128,36 @@ class EMAGradientStrategy:
             return self._preco_atual_hyperliquid()
     
     def _preco_execucao(self) -> float:
-        """Preço para execução: SEMPRE Hyperliquid (onde está o dinheiro)"""
+        """Preço para execução: Hyperliquid preferido, Binance como backup crítico"""
         try:
+            # Tentar Hyperliquid primeiro (mais preciso)
             return self._preco_atual_hyperliquid()
         except Exception as e:
-            self._log(f"[EXECUÇÃO] Erro crítico ao buscar preço Hyperliquid: {e}", level="ERROR")
-            raise
+            self._log(f"[EXECUÇÃO] Hyperliquid falhou, usando Binance como backup: {e}", level="WARN")
+            try:
+                # Backup: Usar Binance se Hyperliquid falhar completamente
+                price = self._preco_atual_binance()
+                self._log(f"[EXECUÇÃO] Usando Binance backup: {price}", level="WARN")
+                return price
+            except Exception as e2:
+                self._log(f"[EXECUÇÃO] Erro crítico - ambas as fontes falharam: HL={e} | BN={e2}", level="ERROR")
+                raise RuntimeError(f"Não consegui obter preço para execução: HL={e}, BN={e2}")
 
     def _posicao_aberta(self, force_fresh: bool = False) -> Optional[Dict[str, Any]]:
         # Permite desligar chamadas à exchange em ambientes restritos (default off)
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
+        
+        # MODO EMERGÊNCIA: Reduzir verificações durante rate limiting severo
+        global EMERGENCY_MODE
+        if EMERGENCY_MODE and not force_fresh:
+            # Em emergência, usar cache mais antigo se disponível
+            cache_key = f"positions_{self.symbol}"
+            if cache_key in _API_CACHE:
+                data, timestamp = _API_CACHE[cache_key]
+                self._log(f"[EMERGENCY] Usando cache de posição (modo emergência)", level="DEBUG")
+                current_pos = data[0] if data and float(data[0].get("contracts", 0)) > 0 else None
+                return current_pos
         
         try:
             if force_fresh:
