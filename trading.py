@@ -4765,6 +4765,10 @@ class EMAGradientStrategy:
             if key in _api_cache:
                 del _api_cache[key]
                 self._log(f"[DEBUG_CACHE] Cache invalidado após entrada: {key}", level="DEBUG")
+        
+        # CRÍTICO: Atualizar _last_pos_side IMEDIATAMENTE após entrada para evitar falso "fechamento externo"
+        self._last_pos_side = self._norm_side(side)
+        self._log(f"[DEBUG_ENTRY] _last_pos_side atualizado para: {self._last_pos_side}", level="DEBUG")
 
         oid = None
         try:
@@ -5344,7 +5348,7 @@ class EMAGradientStrategy:
 
         # se havia posição e agora não há → stop/saída ocorreu fora
         if prev_side and not pos:
-            self._log("[DEBUG_CLOSE] ⚠️ FECHAMENTO EXTERNO DETECTADO!", level="ERROR")
+            self._log(f"[DEBUG_CLOSE] ⚠️ FECHAMENTO EXTERNO DETECTADO! prev_side={prev_side} | pos={pos}", level="ERROR")
             self._log("Posição fechada externamente detectada (provável stop).", level="INFO")
             try:
                 last_px = self._preco_atual()
