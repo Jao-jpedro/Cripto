@@ -23,8 +23,17 @@ import threading
 # =========================
 _API_CACHE = {}
 _CACHE_LOCK = threading.Lock()
-CACHE_DURATION_SECONDS = 30  # Cache de 30 segundos para eliminar rate limit
+CACHE_DURATION_SECONDS = 60  # Cache de 60 segundos para evitar rate limiting (aumentado de 30s)
 EMERGENCY_MODE = False  # Modo emergência durante rate limiting severo
+EMERGENCY_MODE_TIMESTAMP = 0  # Timestamp de quando modo emergência foi ativado
+EMERGENCY_MODE_DURATION = 300  # 5 minutos de modo emergência antes de desativar
+
+def _check_emergency_mode():
+    """Verifica se deve desativar o modo emergência automaticamente"""
+    global EMERGENCY_MODE, EMERGENCY_MODE_TIMESTAMP
+    if EMERGENCY_MODE and _time.time() - EMERGENCY_MODE_TIMESTAMP > EMERGENCY_MODE_DURATION:
+        EMERGENCY_MODE = False
+        print(f"[EMERGENCY] Modo emergência DESATIVADO automaticamente após {EMERGENCY_MODE_DURATION}s", flush=True)
 
 def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
     """Cache genérico para chamadas de API com TTL e backoff exponencial"""
@@ -35,9 +44,9 @@ def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
             if now - timestamp < CACHE_DURATION_SECONDS:
                 return data
         
-        # Backoff exponencial para rate limiting
-        max_retries = 3
-        base_delay = 0.5
+        # Backoff exponencial para rate limiting (reduzido para menos tentativas)
+        max_retries = 2  # Reduzido de 3 para 2 tentativas
+        base_delay = 1.0  # Aumentado de 0.5s para 1s
         
         for attempt in range(max_retries):
             try:
@@ -53,9 +62,10 @@ def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
                 error_str = str(e).lower()
                 if "429" in error_str or "rate" in error_str:
                     # ATIVAR MODO EMERGÊNCIA após múltiplas falhas 429
-                    global EMERGENCY_MODE
+                    global EMERGENCY_MODE, EMERGENCY_MODE_TIMESTAMP
                     if attempt >= 1:  # Após segunda tentativa
                         EMERGENCY_MODE = True
+                        EMERGENCY_MODE_TIMESTAMP = _time.time()
                         print(f"[EMERGENCY] Modo emergência ATIVADO - rate limiting severo detectado", flush=True)
                     
                     if attempt < max_retries - 1:
@@ -4148,6 +4158,9 @@ class EMAGradientStrategy:
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
         
+        # Verificar se deve desativar modo emergência automaticamente
+        _check_emergency_mode()
+        
         # MODO EMERGÊNCIA: Reduzir verificações durante rate limiting severo
         global EMERGENCY_MODE
         if EMERGENCY_MODE and not force_fresh:
@@ -4801,19 +4814,18 @@ class EMAGradientStrategy:
         self._last_pos_side = self._norm_side(side)
         self._log(f"[DEBUG_ENTRY] _last_pos_side atualizado para: {self._last_pos_side}", level="DEBUG")
         
-        # DEBUG CRÍTICO: Verificar se posição foi criada IMEDIATAMENTE (sem cache)
+        # DEBUG CRÍTICO: Verificar se posição foi criada (REDUZIR force_fresh para evitar rate limiting)
         try:
-            pos_fresh = self._posicao_aberta(force_fresh=True)
+            pos_fresh = self._posicao_aberta()  # REDUZIR API CALLS: Cache inicial OK
             size_fresh = self._position_quantity(pos_fresh) if pos_fresh else 0.0
-            self._log(f"[DEBUG_ENTRY] 🔍 Posição FRESH após entrada: size={size_fresh}", level="DEBUG")
+            self._log(f"[DEBUG_ENTRY] 🔍 Posição após entrada: size={size_fresh}", level="DEBUG")
             if size_fresh == 0.0:
-                self._log(f"[DEBUG_ENTRY] ⚠️ CRÍTICO: Posição não detectada após entrada! Aguardando 2s...", level="ERROR")
-                _time.sleep(2.0)
-                pos_retry = self._posicao_aberta(force_fresh=True)
+                self._log(f"[DEBUG_ENTRY] ⚠️ Posição não detectada, verificando fresh...", level="WARN")
+                pos_retry = self._posicao_aberta(force_fresh=True)  # Só usar fresh se necessário
                 size_retry = self._position_quantity(pos_retry) if pos_retry else 0.0
-                self._log(f"[DEBUG_ENTRY] 🔍 Posição após 2s: size={size_retry}", level="DEBUG")
+                self._log(f"[DEBUG_ENTRY] 🔍 Posição fresh: size={size_retry}", level="DEBUG")
         except Exception as e:
-            self._log(f"[DEBUG_ENTRY] ❌ Erro verificando posição fresh: {e}", level="ERROR")
+            self._log(f"[DEBUG_ENTRY] ❌ Erro verificando posição: {e}", level="ERROR")
 
         oid = None
         try:
@@ -4937,7 +4949,7 @@ class EMAGradientStrategy:
 
         # DEBUG: Verificar posição ANTES de criar stop
         try:
-            pos_before = self._posicao_aberta(force_fresh=True)  # FRESH: Sem cache para verificação crítica
+            pos_before = self._posicao_aberta()  # REDUZIR API CALLS: Cache OK para debug
             size_before = self._position_quantity(pos_before) if pos_before else 0.0
             self._log(f"[DEBUG_BEFORE_STOP] 🔍 Posição ANTES de criar stop: size={size_before}", level="DEBUG")
             if pos_before:
@@ -4948,19 +4960,20 @@ class EMAGradientStrategy:
         ordem_stop = self._place_stop(sl_side, fill_amount, sl_price, df_for_log=df_for_log)
         self._last_stop_order_id = self._extract_order_id(ordem_stop)
         
-        # DEBUG: Verificar posição imediatamente após criar stop
+        # DEBUG: Verificar posição após criar stop (SEM FORCE_FRESH para evitar rate limiting)
         try:
-            pos_debug = self._posicao_aberta(force_fresh=True)  # FRESH: Sem cache para verificação crítica
+            pos_debug = self._posicao_aberta()  # REDUZIR API CALLS: Cache OK para debug
             size_debug = self._position_quantity(pos_debug) if pos_debug else 0.0
-            self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição IMEDIATAMENTE após criar stop: size={size_debug}", level="DEBUG")
+            self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição após criar stop: size={size_debug}", level="DEBUG")
             
-            # Se posição desapareceu, aguardar 1 segundo e verificar novamente
-            if size_debug == 0.0:
-                self._log(f"[DEBUG_IMMEDIATE] ⚠️ Posição zerada! Aguardando 1s para re-verificar...", level="WARN")
-                _time.sleep(1.0)
-                pos_recheck = self._posicao_aberta(force_fresh=True)  # FRESH novamente
+            # Só usar force_fresh se realmente houver problema crítico
+            if size_debug == 0.0 and size_before > 0.0:
+                self._log(f"[DEBUG_IMMEDIATE] ⚠️ Posição zerada detectada! Verificando com fresh...", level="WARN")
+                pos_recheck = self._posicao_aberta(force_fresh=True)  # Último recurso
                 size_recheck = self._position_quantity(pos_recheck) if pos_recheck else 0.0
-                self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição após 1s: size={size_recheck}", level="DEBUG")
+                self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição fresh: size={size_recheck}", level="DEBUG")
+                if size_recheck == 0.0:
+                    self._log(f"[DEBUG_IMMEDIATE] 🚨 CRÍTICO: Posição realmente zerada após criar stop!", level="ERROR")
         except Exception as e:
             self._log(f"[DEBUG_IMMEDIATE] ❌ Erro verificando posição após stop: {e}", level="ERROR")
 
