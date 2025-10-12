@@ -4957,7 +4957,7 @@ class EMAGradientStrategy:
         if not manage_take:
             tp_price = None
         sl_side = "sell" if norm_side == "buy" else "buy"
-        tp_side = sl_side
+        tp_side = "buy" if norm_side == "buy" else "sell"  # TP é o MESMO lado da posição original
 
         if self.debug:
             if manage_take and tp_price is not None:
