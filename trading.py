@@ -15,6 +15,37 @@ print("===============================================================", flush=T
 
 # Constantes para stop loss
 from typing import Optional, Dict, Any, List
+import time as _time
+import threading
+
+# =========================
+# CACHE GLOBAL PARA RATE LIMITING
+# =========================
+_API_CACHE = {}
+_CACHE_LOCK = threading.Lock()
+CACHE_DURATION_SECONDS = 2  # Cache de 2 segundos para reduzir rate limit
+
+def _get_cached_api_call(cache_key: str, api_call_func, *args, **kwargs):
+    """Cache genérico para chamadas de API com TTL"""
+    with _CACHE_LOCK:
+        now = _time.time()
+        if cache_key in _API_CACHE:
+            data, timestamp = _API_CACHE[cache_key]
+            if now - timestamp < CACHE_DURATION_SECONDS:
+                return data
+        
+        try:
+            # Fazer a chamada real da API
+            result = api_call_func(*args, **kwargs)
+            _API_CACHE[cache_key] = (result, now)
+            return result
+        except Exception as e:
+            # Se temos cache expirado, usar ele em caso de erro
+            if cache_key in _API_CACHE:
+                data, timestamp = _API_CACHE[cache_key]
+                print(f"[CACHE] API falhou, usando cache expirado: {e}", flush=True)
+                return data
+            raise
 
 # FUNÇÃO GLOBAL PARA VERIFICAR LIVE_TRADING - CENTRALIZADA
 def _is_live_trading():
@@ -3993,8 +4024,13 @@ class EMAGradientStrategy:
             if self.debug:
                 self._log("_preco_atual não disponível com LIVE_TRADING=0", level="DEBUG")
             raise RuntimeError("LIVE_TRADING desativado")
+        
+        # Cache key único por símbolo
+        cache_key = f"ticker_{self.symbol}"
+        
         try:
-            t = self.dex.fetch_ticker(self.symbol)
+            # Usar cache para reduzir chamadas à API
+            t = _get_cached_api_call(cache_key, self.dex.fetch_ticker, self.symbol)
             if t and t.get("last"):
                 price = float(t["last"])
                 self._last_price_snapshot = price
@@ -4008,7 +4044,7 @@ class EMAGradientStrategy:
                     return price
         except Exception as e:
             if self.debug:
-                self._log(f"fetch_ticker falhou: {type(e).__name__}: {e}", level="WARN")
+                self._log(f"fetch_ticker falhou (com cache): {type(e).__name__}: {e}", level="WARN")
         try:
             mkts = self.dex.load_markets(reload=True)
             info = mkts[self.symbol]["info"]
@@ -4024,8 +4060,13 @@ class EMAGradientStrategy:
         # Permite desligar chamadas à exchange em ambientes restritos (default off)
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
+        
+        # Cache key único por símbolo  
+        cache_key = f"positions_{self.symbol}"
+        
         try:
-            pos = self.dex.fetch_positions([self.symbol])  # Opera na carteira mãe
+            # Usar cache para reduzir chamadas à API
+            pos = _get_cached_api_call(cache_key, self.dex.fetch_positions, [self.symbol])  # Opera na carteira mãe
             current_pos = pos[0] if pos and float(pos[0].get("contracts", 0)) > 0 else None
             
             # Verificar se posição foi fechada externamente
@@ -6427,7 +6468,8 @@ if __name__ == "__main__":
             
             try:
                 # Verificar se há posição aberta na carteira mãe (independente do asset_state)
-                positions = dex_in.fetch_positions([asset.hl_symbol])  # Carteira mãe
+                cache_key = f"positions_{asset.hl_symbol}"
+                positions = _get_cached_api_call(cache_key, dex_in.fetch_positions, [asset.hl_symbol])  # Carteira mãe
                 if not positions or float(positions[0].get("contracts", 0)) == 0:
                     continue
                     
@@ -6459,7 +6501,8 @@ if __name__ == "__main__":
                         else:
                             # Fallback: usar ticker se não temos strategy
                             try:
-                                ticker = dex_in.fetch_ticker(asset.hl_symbol)
+                                cache_key = f"ticker_{asset.hl_symbol}"
+                                ticker = _get_cached_api_call(cache_key, dex_in.fetch_ticker, asset.hl_symbol)
                                 current_px = float(ticker.get("last", 0) or 0)
                             except Exception:
                                 current_px = 0
@@ -6642,8 +6685,12 @@ if __name__ == "__main__":
                 
                 for asset in ASSET_SETUPS:
                     try:
-                        # Verificar se há posição aberta
-                        positions = dex_in.fetch_positions([asset.hl_symbol])  # Carteira mãe
+                        # RATE LIMITING: Sleep entre assets para evitar 429
+                        _time.sleep(0.1)  # 100ms entre cada asset
+                        
+                        # Verificar se há posição aberta usando cache
+                        cache_key = f"positions_{asset.hl_symbol}"
+                        positions = _get_cached_api_call(cache_key, dex_in.fetch_positions, [asset.hl_symbol])  # Carteira mãe
                         has_position = positions and float(positions[0].get("contracts", 0)) != 0
                         
                         if has_position:
