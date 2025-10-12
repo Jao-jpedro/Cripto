@@ -61,7 +61,7 @@ def _is_live_trading():
 ABS_LOSS_HARD_STOP = 0.40  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
 LIQUIDATION_BUFFER_PCT = 0.40  # 0,2% de margem de segurança sobre o preço de liquidação
 ROI_HARD_STOP = -80.0  # ROI mínimo aceitável (-80%) - hard stop emergencial apenas
-UNREALIZED_PNL_HARD_STOP = -5.00  # trava dura emergencial: perda de $5.00 do capital real
+UNREALIZED_PNL_HARD_STOP = -50.00  # trava dura emergencial: perda de $50.00 do capital real (DESABILITADO TEMP)
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
@@ -3335,7 +3335,7 @@ class GradientConfig:
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.40  # 40% da margem como stop inicial
     TAKE_PROFIT_CAPITAL_PCT: float = 0.10   # take profit em 10% da margem
-    MAX_LOSS_ABS_USD: float    = 5.00     # hard stop emergencial - limite absoluto de perda por posição
+    MAX_LOSS_ABS_USD: float    = 50.00     # hard stop emergencial - limite absoluto de perda por posição (DESABILITADO TEMP)
 
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
@@ -5440,6 +5440,7 @@ class EMAGradientStrategy:
             # Posições devem fechar apenas via stop loss, take profit ou hard stop oficial
             max_loss_abs = float(getattr(self.cfg, "MAX_LOSS_ABS_USD", 0.0) or 0.0)
             if max_loss_abs > 0 and pnl_abs is not None and math.isfinite(pnl_abs):
+                self._log(f"[DEBUG_HARD_STOP] PnL={pnl_abs:.4f} | limite={-abs(max_loss_abs):.2f} | ativo={pnl_abs <= -abs(max_loss_abs)}", level="DEBUG")
                 if pnl_abs <= -abs(max_loss_abs):
                     self._log(
                         f"HARD STOP: Perda de {pnl_abs:.4f} USDC excedeu limite -{abs(max_loss_abs):.2f}. Fechando posição imediatamente.",
