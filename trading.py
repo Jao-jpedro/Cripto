@@ -3545,12 +3545,13 @@ class EMAGradientStrategy:
         # Calcular stop loss FIXO baseado na configuração (SEM trailing dinâmico)
         base_risk_ratio = float(self.cfg.STOP_LOSS_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
         
-        # Stop loss FIXO em -40% (removido trailing dinâmico)
+        # Stop loss FIXO em -40% + margem de segurança (removido trailing dinâmico)
+        safety_margin = 0.005  # 0.5% margem extra para evitar execução imediata
         if norm_side == "buy":
-            stop_px = entry_price * (1.0 - base_risk_ratio)
+            stop_px = entry_price * (1.0 - base_risk_ratio - safety_margin)
         else:
-            stop_px = entry_price * (1.0 + base_risk_ratio)
-        self._log(f"[DEBUG_CLOSE] 🔒 STOP FIXO: -40% @ {stop_px:.6f} (sem trailing)", level="DEBUG")
+            stop_px = entry_price * (1.0 + base_risk_ratio + safety_margin)
+        self._log(f"[DEBUG_CLOSE] 🔒 STOP FIXO: -40% @ {stop_px:.6f} (com margem 0.5%)", level="DEBUG")
         
         # Take profit fixo em 10%
         reward_ratio = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT) / float(self.cfg.LEVERAGE)
@@ -4360,22 +4361,34 @@ class EMAGradientStrategy:
                 px = current_price * 1.01
                 self._log(f"🔧 STOP CORRIGIDO para {px:.6f} (1% acima do preço atual)", level="WARN")
         
-        # Apenas ordem limit com trigger, nunca stop_market
+        if self.debug:
+            # DEBUG CRÍTICO: Verificar se há discrepância de preço
+            fresh_price = self._preco_atual()
+            self._log(f"[DEBUG_ORDERS] 🔍 ANÁLISE CRÍTICA: stop={px:.6f} | preço_cache={current_price:.6f} | preço_fresh={fresh_price:.6f}", level="DEBUG")
+            
+            # Validação rigorosa com fresh_price para evitar execução imediata
+            min_margin = 0.002  # 0.2% margem mínima
+            if order_type == "price_above":
+                if px <= fresh_price * (1 + min_margin):
+                    old_px = px
+                    px = fresh_price * (1 + min_margin)
+                    self._log(f"[DEBUG_ORDERS] 🔧 STOP AJUSTADO: {old_px:.6f} → {px:.6f} (margem 0.2% sobre fresh)", level="WARN")
+                    self._log(f"[DEBUG_ORDERS] ⚠️ PERIGO: SHORT stop {old_px:.6f} <= preço fresh {fresh_price:.6f} - AJUSTADO!", level="ERROR")
+            elif order_type == "price_below":
+                if px >= fresh_price * (1 - min_margin):
+                    old_px = px
+                    px = fresh_price * (1 - min_margin)
+                    self._log(f"[DEBUG_ORDERS] 🔧 STOP AJUSTADO: {old_px:.6f} → {px:.6f} (margem 0.2% sobre fresh)", level="WARN")
+                    self._log(f"[DEBUG_ORDERS] ⚠️ PERIGO: LONG stop {old_px:.6f} >= preço fresh {fresh_price:.6f} - AJUSTADO!", level="ERROR")
+            
+            self._log(f"[DEBUG_ORDERS] Criando STOP {order_type} {side.upper()} reduceOnly @ {px:.6f} | Preço atual: {current_price:.6f}", level="DEBUG")
+        
+        # Apenas ordem limit com trigger, nunca stop_market (DEPOIS dos ajustes de px)
         params = {
             "reduceOnly": True,
             order_type: px,
             "trigger": "mark",
         }
-        
-        if self.debug:
-            # DEBUG CRÍTICO: Verificar se há discrepância de preço
-            fresh_price = self._preco_atual()
-            self._log(f"[DEBUG_ORDERS] 🔍 ANÁLISE CRÍTICA: stop={px:.6f} | preço_cache={current_price:.6f} | preço_fresh={fresh_price:.6f}", level="DEBUG")
-            if order_type == "price_above" and px <= fresh_price:
-                self._log(f"[DEBUG_ORDERS] ⚠️ PERIGO: SHORT stop {px:.6f} <= preço fresh {fresh_price:.6f} - PODE EXECUTAR IMEDIATAMENTE!", level="ERROR")
-            elif order_type == "price_below" and px >= fresh_price:
-                self._log(f"[DEBUG_ORDERS] ⚠️ PERIGO: LONG stop {px:.6f} >= preço fresh {fresh_price:.6f} - PODE EXECUTAR IMEDIATAMENTE!", level="ERROR")
-            self._log(f"[DEBUG_ORDERS] Criando STOP {order_type} {side.upper()} reduceOnly @ {px:.6f} | Preço atual: {current_price:.6f}", level="DEBUG")
         if existing_orders is None:
             existing = self._find_matching_protection("stop", side, px)
         else:
