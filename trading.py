@@ -4405,6 +4405,18 @@ class EMAGradientStrategy:
         try:
             # Usar ordem limit com price_below/price_above ao invés de stop_market
             ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)  # Carteira mãe
+            
+            # INVALIDAR CACHE após criar ordem para garantir fresh data
+            cache_keys_to_clear = [
+                f"fetch_positions_{self.symbol}",
+                f"fetch_open_orders_{self.symbol}",
+                f"fetch_ticker_{self.symbol}"
+            ]
+            for key in cache_keys_to_clear:
+                if key in _api_cache:
+                    del _api_cache[key]
+                    self._log(f"[DEBUG_CACHE] Cache invalidado: {key}", level="DEBUG")
+            
         except Exception as e:
             msg = f"Falha ao criar STOP {order_type}: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -4742,6 +4754,17 @@ class EMAGradientStrategy:
         )
         ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)  # Carteira mãe
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
+        
+        # INVALIDAR CACHE após criar entrada para garantir fresh data nas próximas verificações
+        cache_keys_to_clear = [
+            f"fetch_positions_{self.symbol}",
+            f"fetch_open_orders_{self.symbol}",
+            f"fetch_ticker_{self.symbol}"
+        ]
+        for key in cache_keys_to_clear:
+            if key in _api_cache:
+                del _api_cache[key]
+                self._log(f"[DEBUG_CACHE] Cache invalidado após entrada: {key}", level="DEBUG")
 
         oid = None
         try:
@@ -4863,6 +4886,16 @@ class EMAGradientStrategy:
                     level="DEBUG",
                 )
 
+        # DEBUG: Verificar posição ANTES de criar stop
+        try:
+            pos_before = self._posicao_aberta()
+            size_before = self._position_quantity(pos_before) if pos_before else 0.0
+            self._log(f"[DEBUG_BEFORE_STOP] 🔍 Posição ANTES de criar stop: size={size_before}", level="DEBUG")
+            if pos_before:
+                self._log(f"[DEBUG_BEFORE_STOP] 📊 Detalhes: side={pos_before.get('side', 'N/A')} entry={pos_before.get('entryPx', 'N/A')}", level="DEBUG")
+        except Exception as e:
+            self._log(f"[DEBUG_BEFORE_STOP] ❌ Erro verificando posição antes do stop: {e}", level="ERROR")
+
         ordem_stop = self._place_stop(sl_side, fill_amount, sl_price, df_for_log=df_for_log)
         self._last_stop_order_id = self._extract_order_id(ordem_stop)
         
@@ -4871,6 +4904,14 @@ class EMAGradientStrategy:
             pos_debug = self._posicao_aberta()
             size_debug = self._position_quantity(pos_debug) if pos_debug else 0.0
             self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição IMEDIATAMENTE após criar stop: size={size_debug}", level="DEBUG")
+            
+            # Se posição desapareceu, aguardar 1 segundo e verificar novamente
+            if size_debug == 0.0:
+                self._log(f"[DEBUG_IMMEDIATE] ⚠️ Posição zerada! Aguardando 1s para re-verificar...", level="WARN")
+                _time.sleep(1.0)
+                pos_recheck = self._posicao_aberta()
+                size_recheck = self._position_quantity(pos_recheck) if pos_recheck else 0.0
+                self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição após 1s: size={size_recheck}", level="DEBUG")
         except Exception as e:
             self._log(f"[DEBUG_IMMEDIATE] ❌ Erro verificando posição após stop: {e}", level="ERROR")
 
