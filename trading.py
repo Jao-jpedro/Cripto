@@ -4287,12 +4287,24 @@ class EMAGradientStrategy:
         
         # Determinar se é price_below ou price_above baseado no lado da posição
         current_price = self._preco_atual()
+        
+        # VALIDAÇÃO CRÍTICA: Verificar se o stop não será executado imediatamente
         if side.lower() == "sell":  # Fechar posição LONG
             # Para fechar LONG, precisamos vender quando preço cair (price_below)
             order_type = "price_below"
+            if px >= current_price:
+                self._log(f"⚠️ STOP INVÁLIDO: LONG stop @ {px:.6f} >= preço atual {current_price:.6f} - seria executado imediatamente!", level="ERROR")
+                # Ajustar para 1% abaixo do preço atual como segurança
+                px = current_price * 0.99
+                self._log(f"🔧 STOP CORRIGIDO para {px:.6f} (1% abaixo do preço atual)", level="WARN")
         else:  # side.lower() == "buy" - Fechar posição SHORT
             # Para fechar SHORT, precisamos comprar quando preço subir (price_above)
             order_type = "price_above"
+            if px <= current_price:
+                self._log(f"⚠️ STOP INVÁLIDO: SHORT stop @ {px:.6f} <= preço atual {current_price:.6f} - seria executado imediatamente!", level="ERROR")
+                # Ajustar para 1% acima do preço atual como segurança
+                px = current_price * 1.01
+                self._log(f"🔧 STOP CORRIGIDO para {px:.6f} (1% acima do preço atual)", level="WARN")
         
         # Apenas ordem limit com trigger, nunca stop_market
         params = {
@@ -4302,7 +4314,7 @@ class EMAGradientStrategy:
         }
         
         if self.debug:
-            self._log(f"Criando STOP {order_type} {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_ORDERS] Criando STOP {order_type} {side.upper()} reduceOnly @ {px:.6f} | Preço atual: {current_price:.6f}", level="DEBUG")
         if existing_orders is None:
             existing = self._find_matching_protection("stop", side, px)
         else:
@@ -4357,10 +4369,22 @@ class EMAGradientStrategy:
         
         # Determinar se é price_below ou price_above baseado no lado da posição
         current_price = self._preco_atual()
+        
+        # VALIDAÇÃO CRÍTICA: Verificar se o TP não será executado imediatamente
         if side.lower() == "sell":  # Fechar posição LONG - vender quando preço subir
             order_type = "price_above"
+            if px <= current_price:
+                self._log(f"⚠️ TP INVÁLIDO: LONG TP @ {px:.6f} <= preço atual {current_price:.6f} - seria executado imediatamente!", level="ERROR")
+                # Ajustar para 1% acima do preço atual como segurança
+                px = current_price * 1.01
+                self._log(f"🔧 TP CORRIGIDO para {px:.6f} (1% acima do preço atual)", level="WARN")
         else:  # side.lower() == "buy" - Fechar posição SHORT - comprar quando preço cair
             order_type = "price_below"
+            if px >= current_price:
+                self._log(f"⚠️ TP INVÁLIDO: SHORT TP @ {px:.6f} >= preço atual {current_price:.6f} - seria executado imediatamente!", level="ERROR")
+                # Ajustar para 1% abaixo do preço atual como segurança
+                px = current_price * 0.99
+                self._log(f"🔧 TP CORRIGIDO para {px:.6f} (1% abaixo do preço atual)", level="WARN")
             
         params = {
             "reduceOnly": True,
@@ -4369,7 +4393,7 @@ class EMAGradientStrategy:
         }
         
         if self.debug:
-            self._log(f"Criando TAKE PROFIT {order_type} {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+            self._log(f"[DEBUG_ORDERS] Criando TAKE PROFIT {order_type} {side.upper()} reduceOnly @ {px:.6f} | Preço atual: {current_price:.6f}", level="DEBUG")
         if existing_orders is None:
             existing = self._find_matching_protection("take", side, px)
         else:
@@ -5083,12 +5107,14 @@ class EMAGradientStrategy:
         self._log(f"[DEBUG_CLOSE] prev_side={prev_side} | pos={pos_info}", level="DEBUG")
         self._log(f"Snapshot posição atual: {pos}", level="DEBUG")
 
-        # Verificar e cancelar ordens triggered, criar price below se necessário
+        # DESABILITADO: Verificação de ordens triggered interferindo com stops/TPs oficiais
+        # Esta função estava cancelando stops/TPs válidos e causando fechamentos prematuros
         try:
             current_price = self._preco_atual()
-            cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price)  # Carteira mãe
+            # cancel_triggered_orders_and_create_price_below(self.dex, self.symbol, current_price)  # DESABILITADO
+            self._log(f"[DEBUG_CLOSE] Verificação de ordens triggered DESABILITADA - preço atual: {current_price:.4f}", level="DEBUG")
         except Exception as e:
-            self._log(f"Erro ao processar ordens triggered: {type(e).__name__}: {e}", level="WARN")
+            self._log(f"Erro ao obter preço atual: {type(e).__name__}: {e}", level="WARN")
 
         # Verificar stop loss por PnL/ROI para fechamento imediato (PnL tem prioridade)
         if pos:
