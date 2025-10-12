@@ -4036,7 +4036,29 @@ class EMAGradientStrategy:
         return out
 
     # ---------- exchange ----------
-    def _preco_atual(self) -> float:
+    def _preco_atual_binance(self) -> float:
+        """Busca preço atual da Binance (para análise técnica)"""
+        try:
+            # Converter símbolo para formato Binance (ETH/USDC:USDC -> ETHUSDT)
+            base_symbol = self.symbol.split('/')[0]  # ETH
+            binance_symbol = f"{base_symbol}USDT"
+            
+            import requests
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={binance_symbol}"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                price = float(data['price'])
+                self._log(f"[BINANCE] Preço {binance_symbol}: {price}", level="DEBUG")
+                return price
+        except Exception as e:
+            self._log(f"[BINANCE] Erro ao buscar preço: {e}", level="WARN")
+        
+        # Fallback para Hyperliquid se Binance falhar
+        return self._preco_atual_hyperliquid()
+    
+    def _preco_atual_hyperliquid(self) -> float:
+        """Busca preço atual da Hyperliquid (backup/validação)"""
         live = _is_live_trading()
         if not live:
             if self.debug:
@@ -4074,18 +4096,50 @@ class EMAGradientStrategy:
             pass
         raise RuntimeError("Não consegui obter preço atual (midPx/last).")
 
-    def _posicao_aberta(self) -> Optional[Dict[str, Any]]:
+    def _preco_atual(self) -> float:
+        """Preço atual: Binance (análise) com fallback Hyperliquid (execução)"""
+        live = _is_live_trading()
+        if not live:
+            if self.debug:
+                self._log("_preco_atual não disponível com LIVE_TRADING=0", level="DEBUG")
+            raise RuntimeError("LIVE_TRADING desativado")
+        
+        # ESTRATÉGIA HÍBRIDA: Binance para análise, Hyperliquid para execução
+        try:
+            # Primeiro tenta Binance (mais estável)
+            price = self._preco_atual_binance()
+            self._last_price_snapshot = price
+            return price
+        except Exception as e:
+            self._log(f"[HYBRID] Binance falhou, usando Hyperliquid: {e}", level="WARN")
+            # Fallback para Hyperliquid
+            return self._preco_atual_hyperliquid()
+    
+    def _preco_execucao(self) -> float:
+        """Preço para execução: SEMPRE Hyperliquid (onde está o dinheiro)"""
+        try:
+            return self._preco_atual_hyperliquid()
+        except Exception as e:
+            self._log(f"[EXECUÇÃO] Erro crítico ao buscar preço Hyperliquid: {e}", level="ERROR")
+            raise
+
+    def _posicao_aberta(self, force_fresh: bool = False) -> Optional[Dict[str, Any]]:
         # Permite desligar chamadas à exchange em ambientes restritos (default off)
         if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
             return None
         
-        # Cache key único por símbolo  
-        cache_key = f"positions_{self.symbol}"
-        
         try:
-            # Usar cache para reduzir chamadas à API
-            pos = _get_cached_api_call(cache_key, self.dex.fetch_positions, [self.symbol])  # Opera na carteira mãe
-            current_pos = pos[0] if pos and float(pos[0].get("contracts", 0)) > 0 else None
+            if force_fresh:
+                # FRESH: Sem cache para verificações críticas pós-criação
+                pos = self.dex.fetch_positions([self.symbol])  # Opera na carteira mãe
+                current_pos = pos[0] if pos and float(pos[0].get("contracts", 0)) > 0 else None
+                self._log(f"[DEBUG_FRESH] Posição FRESH: {current_pos is not None} | size={float(current_pos.get('contracts', 0)) if current_pos else 0.0}", level="DEBUG")
+            else:
+                # Cache key único por símbolo  
+                cache_key = f"positions_{self.symbol}"
+                # Usar cache para reduzir chamadas à API
+                pos = _get_cached_api_call(cache_key, self.dex.fetch_positions, [self.symbol])  # Opera na carteira mãe
+                current_pos = pos[0] if pos and float(pos[0].get("contracts", 0)) > 0 else None
             
             # Verificar se posição foi fechada externamente
             self._check_external_position_closure(current_pos)
@@ -4353,7 +4407,7 @@ class EMAGradientStrategy:
         px  = float(stop_price)
         
         # Determinar se é price_below ou price_above baseado no lado da posição
-        current_price = self._preco_atual()
+        current_price = self._preco_execucao()  # EXECUÇÃO: Usar Hyperliquid
         
         # VALIDAÇÃO CRÍTICA: Verificar se o stop não será executado imediatamente
         if side.lower() == "sell":  # Fechar posição LONG
@@ -4377,7 +4431,7 @@ class EMAGradientStrategy:
         
         if self.debug:
             # DEBUG CRÍTICO: Verificar se há discrepância de preço
-            fresh_price = self._preco_atual()
+            fresh_price = self._preco_execucao()  # EXECUÇÃO: Fresh price da Hyperliquid
             self._log(f"[DEBUG_ORDERS] 🔍 ANÁLISE CRÍTICA: stop={px:.6f} | preço_cache={current_price:.6f} | preço_fresh={fresh_price:.6f}", level="DEBUG")
             
             # Validação rigorosa com fresh_price para evitar execução imediata
@@ -4468,7 +4522,7 @@ class EMAGradientStrategy:
         px = float(target_price)
         
         # Determinar se é price_below ou price_above baseado no lado da posição
-        current_price = self._preco_atual()
+        current_price = self._preco_execucao()  # EXECUÇÃO: Usar Hyperliquid
         
         # VALIDAÇÃO CRÍTICA: Verificar se o TP não será executado imediatamente
         if side.lower() == "sell":  # Fechar posição LONG - vender quando preço subir
@@ -4783,6 +4837,20 @@ class EMAGradientStrategy:
         # CRÍTICO: Atualizar _last_pos_side IMEDIATAMENTE após entrada para evitar falso "fechamento externo"
         self._last_pos_side = self._norm_side(side)
         self._log(f"[DEBUG_ENTRY] _last_pos_side atualizado para: {self._last_pos_side}", level="DEBUG")
+        
+        # DEBUG CRÍTICO: Verificar se posição foi criada IMEDIATAMENTE (sem cache)
+        try:
+            pos_fresh = self._posicao_aberta(force_fresh=True)
+            size_fresh = self._position_quantity(pos_fresh) if pos_fresh else 0.0
+            self._log(f"[DEBUG_ENTRY] 🔍 Posição FRESH após entrada: size={size_fresh}", level="DEBUG")
+            if size_fresh == 0.0:
+                self._log(f"[DEBUG_ENTRY] ⚠️ CRÍTICO: Posição não detectada após entrada! Aguardando 2s...", level="ERROR")
+                _time.sleep(2.0)
+                pos_retry = self._posicao_aberta(force_fresh=True)
+                size_retry = self._position_quantity(pos_retry) if pos_retry else 0.0
+                self._log(f"[DEBUG_ENTRY] 🔍 Posição após 2s: size={size_retry}", level="DEBUG")
+        except Exception as e:
+            self._log(f"[DEBUG_ENTRY] ❌ Erro verificando posição fresh: {e}", level="ERROR")
 
         oid = None
         try:
@@ -4906,7 +4974,7 @@ class EMAGradientStrategy:
 
         # DEBUG: Verificar posição ANTES de criar stop
         try:
-            pos_before = self._posicao_aberta()
+            pos_before = self._posicao_aberta(force_fresh=True)  # FRESH: Sem cache para verificação crítica
             size_before = self._position_quantity(pos_before) if pos_before else 0.0
             self._log(f"[DEBUG_BEFORE_STOP] 🔍 Posição ANTES de criar stop: size={size_before}", level="DEBUG")
             if pos_before:
@@ -4919,7 +4987,7 @@ class EMAGradientStrategy:
         
         # DEBUG: Verificar posição imediatamente após criar stop
         try:
-            pos_debug = self._posicao_aberta()
+            pos_debug = self._posicao_aberta(force_fresh=True)  # FRESH: Sem cache para verificação crítica
             size_debug = self._position_quantity(pos_debug) if pos_debug else 0.0
             self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição IMEDIATAMENTE após criar stop: size={size_debug}", level="DEBUG")
             
@@ -4927,7 +4995,7 @@ class EMAGradientStrategy:
             if size_debug == 0.0:
                 self._log(f"[DEBUG_IMMEDIATE] ⚠️ Posição zerada! Aguardando 1s para re-verificar...", level="WARN")
                 _time.sleep(1.0)
-                pos_recheck = self._posicao_aberta()
+                pos_recheck = self._posicao_aberta(force_fresh=True)  # FRESH novamente
                 size_recheck = self._position_quantity(pos_recheck) if pos_recheck else 0.0
                 self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição após 1s: size={size_recheck}", level="DEBUG")
         except Exception as e:
