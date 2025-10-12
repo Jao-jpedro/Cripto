@@ -4300,6 +4300,8 @@ class EMAGradientStrategy:
         else:  # side.lower() == "buy" - Fechar posição SHORT
             # Para fechar SHORT, precisamos comprar quando preço subir (price_above)
             order_type = "price_above"
+            # CORREÇÃO: Para SHORT, stop DEVE estar ACIMA do preço atual (é correto!)
+            # Só é inválido se estiver ABAIXO do preço atual
             if px <= current_price:
                 self._log(f"⚠️ STOP INVÁLIDO: SHORT stop @ {px:.6f} <= preço atual {current_price:.6f} - seria executado imediatamente!", level="ERROR")
                 # Ajustar para 1% acima do preço atual como segurança
@@ -4314,6 +4316,13 @@ class EMAGradientStrategy:
         }
         
         if self.debug:
+            # DEBUG CRÍTICO: Verificar se há discrepância de preço
+            fresh_price = self._preco_atual()
+            self._log(f"[DEBUG_ORDERS] 🔍 ANÁLISE CRÍTICA: stop={px:.6f} | preço_cache={current_price:.6f} | preço_fresh={fresh_price:.6f}", level="DEBUG")
+            if order_type == "price_above" and px <= fresh_price:
+                self._log(f"[DEBUG_ORDERS] ⚠️ PERIGO: SHORT stop {px:.6f} <= preço fresh {fresh_price:.6f} - PODE EXECUTAR IMEDIATAMENTE!", level="ERROR")
+            elif order_type == "price_below" and px >= fresh_price:
+                self._log(f"[DEBUG_ORDERS] ⚠️ PERIGO: LONG stop {px:.6f} >= preço fresh {fresh_price:.6f} - PODE EXECUTAR IMEDIATAMENTE!", level="ERROR")
             self._log(f"[DEBUG_ORDERS] Criando STOP {order_type} {side.upper()} reduceOnly @ {px:.6f} | Preço atual: {current_price:.6f}", level="DEBUG")
         if existing_orders is None:
             existing = self._find_matching_protection("stop", side, px)
@@ -4791,11 +4800,27 @@ class EMAGradientStrategy:
 
         ordem_stop = self._place_stop(sl_side, fill_amount, sl_price, df_for_log=df_for_log)
         self._last_stop_order_id = self._extract_order_id(ordem_stop)
+        
+        # DEBUG: Verificar posição imediatamente após criar stop
+        try:
+            pos_debug = self._posicao_aberta()
+            size_debug = self._position_quantity(pos_debug) if pos_debug else 0.0
+            self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição IMEDIATAMENTE após criar stop: size={size_debug}", level="DEBUG")
+        except Exception as e:
+            self._log(f"[DEBUG_IMMEDIATE] ❌ Erro verificando posição após stop: {e}", level="ERROR")
 
         self._last_take_order_id = None
         if manage_take and tp_price is not None:
             ordem_take = self._place_take_profit(tp_side, fill_amount, tp_price, df_for_log=df_for_log)
             self._last_take_order_id = self._extract_order_id(ordem_take)
+            
+            # DEBUG: Verificar posição imediatamente após criar TP
+            try:
+                pos_debug = self._posicao_aberta()
+                size_debug = self._position_quantity(pos_debug) if pos_debug else 0.0
+                self._log(f"[DEBUG_IMMEDIATE] 🔍 Posição IMEDIATAMENTE após criar TP: size={size_debug}", level="DEBUG")
+            except Exception as e:
+                self._log(f"[DEBUG_IMMEDIATE] ❌ Erro verificando posição após TP: {e}", level="ERROR")
 
         self._safe_log(
             "stop_inicial", df_for_log,
@@ -4832,6 +4857,15 @@ class EMAGradientStrategy:
                         )
         except Exception as e:
             self._log(f"Falha ao listar open_orders: {type(e).__name__}: {e}", level="WARN")
+        
+        # DEBUG: Verificar posição no FINAL da função de abertura
+        try:
+            pos_final = self._posicao_aberta()
+            size_final = self._position_quantity(pos_final) if pos_final else 0.0
+            self._log(f"[DEBUG_FINAL] 🎯 Posição no FINAL de _abrir_posicao_com_stop: size={size_final}", level="DEBUG")
+        except Exception as e:
+            self._log(f"[DEBUG_FINAL] ❌ Erro verificando posição final: {e}", level="ERROR")
+            
         return ordem_entrada, ordem_stop
 
     # ---------- localizar/cancelar stop existente ----------
