@@ -5733,7 +5733,8 @@ class EMAGradientStrategy:
                     reasons_long.append("EMA7<=EMA21")
                 if not grad_pos_ok:
                     g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
-                    reasons_long.append(f"gradiente não >0 por {self.cfg.GRAD_CONSISTENCY} velas (grad%={g_last:.4f})")
+                    g_values = g.tolist()  # Mostrar todas as N velas
+                    reasons_long.append(f"gradiente não >0 por {self.cfg.GRAD_CONSISTENCY} velas (últimas: {[f'{x:.4f}' for x in g_values]}, atual={g_last:.4f})")
                 if not (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX):
                     reasons_long.append(f"ATR% fora [{self.cfg.ATR_PCT_MIN},{self.cfg.ATR_PCT_MAX}] (ATR%={last.atr_pct:.3f})")
                 if not (last.valor_fechamento > thr_long):
@@ -5749,7 +5750,8 @@ class EMAGradientStrategy:
                     reasons_short.append("EMA7>=EMA21")
                 if not grad_neg_ok:
                     g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
-                    reasons_short.append(f"gradiente não <0 por {self.cfg.GRAD_CONSISTENCY} velas (grad%={g_last:.4f})")
+                    g_values = g.tolist()  # Mostrar todas as N velas
+                    reasons_short.append(f"gradiente não <0 por {self.cfg.GRAD_CONSISTENCY} velas (últimas: {[f'{x:.4f}' for x in g_values]}, atual={g_last:.4f})")
                 if not (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX):
                     reasons_short.append(f"ATR% fora [{self.cfg.ATR_PCT_MIN},{self.cfg.ATR_PCT_MAX}] (ATR%={last.atr_pct:.3f})")
                 if not (last.valor_fechamento < thr_short):
