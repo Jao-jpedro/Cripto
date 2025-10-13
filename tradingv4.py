@@ -3353,14 +3353,14 @@ class GradientConfig:
     EMA_SHORT_SPAN: int     = 7
     EMA_LONG_SPAN: int      = 21
     N_BARRAS_GRADIENTE: int = 3           # janela para gradiente
-    GRAD_CONSISTENCY: int   = 4           # nº velas com gradiente consistente
+    GRAD_CONSISTENCY: int   = 3           # nº velas com gradiente consistente (reduzido de 4 para 3)
     ATR_PERIOD: int         = 14
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada (OTIMIZADOS para máximo ROI)
     ATR_PCT_MIN: float      = 0.6        # ATR% saudável (min) - OTIMIZADO (reduzido de 0.8 para 0.6)
     ATR_PCT_MAX: float      = 5.0        # ATR% saudável (max) - OTIMIZADO
-    BREAKOUT_K_ATR: float   = 0.8        # banda de rompimento: k*ATR - OTIMIZADO
+    BREAKOUT_K_ATR: float   = 0.6        # banda de rompimento: k*ATR - REDUZIDO (0.8 → 0.6)
     NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra: |EMA7-EMA21| < eps*ATR
 
     # Saídas por gradiente
@@ -3369,7 +3369,7 @@ class GradientConfig:
     # Execução
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.40  # 40% da margem como stop inicial
+    STOP_LOSS_CAPITAL_PCT: float = 0.30  # 30% da margem como stop inicial (reduzido de 40% para 30%)
     TAKE_PROFIT_CAPITAL_PCT: float = 0.10   # take profit em 10% da margem
     MAX_LOSS_ABS_USD: float    = 50.00     # hard stop emergencial - limite absoluto de perda por posição (DESABILITADO TEMP)
 
