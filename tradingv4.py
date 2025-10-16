@@ -3376,7 +3376,7 @@ class GradientConfig:
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
     POST_COOLDOWN_CONFIRM: int = 0        # confirmações pós-cooldown desativadas
-    COOLDOWN_MINUTOS: int   = 15          # tempo mínimo entre entradas após saída
+    COOLDOWN_MINUTOS: int   = 30          # tempo mínimo entre entradas após saída
     ANTI_SPAM_SECS: int     = 3
     MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
 
