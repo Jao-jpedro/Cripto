@@ -94,9 +94,9 @@ def _is_live_trading():
     print(f"[DEBUG] [LIVE_CHECK_V4] LIVE_TRADING='{os.getenv('LIVE_TRADING', 'UNSET')}' → {is_live}", flush=True)
     return is_live
 
-ABS_LOSS_HARD_STOP = 0.40  # perda máxima absoluta em USDC permitida antes de zerar (aumentado)
-LIQUIDATION_BUFFER_PCT = 0.40  # 0,2% de margem de segurança sobre o preço de liquidação
-ROI_HARD_STOP = -80.0  # ROI mínimo aceitável (-80%) - hard stop emergencial apenas
+ABS_LOSS_HARD_STOP = 0.30  # perda máxima absoluta em USDC (reduzido de 40% para 30%)
+LIQUIDATION_BUFFER_PCT = 0.30  # margem de segurança sobre liquidação (reduzido de 40% para 30%)
+ROI_HARD_STOP = -30.0  # ROI mínimo aceitável (reduzido de -80% para -30%)
 UNREALIZED_PNL_HARD_STOP = -50.00  # trava dura emergencial: perda de $50.00 do capital real (DESABILITADO TEMP)
 
 # High Water Mark global para trailing stops verdadeiros
@@ -3370,7 +3370,7 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.30  # 30% da margem como stop inicial (reduzido de 40% para 30%)
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.15   # take profit em 15% da margem (aumentado de 10% para 15%)
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.20   # take profit em 20% da margem (aumentado de 15% para 20%)
     MAX_LOSS_ABS_USD: float    = 50.00     # hard stop emergencial - limite absoluto de perda por posição (DESABILITADO TEMP)
 
     # down & anti-flip-flop
@@ -3398,7 +3398,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.30  # 30% stop loss máximo (reduzido de 40% para 30%)
-    take_pct: float = 0.15  # 15% take profit (aumentado de 10% para 15%)
+    take_pct: float = 0.20  # 20% take profit (aumentado de 15% para 20%)
     usd_env: Optional[str] = None
 
 
