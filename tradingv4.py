@@ -3360,7 +3360,7 @@ class GradientConfig:
     # Filtros de entrada (OTIMIZADOS para máximo ROI)
     ATR_PCT_MIN: float      = 0.6        # ATR% saudável (min) - OTIMIZADO (reduzido de 0.8 para 0.6)
     ATR_PCT_MAX: float      = 5.0        # ATR% saudável (max) - OTIMIZADO
-    BREAKOUT_K_ATR: float   = 1.0        # banda de rompimento: k*ATR - AUMENTADO (0.8 → 1.0)
+    BREAKOUT_K_ATR: float   = 1.3        # banda de rompimento: k*ATR - AUMENTADO (1.0 → 1.3)
     NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra: |EMA7-EMA21| < eps*ATR
 
     # Saídas por gradiente
@@ -3370,7 +3370,7 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.20  # 20% da margem como stop inicial (reduzido de 30% para 20%)
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.35   # take profit em 35% da margem (aumentado de 30% para 35%)
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.30   # take profit em 30% da margem (reduzido de 35% para 30%)
     MAX_LOSS_ABS_USD: float    = 50.00     # hard stop emergencial - limite absoluto de perda por posição (DESABILITADO TEMP)
 
     # down & anti-flip-flop
@@ -3398,7 +3398,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.20  # 20% stop loss máximo (reduzido de 30% para 20%)
-    take_pct: float = 0.35  # 35% take profit (aumentado de 30% para 35%)
+    take_pct: float = 0.30  # 30% take profit (reduzido de 35% para 30%)
     usd_env: Optional[str] = None
 
 
