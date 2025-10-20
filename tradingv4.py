@@ -3358,9 +3358,9 @@ class GradientConfig:
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada (OTIMIZADOS para máximo ROI)
-    ATR_PCT_MIN: float      = 0.6        # ATR% saudável (min) - OTIMIZADO (reduzido de 0.8 para 0.6)
+    ATR_PCT_MIN: float      = 0.7        # ATR% saudável (min) - OTIMIZADO (reduzido de 0.8 para 0.6)
     ATR_PCT_MAX: float      = 5.0        # ATR% saudável (max) - OTIMIZADO
-    BREAKOUT_K_ATR: float   = 1.3        # banda de rompimento: k*ATR - AUMENTADO (1.0 → 1.3)
+    BREAKOUT_K_ATR: float   = 1.5        # banda de rompimento: k*ATR - AUMENTADO (1.0 → 1.3)
     NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra: |EMA7-EMA21| < eps*ATR
 
     # Saídas por gradiente
