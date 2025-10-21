@@ -3370,7 +3370,7 @@ class GradientConfig:
     LEVERAGE: int           = 20
     MIN_ORDER_USD: float    = 10.0
     STOP_LOSS_CAPITAL_PCT: float = 0.20  # 20% da margem como stop inicial (reduzido de 30% para 20%)
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.30   # take profit em 30% da margem (reduzido de 35% para 30%)
+    TAKE_PROFIT_CAPITAL_PCT: float = 0.50   # take profit em 50% da margem (aumentado de 30% para 50%)
     MAX_LOSS_ABS_USD: float    = 50.00     # hard stop emergencial - limite absoluto de perda por posição (DESABILITADO TEMP)
 
     # down & anti-flip-flop
@@ -3398,7 +3398,7 @@ class AssetSetup:
     hl_symbol: str
     leverage: int
     stop_pct: float = 0.20  # 20% stop loss máximo (reduzido de 30% para 20%)
-    take_pct: float = 0.30  # 30% take profit (reduzido de 35% para 30%)
+    take_pct: float = 0.50  # 50% take profit (aumentado de 30% para 50%)
     usd_env: Optional[str] = None
 
 
