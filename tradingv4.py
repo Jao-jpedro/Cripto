@@ -3358,9 +3358,9 @@ class GradientConfig:
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada (OTIMIZADOS para máximo ROI)
-    ATR_PCT_MIN: float      = 0.6        # ATR% saudável (min) - OTIMIZADO (reduzido de 0.8 para 0.6)
+    ATR_PCT_MIN: float      = 0.8        # ATR% saudável (min) - OTIMIZADO (reduzido de 0.8 para 0.6)
     ATR_PCT_MAX: float      = 5.0        # ATR% saudável (max) - OTIMIZADO
-    BREAKOUT_K_ATR: float   = 1.3        # banda de rompimento: k*ATR - AUMENTADO (1.0 → 1.3)
+    BREAKOUT_K_ATR: float   = 2.0        # banda de rompimento: k*ATR - AUMENTADO (1.0 → 1.3)
     NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra: |EMA7-EMA21| < eps*ATR
 
     # Saídas por gradiente
@@ -3376,7 +3376,7 @@ class GradientConfig:
     # down & anti-flip-flop
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
     POST_COOLDOWN_CONFIRM: int = 0        # confirmações pós-cooldown desativadas
-    COOLDOWN_MINUTOS: int   = 30          # tempo mínimo entre entradas após saída
+    COOLDOWN_MINUTOS: int   = 120          # tempo mínimo entre entradas após saída
     ANTI_SPAM_SECS: int     = 3
     MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
 
