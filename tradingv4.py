@@ -5571,14 +5571,13 @@ class EMAGradientStrategy:
                 g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
                 eps = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
                 diff = float(last.ema_short - last.ema_long)
-                # Calcular thresholds de breakout
-                breakout_long_thr = float(last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr)
-                breakout_short_thr = float(last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr)
+                # Calcular BREAKOUT_K_ATR atual do momento (distância close-ema7 / atr)
+                current_breakout_k = abs(float(last.valor_fechamento) - float(last.ema_short)) / float(last.atr) if float(last.atr) > 0 else 0.0
                 self._log(
                     "Trigger snapshot | close={:.6f} ema7={:.6f} ema21={:.6f} atr={:.6f} atr%={:.3f} "
-                    "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | breakout_long={:.6f} breakout_short={:.6f}".format(
+                    "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | current_k_atr={:.3f}".format(
                         float(last.valor_fechamento), float(last.ema_short), float(last.ema_long), float(last.atr),
-                        float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, breakout_long_thr, breakout_short_thr
+                        float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, current_breakout_k
                     ),
                     level="DEBUG",
                 )
