@@ -3358,9 +3358,9 @@ class GradientConfig:
     VOL_MA_PERIOD: int      = 20
 
     # Filtros de entrada (OTIMIZADOS para máximo ROI)
-    ATR_PCT_MIN: float      = 0.8        # ATR% saudável (min) - OTIMIZADO para máxima seletividade
+    ATR_PCT_MIN: float      = 0.7        # ATR% saudável (min) - OTIMIZADO para máxima seletividade
     ATR_PCT_MAX: float      = 5.0        # ATR% saudável (max) - OTIMIZADO
-    BREAKOUT_K_ATR: float   = 2.0        # banda de rompimento: k*ATR - AUMENTADO (1.3 → 2.0)
+    BREAKOUT_K_ATR: float   = 3.0        # banda de rompimento: k*ATR - AUMENTADO (2.0 → 3.0)
     NO_TRADE_EPS_K_ATR: float = 0.07      # zona neutra: |EMA7-EMA21| < eps*ATR
 
     # Saídas por gradiente
@@ -3403,6 +3403,7 @@ class AssetSetup:
 
 
 ASSET_SETUPS: List[AssetSetup] = [
+    AssetSetup("AVNT-USD", "AVNTUSDT", "AVNT/USDC:USDC", 5, usd_env="USD_PER_TRADE_AVNT"),
     AssetSetup("ZEC-USD", "ZECUSDT", "ZEC/USDC:USDC", 5, usd_env="USD_PER_TRADE_ZEC"),
     AssetSetup("ASTER-USD", "ASTERUSDT", "ASTER/USDC:USDC", 5, usd_env="USD_PER_TRADE_ASTER"),
     AssetSetup("ETH-USD", "ETHUSDT", "ETH/USDC:USDC", 25, usd_env="USD_PER_TRADE_ETH"),
