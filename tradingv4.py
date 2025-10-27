@@ -3404,7 +3404,6 @@ class AssetSetup:
 
 ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("AVNT-USD", "AVNTUSDT", "AVNT/USDC:USDC", 5, usd_env="USD_PER_TRADE_AVNT"),
-    AssetSetup("ZEC-USD", "ZECUSDT", "ZEC/USDC:USDC", 5, usd_env="USD_PER_TRADE_ZEC"),
     AssetSetup("ASTER-USD", "ASTERUSDT", "ASTER/USDC:USDC", 5, usd_env="USD_PER_TRADE_ASTER"),
     AssetSetup("ETH-USD", "ETHUSDT", "ETH/USDC:USDC", 25, usd_env="USD_PER_TRADE_ETH"),
     AssetSetup("TAO-USD", "TAOUSDT", "TAO/USDC:USDC", 5, usd_env="USD_PER_TRADE_TAO"),
@@ -3416,7 +3415,6 @@ ASSET_SETUPS: List[AssetSetup] = [
     AssetSetup("SUI-USD", "SUIUSDT", "SUI/USDC:USDC", 10, usd_env="USD_PER_TRADE_SUI"),
     AssetSetup("ADA-USD", "ADAUSDT", "ADA/USDC:USDC", 10, usd_env="USD_PER_TRADE_ADA"),
     AssetSetup("PUMP-USD", "PUMPUSDT", "PUMP/USDC:USDC", 10, usd_env="USD_PER_TRADE_PUMP"),
-    AssetSetup("PAXG-USD", "PAXGUSDT", "PAXG/USDC:USDC", 10, usd_env="USD_PER_TRADE_PAXG"),
     AssetSetup("LINK-USD", "LINKUSDT", "LINK/USDC:USDC", 10, usd_env="USD_PER_TRADE_LINK"),
     AssetSetup("WLD-USD", "WLDUSDT", "WLD/USDC:USDC", 10, usd_env="USD_PER_TRADE_WLD"),
     AssetSetup("AAVE-USD", "AAVEUSDT", "AAVE/USDC:USDC", 10, usd_env="USD_PER_TRADE_AAVE"),
