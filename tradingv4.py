@@ -7,10 +7,12 @@ print("📊 TP: 10% | SL: 40% | ATR: 0.6-5.0% | Volume: 3.0x | Confluência: 3 c
 import os
 live_trading_value = os.getenv('LIVE_TRADING', 'UNSET')
 private_key_set = 'YES' if os.getenv('HYPERLIQUID_PRIVATE_KEY') else 'NO'
+private_key_rafa_set = 'YES' if os.getenv('HYPERLIQUID_PRIVATE_KEY_RAFA') else 'NO'
 
 print("\n========== 🔍 DEBUG: VARIÁVEIS DE AMBIENTE (TRADINGV4) ==========", flush=True)
 print(f"LIVE_TRADING = {live_trading_value}", flush=True)
-print(f"HYPERLIQUID_PRIVATE_KEY = {private_key_set}", flush=True)
+print(f"HYPERLIQUID_PRIVATE_KEY (Principal) = {private_key_set}", flush=True)
+print(f"HYPERLIQUID_PRIVATE_KEY_RAFA (Rafa) = {private_key_rafa_set}", flush=True)
 print("===============================================================", flush=True)
 
 # Constantes para stop loss
@@ -3067,6 +3069,91 @@ _priv_env = None
 def _init_dex_if_needed():
     """Inicializa o DEX apenas quando necessário"""
     global dex, _wallet_env, _priv_env
+# =========================
+# CONFIGURAÇÃO DE MÚLTIPLAS CARTEIRAS
+# =========================
+
+@dataclass
+class WalletConfig:
+    """Configuração de uma carteira de trading"""
+    name: str
+    wallet_address: str
+    private_key_env: str
+    vault_address: Optional[str] = None
+    usd_per_trade: float = 3.0  # Valor padrão em USD por operação
+    
+# Configurações das carteiras
+WALLET_CONFIGS = [
+    WalletConfig(
+        name="CARTEIRA_PRINCIPAL",
+        wallet_address="0x08183aa09eF03Cf8475D909F507606F5044cBdAB",
+        private_key_env="HYPERLIQUID_PRIVATE_KEY",
+        vault_address=None,  # Conta principal não usa vault
+        usd_per_trade=3.0    # $3 por operação na carteira principal
+    ),
+    WalletConfig(
+        name="CARTEIRA_RAFA", 
+        wallet_address="0x22C517A64769d8CEEFcF269B93d1117624604369",
+        private_key_env="HYPERLIQUID_PRIVATE_KEY_RAFA",
+        vault_address="0x61374a80c401b7448958f3c0f252734e9368a388",  # Subconta
+        usd_per_trade=10.0   # $10 por operação na CARTEIRA_RAFA
+    )
+]
+
+# Cache global para instâncias DEX
+_dex_instances = {}
+
+def _init_dex_if_needed(wallet_config: WalletConfig = None, dex_timeout: int = 45000):
+    """Inicializa conexão DEX para uma carteira específica"""
+    # Se não especificar carteira, usar a principal (compatibilidade)
+    if wallet_config is None:
+        wallet_config = WALLET_CONFIGS[0]  # CARTEIRA_PRINCIPAL
+        
+    cache_key = wallet_config.name
+    
+    # Verificar se já existe instância para esta carteira
+    if cache_key in _dex_instances:
+        dex = _dex_instances[cache_key]
+        if dex is not None:
+            return dex
+    
+    # Lê credenciais da carteira específica
+    _wallet_env = wallet_config.wallet_address
+    _priv_env = os.getenv(wallet_config.private_key_env)
+    
+    if not _priv_env:
+        msg = (
+            f"Credenciais da {wallet_config.name} ausentes: {wallet_config.private_key_env}. "
+            "Defina a variável de ambiente obrigatória antes de executar."
+        )
+        _log_global("DEX", msg, level="ERROR")
+        raise RuntimeError(msg)
+
+    # Configuração base do DEX
+    dex_config = {
+        "walletAddress": _wallet_env,
+        "privateKey": _priv_env,
+        "enableRateLimit": True,
+        "timeout": dex_timeout,
+        "options": {"timeout": dex_timeout},
+    }
+    
+    # Adicionar vault address se for subconta
+    if wallet_config.vault_address:
+        dex_config["options"]["vaultAddress"] = wallet_config.vault_address
+        _log_global("DEX", f"Configurando {wallet_config.name} com vault: {wallet_config.vault_address}")
+
+    dex = ccxt.hyperliquid(dex_config)
+    _dex_instances[cache_key] = dex
+    
+    _log_global("DEX", f"{wallet_config.name} inicializada | Wallet: {_wallet_env[:10]}...")
+    
+    return dex
+
+# Função legacy para compatibilidade (usa carteira principal)
+def _init_dex_if_needed_legacy(dex_timeout: int = 45000):
+    """Função legacy para inicializar DEX (usa carteira principal)"""
+    global dex
     
     if dex is not None:
         return dex
@@ -3093,11 +3180,34 @@ def _init_dex_if_needed():
     })
     
     return dex
+    
+    return dex
 
-# Sistema TRADINGV4 com credenciais da sub-wallet
+# Sistema TRADINGV4 com suporte a múltiplas carteiras
 def _init_system_if_needed():
-    """Inicializa o sistema apenas quando necessário"""
-    dex_instance = _init_dex_if_needed()
+    """Inicializa o sistema para todas as carteiras configuradas"""
+    _log_global("SYSTEM", "Inicializando sistema para múltiplas carteiras...")
+    
+    for wallet_config in WALLET_CONFIGS:
+        try:
+            dex_instance = _init_dex_if_needed(wallet_config)
+            if dex_instance:
+                live = _is_live_trading()
+                _log_global("DEX", f"{wallet_config.name} Inicializada | LIVE_TRADING={live} | TIMEOUT_MS={dex_timeout}")
+                
+                if live:
+                    _log_global("DEX", f"{wallet_config.name} fetch_balance() iniciando…")
+                    try:
+                        balance = dex_instance.fetch_balance()
+                        _log_global("DEX", f"{wallet_config.name} fetch_balance() OK - Saldo: {balance.get('USDC', {}).get('total', 0):.2f} USDC")
+                    except Exception as e:
+                        _log_global("DEX", f"{wallet_config.name} Falha ao buscar saldo: {type(e).__name__}: {e}", level="WARN")
+        except Exception as e:
+            _log_global("SYSTEM", f"Erro inicializando {wallet_config.name}: {e}", level="ERROR")
+            
+def _init_system_if_needed_legacy():
+    """Inicializa o sistema apenas quando necessário (versão legacy)"""
+    dex_instance = _init_dex_if_needed_legacy()
     if dex_instance:
         live = _is_live_trading()
         _log_global("DEX", f"V4 Inicializado | LIVE_TRADING={live} | TIMEOUT_MS={dex_timeout}")
@@ -3425,12 +3535,13 @@ ASSET_SETUPS: List[AssetSetup] = [
 
 
 class EMAGradientStrategy:
-    def __init__(self, dex, symbol: str, cfg: GradientConfig = GradientConfig(), logger: "TradeLogger" = None, debug: bool = True):
+    def __init__(self, dex, symbol: str, cfg: GradientConfig = GradientConfig(), logger: "TradeLogger" = None, debug: bool = True, wallet_config: WalletConfig = None):
         self.dex = dex
         self.symbol = symbol
         self.cfg = cfg
         self.logger = logger
         self.debug = debug
+        self.wallet_config = wallet_config or WALLET_CONFIGS[0]  # Default para carteira principal
 
         self._cooldown_until: Optional[datetime] = None
         self._last_open_at: Optional[datetime] = None
@@ -5250,7 +5361,11 @@ class EMAGradientStrategy:
             )
 
     # ---------- loop principal ----------
-    def step(self, df: pd.DataFrame, usd_to_spend: float, rsi_df_hourly: Optional[pd.DataFrame] = None):
+    def step(self, df: pd.DataFrame, usd_to_spend: float = None, rsi_df_hourly: Optional[pd.DataFrame] = None):
+        # Se não especificar USD, usar o valor configurado para esta carteira
+        if usd_to_spend is None:
+            usd_to_spend = self.wallet_config.usd_per_trade
+        
         # filtra símbolo, se DF tiver múltiplos
         if "criptomoeda" in df.columns and (df["criptomoeda"] == self._df_symbol_hint).any():
             df = df.loc[df["criptomoeda"] == self._df_symbol_hint].copy()
@@ -6558,176 +6673,202 @@ if __name__ == "__main__":
     # Compat: alias para versões antigas que esperam EMAGradientATRStrategy
     EMAGradientATRStrategy = EMAGradientStrategy  # type: ignore
 
-    def check_all_trailing_stops_v4(dex_in, asset_state) -> None:
-        """Verifica e ajusta trailing stops dinâmicos para TODAS as posições abertas."""
+    def check_all_trailing_stops_v4(asset_state) -> None:
+        """Verifica e ajusta trailing stops dinâmicos para TODAS as posições em TODAS as carteiras."""
         for asset in ASSET_SETUPS:
             state = asset_state.get(asset.name)
             if state is None:
                 continue  # Asset ainda não foi inicializado
                 
-            strategy: EMAGradientStrategy = state["strategy"]
+            strategies = state.get("strategies", {})
             
-            try:
-                # Verificar se há posição aberta na carteira mãe
-                positions = dex_in.fetch_positions([asset.hl_symbol])  # Carteira mãe
-                if not positions or float(positions[0].get("contracts", 0)) == 0:
-                    continue
-                    
-                pos = positions[0]
-                
-                # Executar trailing stop dinâmico para esta posição
+            for wallet_name, strategy in strategies.items():
                 try:
-                    # Criar um DataFrame dummy para o log
-                    import pandas as pd
-                    dummy_df = pd.DataFrame()
-                    strategy._ensure_position_protections(pos, df_for_log=dummy_df)
-                except Exception as e:
-                    _log_global("TRAILING_CHECK", f"{asset.name}: Erro no trailing stop - {e}", level="WARN")
+                    # Obter DEX específico da carteira
+                    wallet_config = next((w for w in WALLET_CONFIGS if w.name == wallet_name), None)
+                    if not wallet_config:
+                        continue
+                        
+                    wallet_dex = _init_dex_if_needed(wallet_config)
                     
-            except Exception as e:
-                _log_global("TRAILING_CHECK", f"Erro verificando {asset.name}: {type(e).__name__}: {e}", level="WARN")
+                    # Verificar se há posição aberta nesta carteira
+                    positions = wallet_dex.fetch_positions([asset.hl_symbol])
+                    if not positions or float(positions[0].get("contracts", 0)) == 0:
+                        continue
+                        
+                    pos = positions[0]
+                    
+                    # Executar trailing stop dinâmico para esta posição
+                    try:
+                        # Criar um DataFrame dummy para o log
+                        import pandas as pd
+                        dummy_df = pd.DataFrame()
+                        strategy._ensure_position_protections(pos, df_for_log=dummy_df)
+                        _log_global("TRAILING_CHECK", f"{asset.name} ({wallet_name}): Trailing stop verificado")
+                    except Exception as e:
+                        _log_global("TRAILING_CHECK", f"{asset.name} ({wallet_name}): Erro no trailing stop - {e}", level="WARN")
+                        
+                except Exception as e:
+                    _log_global("TRAILING_CHECK", f"Erro verificando {asset.name} ({wallet_name}): {type(e).__name__}: {e}", level="WARN")
 
-    def fast_safety_check_v4(dex_in, asset_state) -> None:
-        """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos na conta principal."""
-        open_positions = []
+    def fast_safety_check_v4(asset_state) -> None:
+        """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos em TODAS as carteiras."""
         
         # Debug: verificar quantos assets estão no asset_state
         _log_global("FAST_SAFETY_V4", f"Asset_state contém {len(asset_state)} assets: {list(asset_state.keys())}", level="DEBUG")
         
-        for asset in ASSET_SETUPS:
-            state = asset_state.get(asset.name)
+        # Verificar segurança para TODAS as carteiras
+        for wallet_config in WALLET_CONFIGS:
+            _log_global("FAST_SAFETY_V4", f"Verificando segurança para {wallet_config.name} (${wallet_config.usd_per_trade}/trade)...")
             
             try:
-                # Verificar se há posição aberta na carteira mãe (independente do asset_state)
-                cache_key = f"positions_{asset.hl_symbol}"
-                positions = _get_cached_api_call(cache_key, dex_in.fetch_positions, [asset.hl_symbol])  # Carteira mãe
-                if not positions or float(positions[0].get("contracts", 0)) == 0:
-                    continue
+                wallet_dex = _init_dex_if_needed(wallet_config)
+                open_positions = []
+                
+                for asset in ASSET_SETUPS:
+                    state = asset_state.get(asset.name)
                     
-                pos = positions[0]
-                emergency_closed = False
-                
-                # Se não tem strategy no asset_state, pular o trailing stop mas ainda mostrar no log
-                if state is None:
-                    _log_global("FAST_SAFETY_V4", f"{asset.name}: Posição encontrada mas asset não inicializado", level="DEBUG")
-                else:
-                    strategy: EMAGradientStrategy = state["strategy"]
-                
-                # Coletar informações da posição
-                side = pos.get("side") or pos.get("positionSide", "")
-                contracts = float(pos.get("contracts", 0))
-                unrealized_pnl = float(pos.get("unrealizedPnl", 0))
-                
-                # Calcular ROI real usando mesma fórmula do trailing stop
-                roi_pct = 0.0
-                try:
-                    position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
-                    leverage = float(pos.get("leverage", 10))
-                    
-                    if position_value is None:
-                        # Calcular position_value manualmente se necessário
-                        current_px = 0
-                        if state is not None:
-                            current_px = state["strategy"]._preco_atual()
-                        else:
-                            # Fallback: usar ticker se não temos strategy
-                            try:
-                                cache_key = f"ticker_{asset.hl_symbol}"
-                                ticker = _get_cached_api_call(cache_key, dex_in.fetch_ticker, asset.hl_symbol)
-                                current_px = float(ticker.get("last", 0) or 0)
-                            except Exception:
+                    try:
+                        # Verificar se há posição aberta nesta carteira específica
+                        cache_key = f"positions_{asset.hl_symbol}_{wallet_config.name}"
+                        positions = _get_cached_api_call(cache_key, wallet_dex.fetch_positions, [asset.hl_symbol])
+                        if not positions or float(positions[0].get("contracts", 0)) == 0:
+                            continue
+                            
+                        pos = positions[0]
+                        emergency_closed = False
+                        
+                        # Se não tem strategy no asset_state, pular mas ainda mostrar no log
+                        if state is None:
+                            _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Posição encontrada mas asset não inicializado", level="DEBUG")
+                            continue
+                        
+                        # Obter strategy específica da carteira
+                        strategies = state.get("strategies", {})
+                        strategy = strategies.get(wallet_config.name)
+                        if not strategy:
+                            _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Strategy não encontrada", level="DEBUG")
+                            continue
+                        
+                        # Coletar informações da posição
+                        side = pos.get("side") or pos.get("positionSide", "")
+                        contracts = float(pos.get("contracts", 0))
+                        unrealized_pnl = float(pos.get("unrealizedPnl", 0))
+                        
+                        # Calcular ROI real usando mesma fórmula do trailing stop
+                        roi_pct = 0.0
+                        try:
+                            position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
+                            leverage = float(pos.get("leverage", 10))
+                            
+                            if position_value is None:
+                                # Calcular position_value manualmente se necessário
                                 current_px = 0
-                        
-                        if contracts > 0 and current_px > 0:
-                            position_value = abs(contracts * current_px)
-                    
-                    if position_value and position_value > 0 and leverage > 0:
-                        # Mesma fórmula: (PnL / (position_value / leverage)) * 100
-                        capital_real = position_value / leverage
-                        roi_pct = (unrealized_pnl / capital_real) * 100
-                except Exception as e:
-                    _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro calculando ROI - {e}", level="WARN")
-                
-                # Adicionar à lista de posições abertas com status
-                status = "OK"
-                if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                    status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.3f} (será fechado!)"
-                elif roi_pct <= ROI_HARD_STOP:
-                    status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}% (será fechado!)"
-                elif unrealized_pnl < -0.01:  # Alertar perdas > -1 cent
-                    status = f"📉 PnL: ${unrealized_pnl:.3f} ROI: {roi_pct:.1f}%"
-                elif unrealized_pnl > 0.01:   # Alertar lucros > +1 cent
-                    status = f"📈 PnL: +${unrealized_pnl:.3f} ROI: +{roi_pct:.1f}%"
-                
-                open_positions.append(f"{asset.name} {side.upper()}: {status}")
-                
-                # PRIORITÁRIO: Verificar unrealized PnL primeiro
-                if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 TESTE PNL: {unrealized_pnl:.4f} <= {UNREALIZED_PNL_HARD_STOP} = True", level="ERROR")
-                    try:
-                        qty = abs(contracts)
-                        side_norm = strategy._norm_side(side)
-                        exit_side = "sell" if side_norm in ("buy", "long") else "buy"
-                        
-                        # Buscar preço atual para ordem market
-                        ticker = dex_in.fetch_ticker(asset.hl_symbol)
-                        current_price = float(ticker.get("last", 0) or 0)
-                        if current_price <= 0:
-                            continue
+                                if strategy:
+                                    current_px = strategy._preco_atual()
+                                
+                                if current_px == 0:
+                                    # Fallback: usar ticker se não conseguimos do strategy
+                                    try:
+                                        cache_key = f"ticker_{asset.hl_symbol}_{wallet_config.name}"
+                                        ticker = _get_cached_api_call(cache_key, wallet_dex.fetch_ticker, asset.hl_symbol)
+                                        current_px = float(ticker.get("last", 0) or 0)
+                                    except Exception:
+                                        current_px = 0
+                                
+                                if contracts > 0 and current_px > 0:
+                                    position_value = abs(contracts * current_px)
                             
-                        # Ajustar preço para garantir execução
-                        if exit_side == "sell":
-                            order_price = current_price * 0.995  # Ligeiramente abaixo para long
-                        else:
-                            order_price = current_price * 1.005  # Ligeiramente acima para short
+                            if position_value and position_value > 0 and leverage > 0:
+                                # Mesma fórmula: (PnL / (position_value / leverage)) * 100
+                                capital_real = position_value / leverage
+                                roi_pct = (unrealized_pnl / capital_real) * 100
+                        except Exception as e:
+                            _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Erro calculando ROI - {e}", level="WARN")
                         
-                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Carteira mãe
-                        emergency_closed = True
-                        _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
-                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
+                        # Adicionar à lista de posições abertas com status
+                        status = "OK"
+                        if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
+                            status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.3f} (será fechado!)"
+                        elif roi_pct <= ROI_HARD_STOP:
+                            status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}% (será fechado!)"
+                        elif unrealized_pnl < -0.01:  # Alertar perdas > -1 cent
+                            status = f"📉 PnL: ${unrealized_pnl:.3f} ROI: {roi_pct:.1f}%"
+                        elif unrealized_pnl > 0.01:   # Alertar lucros > +1 cent
+                            status = f"📈 PnL: +${unrealized_pnl:.3f} ROI: +{roi_pct:.1f}%"
+                        
+                        open_positions.append(f"{asset.name} {side.upper()}: {status}")
+                        
+                        # PRIORITÁRIO: Verificar unrealized PnL primeiro
+                        if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
+                            _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 {wallet_config.name} PNL: {unrealized_pnl:.4f} <= {UNREALIZED_PNL_HARD_STOP} = True", level="ERROR")
+                            try:
+                                qty = abs(contracts)
+                                side_norm = strategy._norm_side(side)
+                                exit_side = "sell" if side_norm in ("buy", "long") else "buy"
+                                
+                                # Buscar preço atual para ordem market
+                                ticker = wallet_dex.fetch_ticker(asset.hl_symbol)
+                                current_price = float(ticker.get("last", 0) or 0)
+                                if current_price <= 0:
+                                    continue
+                                    
+                                # Ajustar preço para garantir execução
+                                if exit_side == "sell":
+                                    order_price = current_price * 0.995  # Ligeiramente abaixo para long
+                                else:
+                                    order_price = current_price * 1.005  # Ligeiramente acima para short
+                                
+                                wallet_dex.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})
+                                emergency_closed = True
+                                _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
+                                _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
+                            except Exception as e:
+                                _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Erro fechando por PnL - {e}", level="WARN")
+                        else:
+                            _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ {wallet_config.name} PNL OK: {unrealized_pnl:.4f} > {UNREALIZED_PNL_HARD_STOP}", level="DEBUG")
+                        
+                        # Se não fechou por PnL, verificar ROI
+                        if not emergency_closed and roi_pct <= ROI_HARD_STOP:
+                            _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 {wallet_config.name} ROI: {roi_pct:.4f} <= {ROI_HARD_STOP} = True", level="ERROR")
+                            try:
+                                qty = abs(contracts)
+                                side_norm = strategy._norm_side(side)
+                                exit_side = "sell" if side_norm in ("buy", "long") else "buy"
+                                
+                                # Buscar preço atual para ordem market
+                                ticker = wallet_dex.fetch_ticker(asset.hl_symbol)
+                                current_price = float(ticker.get("last", 0) or 0)
+                                if current_price <= 0:
+                                    continue
+                                    
+                                # Ajustar preço para garantir execução
+                                if exit_side == "sell":
+                                    order_price = current_price * 0.995
+                                else:
+                                    order_price = current_price * 1.005
+                                
+                                wallet_dex.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})
+                                emergency_closed = True
+                                _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
+                                _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
+                            except Exception as e:
+                                _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Erro fechando por ROI - {e}", level="WARN")
+                        else:
+                            if not emergency_closed:
+                                _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ {wallet_config.name} ROI OK: {roi_pct:.4f} > {ROI_HARD_STOP}", level="DEBUG")
+                                
                     except Exception as e:
-                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por PnL - {e}", level="WARN")
-                else:
-                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ PNL OK: {unrealized_pnl:.4f} > {UNREALIZED_PNL_HARD_STOP}", level="DEBUG")
+                        _log_global("FAST_SAFETY_V4", f"Erro no safety check {asset.name} ({wallet_config.name}): {type(e).__name__}: {e}", level="WARN")
                 
-                # Se não fechou por PnL, verificar ROI
-                if not emergency_closed and roi_pct <= ROI_HARD_STOP:
-                    _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 TESTE ROI: {roi_pct:.4f} <= {ROI_HARD_STOP} = True", level="ERROR")
-                    try:
-                        qty = abs(contracts)
-                        side_norm = strategy._norm_side(side)
-                        exit_side = "sell" if side_norm in ("buy", "long") else "buy"
-                        
-                        # Buscar preço atual para ordem market
-                        ticker = dex_in.fetch_ticker(asset.hl_symbol)
-                        current_price = float(ticker.get("last", 0) or 0)
-                        if current_price <= 0:
-                            continue
-                            
-                        # Ajustar preço para garantir execução
-                        if exit_side == "sell":
-                            order_price = current_price * 0.995
-                        else:
-                            order_price = current_price * 1.005
-                        
-                        dex_in.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Carteira mãe
-                        emergency_closed = True
-                        _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
-                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
-                    except Exception as e:
-                        _log_global("FAST_SAFETY_V4", f"{asset.name}: Erro fechando por ROI - {e}", level="WARN")
+                # Log resumo das posições abertas para esta carteira
+                if open_positions:
+                    _log_global("FAST_SAFETY_V4", f"{wallet_config.name}: Posições monitoradas: {' | '.join(open_positions)}", level="INFO")
                 else:
-                    if not emergency_closed:
-                        _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ ROI OK: {roi_pct:.4f} > {ROI_HARD_STOP}", level="DEBUG")
+                    _log_global("FAST_SAFETY_V4", f"{wallet_config.name}: Nenhuma posição aberta", level="DEBUG")
                     
             except Exception as e:
-                _log_global("FAST_SAFETY_V4", f"Erro no safety check {asset.name}: {type(e).__name__}: {e}", level="WARN")
-        
-        # Log resumo das posições abertas
-        if open_positions:
-            _log_global("FAST_SAFETY_V4", f"Posições monitoradas: {' | '.join(open_positions)}", level="INFO")
-        else:
-            _log_global("FAST_SAFETY_V4", "Nenhuma posição aberta para monitorar", level="DEBUG")
+                _log_global("FAST_SAFETY_V4", f"Erro geral na carteira {wallet_config.name}: {type(e).__name__}: {e}", level="ERROR")
 
     def executar_estrategia(
         df_in: pd.DataFrame,
@@ -6764,7 +6905,14 @@ if __name__ == "__main__":
         iter_count = 0
         last_full_analysis = 0
         
-        _log_global("ENGINE", f"🚀 Iniciando ENGINE OTIMIZADO V4: FAST_SAFETY={fast_sleep}s | FULL_ANALYSIS={slow_sleep}s")
+        _log_global("ENGINE", f"🚀 Iniciando ENGINE DUAL WALLET V4: FAST_SAFETY={fast_sleep}s | FULL_ANALYSIS={slow_sleep}s")
+        
+        # Log configurações das carteiras
+        _log_global("ENGINE", "💰 CONFIGURAÇÕES DAS CARTEIRAS:")
+        for wallet_config in WALLET_CONFIGS:
+            _log_global("ENGINE", f"  • {wallet_config.name}: ${wallet_config.usd_per_trade}/trade | {wallet_config.wallet_address[:10]}...")
+        
+        _log_global("ENGINE", f"📊 ASSETS ATIVOS: {len(ASSET_SETUPS)} ativos configurados")
 
         while True:
             iter_count += 1
@@ -6774,7 +6922,7 @@ if __name__ == "__main__":
                 live_flag = os.getenv("LIVE_TRADING", "0") in ("1", "true", "True")
                 # Heartbeat menos frequente
                 if iter_count % 12 == 1:  # A cada ~1min considerando que cada ativo demora ~5s
-                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} per_asset_v4=True")
+                    _log_global("HEARTBEAT", f"iter={iter_count} live={int(live_flag)} dual_wallet=True per_asset_v4=True")
             except Exception:
                 pass
 
@@ -6858,7 +7006,7 @@ if __name__ == "__main__":
                         _log_global("ASSET", f"DataFrame vazio para {asset.name}; pulando.", level="WARN")
                         continue
 
-                    # Inicialização do asset (se necessário)
+                    # Inicialização do asset para AMBAS as carteiras (se necessário)
                     state = asset_state.get(asset.name)
                     if state is None:
                         cfg = GradientConfig()
@@ -6866,20 +7014,43 @@ if __name__ == "__main__":
                         cfg.STOP_LOSS_CAPITAL_PCT = asset.stop_pct
                         cfg.TAKE_PROFIT_CAPITAL_PCT = asset.take_pct
                         safe_suffix = asset.name.lower().replace("-", "_").replace("/", "_")
-                        csv_path = f"trade_log_{safe_suffix}.csv"
-                        xlsx_path = f"trade_log_{safe_suffix}.xlsx"
-                        cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
-                        logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
-                        strategy = EMAGradientStrategy(
-                            dex=dex_in,
-                            symbol=asset.hl_symbol,
-                            cfg=cfg,
-                            logger=logger,
-                            debug=True,
-                        )
-                        asset_state[asset.name] = {"strategy": strategy, "logger": logger}
+                        
+                        # Criar estratégias para cada carteira
+                        strategies = {}
+                        loggers = {}
+                        
+                        for wallet_config in WALLET_CONFIGS:
+                            # Obter instância DEX específica da carteira
+                            wallet_dex = _init_dex_if_needed(wallet_config)
+                            
+                            # Paths únicos para cada carteira
+                            csv_path = f"trade_log_{safe_suffix}_{wallet_config.name.lower()}.csv"
+                            xlsx_path = f"trade_log_{safe_suffix}_{wallet_config.name.lower()}.xlsx"
+                            
+                            cols = df_asset.columns if isinstance(df_asset, pd.DataFrame) else default_cols
+                            logger = TradeLogger(cols, csv_path=csv_path, xlsx_path_dbfs=xlsx_path)
+                            
+                            strategy = EMAGradientStrategy(
+                                dex=wallet_dex,
+                                symbol=asset.hl_symbol,
+                                cfg=cfg,
+                                logger=logger,
+                                debug=True,
+                                wallet_config=wallet_config
+                            )
+                            
+                            strategies[wallet_config.name] = strategy
+                            loggers[wallet_config.name] = logger
+                            
+                        asset_state[asset.name] = {
+                            "strategies": strategies,
+                            "loggers": loggers,
+                            "strategy": strategies[WALLET_CONFIGS[0].name],  # Compatibility
+                            "logger": loggers[WALLET_CONFIGS[0].name]        # Compatibility
+                        }
                     
-                    strategy: EMAGradientStrategy = asset_state[asset.name]["strategy"]
+                    # Executar análise para TODAS as carteiras
+                    strategies = asset_state[asset.name]["strategies"]
 
                     # USD por trade
                     usd_asset = usd_to_spend
@@ -6894,17 +7065,21 @@ if __name__ == "__main__":
                     except Exception:
                         pass
 
-                    # Executar análise técnica completa
-                    try:
-                        strategy.step(df_asset, usd_to_spend=usd_asset, rsi_df_hourly=df_asset_hour)
-                        price_seen = getattr(strategy, "_last_price_snapshot", None)
-                        if price_seen is not None and math.isfinite(price_seen):
-                            try:
-                                _log_global("ASSET", f"{asset.name}: Preço atual: {price_seen:.6f}", level="INFO")
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        _log_global("ASSET", f"Erro na análise completa {asset.name}: {type(e).__name__}: {e}", level="ERROR")
+                    # Executar análise técnica completa para TODAS as carteiras
+                    for wallet_name, strategy in strategies.items():
+                        try:
+                            _log_global("ASSET", f"Analisando {asset.name} para {wallet_name}...")
+                            # Cada carteira usa seu próprio valor USD configurado (step vai usar wallet_config.usd_per_trade)
+                            strategy.step(df_asset, usd_to_spend=None, rsi_df_hourly=df_asset_hour)
+                            price_seen = getattr(strategy, "_last_price_snapshot", None)
+                            if price_seen is not None and math.isfinite(price_seen):
+                                try:
+                                    wallet_usd = strategy.wallet_config.usd_per_trade
+                                    _log_global("ASSET", f"{asset.name} ({wallet_name}): Preço ${price_seen:.6f} | USD/trade: ${wallet_usd}", level="INFO")
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            _log_global("ASSET", f"Erro na análise {asset.name} ({wallet_name}): {type(e).__name__}: {e}", level="ERROR")
                     
                     # 🚀 OTIMIZAÇÃO: APENAS UM DELAY MÍNIMO PARA ATIVOS PRIORITÁRIOS
                     if is_priority:
@@ -6917,11 +7092,11 @@ if __name__ == "__main__":
                 _log_global("ENGINE", "🛡️ Executando safety checks em batch...")
                 batch_safety_start = _time.time()
                 
-                # Fast safety check para todos os assets
-                fast_safety_check_v4(dex_in, asset_state)
+                # Fast safety check para todos os assets em todas as carteiras
+                fast_safety_check_v4(asset_state)
                 
                 # Trailing stop check para todas as posições (DESABILITADO)
-                # check_all_trailing_stops_v4(dex_in, asset_state)
+                # check_all_trailing_stops_v4(asset_state)
                 
                 # Limpar cache expirado
                 DATA_CACHE.clear_expired()
