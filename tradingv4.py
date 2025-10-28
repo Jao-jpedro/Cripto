@@ -3216,16 +3216,33 @@ def check_all_wallet_balances():
     for wallet_config in WALLET_CONFIGS:
         try:
             dex_instance = _init_dex_if_needed(wallet_config)
-            balance = dex_instance.fetch_balance()
             
-            usdc_free = balance.get("USDC", {}).get("free", 0.0)
-            usdc_used = balance.get("USDC", {}).get("used", 0.0)
-            usdc_total = balance.get("USDC", {}).get("total", 0.0)
+            # Para CARTEIRA_RAFA com vault, verificar saldo da vault address
+            if wallet_config.vault_address:
+                # Usar a API da Hyperliquid para verificar saldo da vault
+                vault_value = _hl_get_account_value(wallet_config.vault_address)
+                if vault_value > 0:
+                    usdc_total = vault_value
+                    usdc_free = vault_value  # Assumir que todo valor na vault está livre
+                    usdc_used = 0.0
+                    wallet_info = f"💰 {wallet_config.name} (Vault): ${usdc_total:.2f} USDC | Trade: ${wallet_config.usd_per_trade}/op"
+                else:
+                    # Fallback para fetch_balance se API da vault falhar
+                    balance = dex_instance.fetch_balance()
+                    usdc_free = balance.get("USDC", {}).get("free", 0.0)
+                    usdc_used = balance.get("USDC", {}).get("used", 0.0)
+                    usdc_total = balance.get("USDC", {}).get("total", 0.0)
+                    wallet_info = f"💰 {wallet_config.name}: ${usdc_total:.2f} USDC (Livre: ${usdc_free:.2f} | Usado: ${usdc_used:.2f}) | Trade: ${wallet_config.usd_per_trade}/op"
+            else:
+                # Carteira principal - usar fetch_balance normal
+                balance = dex_instance.fetch_balance()
+                usdc_free = balance.get("USDC", {}).get("free", 0.0)
+                usdc_used = balance.get("USDC", {}).get("used", 0.0)
+                usdc_total = balance.get("USDC", {}).get("total", 0.0)
+                wallet_info = f"💰 {wallet_config.name}: ${usdc_total:.2f} USDC (Livre: ${usdc_free:.2f} | Usado: ${usdc_used:.2f}) | Trade: ${wallet_config.usd_per_trade}/op"
             
-            wallet_info = f"💰 {wallet_config.name}: ${usdc_total:.2f} USDC (Livre: ${usdc_free:.2f} | Usado: ${usdc_used:.2f}) | Trade: ${wallet_config.usd_per_trade}/op"
             balances_info.append(wallet_info)
             _log_global("BALANCE", wallet_info)
-            
             total_usdc += usdc_total
             
         except Exception as e:
@@ -3235,17 +3252,7 @@ def check_all_wallet_balances():
     
     _log_global("BALANCE", f"💎 TOTAL GERAL: ${total_usdc:.2f} USDC em todas as carteiras")
     
-    # Enviar resumo para Discord
-    discord_msg = "🏦 **RESUMO DE SALDOS - SISTEMA DUAL WALLET**\n\n"
-    for info in balances_info:
-        discord_msg += f"{info}\n"
-    discord_msg += f"\n💎 **TOTAL GERAL: ${total_usdc:.2f} USDC**"
-    
-    try:
-        _notify_discord(discord_msg)
-    except Exception:
-        pass
-    
+    # Não enviar mais para Discord automaticamente - apenas em operações finalizadas
     return total_usdc
             
 def _init_system_if_needed_legacy():
@@ -3952,7 +3959,43 @@ class EMAGradientStrategy:
         if note:
             parts.append(f"• Obs: {note}")
 
-        # Dados opcionais da Hyperliquid (Resultado/Valor da conta)
+        # Se for fechamento (close ou close_external), incluir saldos das carteiras
+        if kind in ("close", "close_external"):
+            try:
+                parts.append("\n🏦 **SALDOS ATUALIZADOS:**")
+                total_balance = 0.0
+                
+                for wallet_config in WALLET_CONFIGS:
+                    try:
+                        dex_instance = _init_dex_if_needed(wallet_config)
+                        
+                        # Para CARTEIRA_RAFA com vault, verificar saldo da vault address
+                        if wallet_config.vault_address:
+                            vault_value = _hl_get_account_value(wallet_config.vault_address)
+                            if vault_value > 0:
+                                usdc_total = vault_value
+                                wallet_info = f"💰 {wallet_config.name} (Vault): ${usdc_total:.2f} USDC"
+                            else:
+                                balance = dex_instance.fetch_balance()
+                                usdc_total = balance.get("USDC", {}).get("total", 0.0)
+                                wallet_info = f"💰 {wallet_config.name}: ${usdc_total:.2f} USDC"
+                        else:
+                            balance = dex_instance.fetch_balance()
+                            usdc_total = balance.get("USDC", {}).get("total", 0.0)
+                            wallet_info = f"💰 {wallet_config.name}: ${usdc_total:.2f} USDC"
+                        
+                        parts.append(wallet_info)
+                        total_balance += usdc_total
+                        
+                    except Exception as e:
+                        parts.append(f"❌ {wallet_config.name}: Erro - {e}")
+                
+                parts.append(f"💎 **TOTAL: ${total_balance:.2f} USDC**")
+                
+            except Exception as e:
+                parts.append(f"⚠️ Erro ao verificar saldos: {e}")
+
+        # Dados opcionais da Hyperliquid (Resultado/Valor da conta) - só para compatibilidade
         if include_hl:
             wallet = self._wallet_address()
             fills = _hl_get_latest_fill(wallet)
@@ -7277,21 +7320,33 @@ if __name__ == "__main__":
                     except Exception:
                         pass
 
-                    # Executar análise técnica completa para TODAS as carteiras
-                    for wallet_name, strategy in strategies.items():
-                        try:
-                            _log_global("ASSET", f"Analisando {asset.name} para {wallet_name}...")
-                            # Cada carteira usa seu próprio valor USD configurado (step vai usar wallet_config.usd_per_trade)
-                            strategy.step(df_asset, usd_to_spend=None, rsi_df_hourly=df_asset_hour)
-                            price_seen = getattr(strategy, "_last_price_snapshot", None)
-                            if price_seen is not None and math.isfinite(price_seen):
+                    # Executar análise técnica APENAS na estratégia principal (evitar duplicatas)
+                    master_strategy = strategies[WALLET_CONFIGS[0].name]  # Usar carteira principal como mestre
+                    
+                    try:
+                        _log_global("ASSET", f"Analisando {asset.name} (estratégia mestre)...")
+                        # A estratégia mestre vai usar _abrir_posicao_dual_wallet() que já cria em ambas as carteiras
+                        master_strategy.step(df_asset, usd_to_spend=None, rsi_df_hourly=df_asset_hour)
+                        
+                        price_seen = getattr(master_strategy, "_last_price_snapshot", None)
+                        if price_seen is not None and math.isfinite(price_seen):
+                            master_usd = master_strategy.wallet_config.usd_per_trade
+                            _log_global("ASSET", f"{asset.name}: Preço ${price_seen:.6f} | Mestre: ${master_usd}/trade", level="INFO")
+                            
+                        # Sincronizar estado das outras estratégias com a mestre (para safety checks)
+                        for wallet_name, strategy in strategies.items():
+                            if wallet_name != WALLET_CONFIGS[0].name:  # Pular a estratégia mestre
                                 try:
-                                    wallet_usd = strategy.wallet_config.usd_per_trade
-                                    _log_global("ASSET", f"{asset.name} ({wallet_name}): Preço ${price_seen:.6f} | USD/trade: ${wallet_usd}", level="INFO")
-                                except Exception:
-                                    pass
-                        except Exception as e:
-                            _log_global("ASSET", f"Erro na análise {asset.name} ({wallet_name}): {type(e).__name__}: {e}", level="ERROR")
+                                    # Sincronizar estados críticos para safety checks
+                                    strategy._last_price_snapshot = master_strategy._last_price_snapshot
+                                    strategy._last_pos_side = master_strategy._last_pos_side
+                                    strategy._position_was_active = master_strategy._position_was_active
+                                    strategy._learner_context = master_strategy._learner_context
+                                except Exception as sync_e:
+                                    _log_global("ASSET", f"Erro sincronizando {wallet_name}: {sync_e}", level="WARN")
+                                    
+                    except Exception as e:
+                        _log_global("ASSET", f"Erro na análise {asset.name} (mestre): {type(e).__name__}: {e}", level="ERROR")
                     
                     # 🚀 OTIMIZAÇÃO: APENAS UM DELAY MÍNIMO PARA ATIVOS PRIORITÁRIOS
                     if is_priority:
