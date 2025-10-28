@@ -17,6 +17,7 @@ print("===============================================================", flush=T
 
 # Constantes para stop loss
 from typing import Optional, Dict, Any, List
+from dataclasses import dataclass
 import time as _time
 import threading
 
@@ -3450,7 +3451,6 @@ def _hl_get_account_value(wallet: str) -> float:
 # =========================
 # 🧠 ESTRATÉGIA (HL + stop inicial 40% da margem + TP/SL fixos + logger com fallback + DEBUG)
 # =========================
-from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime, timezone
 now = datetime.now(timezone.utc)
