@@ -100,7 +100,7 @@ def _is_live_trading():
 ABS_LOSS_HARD_STOP = 0.30  # perda máxima absoluta em USDC (reduzido de 40% para 30%)
 LIQUIDATION_BUFFER_PCT = 0.30  # margem de segurança sobre liquidação (reduzido de 40% para 30%)
 ROI_HARD_STOP = -30.0  # ROI mínimo aceitável (reduzido de -80% para -30%)
-UNREALIZED_PNL_HARD_STOP = -50.00  # trava dura emergencial: perda de $50.00 do capital real (DESABILITADO TEMP)
+UNREALIZED_PNL_HARD_STOP = -999999.00  # DESABILITADO - usar apenas ROI_HARD_STOP
 
 # High Water Mark global para trailing stops verdadeiros
 # Formato: {symbol: roi_maximo_atingido}
@@ -6786,11 +6786,9 @@ if __name__ == "__main__":
                         except Exception as e:
                             _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Erro calculando ROI - {e}", level="WARN")
                         
-                        # Adicionar à lista de posições abertas com status
+                        # Adicionar à lista de posições abertas com status (apenas ROI)
                         status = "OK"
-                        if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                            status = f"⚠️ PnL CRÍTICO: ${unrealized_pnl:.3f} (será fechado!)"
-                        elif roi_pct <= ROI_HARD_STOP:
+                        if roi_pct <= ROI_HARD_STOP:
                             status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}% (será fechado!)"
                         elif unrealized_pnl < -0.01:  # Alertar perdas > -1 cent
                             status = f"📉 PnL: ${unrealized_pnl:.3f} ROI: {roi_pct:.1f}%"
@@ -6799,37 +6797,8 @@ if __name__ == "__main__":
                         
                         open_positions.append(f"{asset.name} {side.upper()}: {status}")
                         
-                        # PRIORITÁRIO: Verificar unrealized PnL primeiro
-                        if unrealized_pnl <= UNREALIZED_PNL_HARD_STOP:
-                            _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 {wallet_config.name} PNL: {unrealized_pnl:.4f} <= {UNREALIZED_PNL_HARD_STOP} = True", level="ERROR")
-                            try:
-                                qty = abs(contracts)
-                                side_norm = strategy._norm_side(side)
-                                exit_side = "sell" if side_norm in ("buy", "long") else "buy"
-                                
-                                # Buscar preço atual para ordem market
-                                ticker = wallet_dex.fetch_ticker(asset.hl_symbol)
-                                current_price = float(ticker.get("last", 0) or 0)
-                                if current_price <= 0:
-                                    continue
-                                    
-                                # Ajustar preço para garantir execução
-                                if exit_side == "sell":
-                                    order_price = current_price * 0.995  # Ligeiramente abaixo para long
-                                else:
-                                    order_price = current_price * 1.005  # Ligeiramente acima para short
-                                
-                                wallet_dex.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})
-                                emergency_closed = True
-                                _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
-                                _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Emergência PnL ${unrealized_pnl:.4f} - posição fechada", level="ERROR")
-                            except Exception as e:
-                                _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Erro fechando por PnL - {e}", level="WARN")
-                        else:
-                            _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ {wallet_config.name} PNL OK: {unrealized_pnl:.4f} > {UNREALIZED_PNL_HARD_STOP}", level="DEBUG")
-                        
-                        # Se não fechou por PnL, verificar ROI
-                        if not emergency_closed and roi_pct <= ROI_HARD_STOP:
+                        # VERIFICAR APENAS ROI - PnL em dólar desabilitado
+                        if roi_pct <= ROI_HARD_STOP:
                             _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 {wallet_config.name} ROI: {roi_pct:.4f} <= {ROI_HARD_STOP} = True", level="ERROR")
                             try:
                                 qty = abs(contracts)
@@ -6855,8 +6824,7 @@ if __name__ == "__main__":
                             except Exception as e:
                                 _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Erro fechando por ROI - {e}", level="WARN")
                         else:
-                            if not emergency_closed:
-                                _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ {wallet_config.name} ROI OK: {roi_pct:.4f} > {ROI_HARD_STOP}", level="DEBUG")
+                            _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ {wallet_config.name} ROI OK: {roi_pct:.4f} > {ROI_HARD_STOP}", level="DEBUG")
                                 
                     except Exception as e:
                         _log_global("FAST_SAFETY_V4", f"Erro no safety check {asset.name} ({wallet_config.name}): {type(e).__name__}: {e}", level="WARN")
