@@ -3205,6 +3205,48 @@ def _init_system_if_needed():
                         _log_global("DEX", f"{wallet_config.name} Falha ao buscar saldo: {type(e).__name__}: {e}", level="WARN")
         except Exception as e:
             _log_global("SYSTEM", f"Erro inicializando {wallet_config.name}: {e}", level="ERROR")
+
+def check_all_wallet_balances():
+    """Verifica e exibe saldos de todas as carteiras configuradas"""
+    _log_global("BALANCE", "🔍 Verificando saldos de todas as carteiras...")
+    
+    total_usdc = 0.0
+    balances_info = []
+    
+    for wallet_config in WALLET_CONFIGS:
+        try:
+            dex_instance = _init_dex_if_needed(wallet_config)
+            balance = dex_instance.fetch_balance()
+            
+            usdc_free = balance.get("USDC", {}).get("free", 0.0)
+            usdc_used = balance.get("USDC", {}).get("used", 0.0)
+            usdc_total = balance.get("USDC", {}).get("total", 0.0)
+            
+            wallet_info = f"💰 {wallet_config.name}: ${usdc_total:.2f} USDC (Livre: ${usdc_free:.2f} | Usado: ${usdc_used:.2f}) | Trade: ${wallet_config.usd_per_trade}/op"
+            balances_info.append(wallet_info)
+            _log_global("BALANCE", wallet_info)
+            
+            total_usdc += usdc_total
+            
+        except Exception as e:
+            error_info = f"❌ {wallet_config.name}: Erro ao verificar saldo - {e}"
+            balances_info.append(error_info)
+            _log_global("BALANCE", error_info, level="ERROR")
+    
+    _log_global("BALANCE", f"💎 TOTAL GERAL: ${total_usdc:.2f} USDC em todas as carteiras")
+    
+    # Enviar resumo para Discord
+    discord_msg = "🏦 **RESUMO DE SALDOS - SISTEMA DUAL WALLET**\n\n"
+    for info in balances_info:
+        discord_msg += f"{info}\n"
+    discord_msg += f"\n💎 **TOTAL GERAL: ${total_usdc:.2f} USDC**"
+    
+    try:
+        _notify_discord(discord_msg)
+    except Exception:
+        pass
+    
+    return total_usdc
             
 def _init_system_if_needed_legacy():
     """Inicializa o sistema apenas quando necessário (versão legacy)"""
@@ -4871,6 +4913,201 @@ class EMAGradientStrategy:
             self._log(f"Erro verificando qualidade do padrão: {e} - permitindo entrada", level="WARN")
             return True, 0.0, 0
 
+    def _abrir_posicao_dual_wallet(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
+        """Abre posição em TODAS as carteiras configuradas simultaneamente"""
+        if self._posicao_aberta():
+            self._log("Entrada ignorada: posição já aberta.", level="DEBUG"); return None, None
+        if self._tem_ordem_de_entrada_pendente():
+            self._log("Entrada ignorada: ordem pendente detectada.", level="WARN"); return None, None
+        if not self._anti_spam_ok("open"):
+            self._log("Entrada bloqueada pelo anti-spam.", level="DEBUG"); return None, None
+        
+        # Verificação de segurança pelo sistema de aprendizado (apenas alerta)
+        is_safe, p_stop, n_samples = self._entrada_segura_pelo_learner(side, df_for_log)
+        
+        # Configurar leverage
+        try:
+            lev_int = int(self.cfg.LEVERAGE)
+        except Exception:
+            lev_int = None
+        
+        price = self._preco_atual()
+        
+        # Ao abrir nova posição, limpa cooldown temporal
+        self._cooldown_until = None
+        
+        self._log(f"🚀 ABRINDO POSIÇÃO DUAL WALLET | {side.upper()} @ ${price:.4f}", level="INFO")
+        
+        # Criar ordens em TODAS as carteiras
+        orders_created = []
+        total_notional = 0.0
+        
+        for wallet_config in WALLET_CONFIGS:
+            try:
+                # Obter DEX específico da carteira
+                wallet_dex = _init_dex_if_needed(wallet_config)
+                
+                # Configurar leverage para esta carteira
+                if lev_int and lev_int > 0:
+                    try:
+                        wallet_dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})
+                        self._log(f"[{wallet_config.name}] Leverage {lev_int}x configurada", level="DEBUG")
+                    except Exception as e:
+                        self._log(f"[{wallet_config.name}] Erro leverage: {e}", level="WARN")
+                
+                # Calcular quantidade específica para esta carteira
+                wallet_usd = wallet_config.usd_per_trade
+                wallet_usd = max(wallet_usd, self.cfg.MIN_ORDER_USD / self.cfg.LEVERAGE)
+                wallet_amount = self._round_amount((wallet_usd * self.cfg.LEVERAGE) / price)
+                wallet_notional = wallet_usd * self.cfg.LEVERAGE
+                
+                self._log(f"[{wallet_config.name}] ${wallet_usd}/trade → {wallet_amount:.6f} contratos (${wallet_notional:.2f} notional)", level="INFO")
+                
+                # Criar ordem nesta carteira
+                ordem_carteira = wallet_dex.create_order(self.symbol, "market", side, wallet_amount, price)
+                self._log(f"[{wallet_config.name}] Ordem criada: {ordem_carteira.get('id', 'N/A')}", level="DEBUG")
+                
+                orders_created.append({
+                    "wallet": wallet_config.name,
+                    "order": ordem_carteira,
+                    "amount": wallet_amount,
+                    "notional": wallet_notional,
+                    "dex": wallet_dex
+                })
+                
+                total_notional += wallet_notional
+                
+            except Exception as e:
+                self._log(f"[{wallet_config.name}] ERRO ao criar ordem: {e}", level="ERROR")
+        
+        if not orders_created:
+            self._log("❌ FALHA CRÍTICA: Nenhuma ordem criada em qualquer carteira!", level="ERROR")
+            return None, None
+        
+        self._log(f"✅ {len(orders_created)} ordens criadas | Total: ${total_notional:.2f} notional", level="INFO")
+        
+        # INVALIDAR CACHE após criar entradas
+        cache_keys_to_clear = [
+            f"fetch_positions_{self.symbol}",
+            f"fetch_open_orders_{self.symbol}",
+            f"fetch_ticker_{self.symbol}"
+        ]
+        for key in cache_keys_to_clear:
+            if key in _API_CACHE:
+                del _API_CACHE[key]
+        
+        # Atualizar estado
+        self._last_pos_side = self._norm_side(side)
+        self._log(f"[DEBUG_ENTRY] _last_pos_side atualizado para: {self._last_pos_side}", level="DEBUG")
+        
+        # Pegar primeira ordem para compatibilidade
+        primary_order = orders_created[0]["order"]
+        primary_amount = orders_created[0]["amount"]
+        
+        # Extrair preço de execução
+        fill_price = price
+        try:
+            if isinstance(primary_order, dict):
+                if primary_order.get("average"):
+                    fill_price = float(primary_order["average"])
+                info_resp = primary_order.get("info") or {}
+                if isinstance(info_resp, dict) and info_resp.get("filled", {}).get("avgPx"):
+                    fill_price = float(info_resp["filled"]["avgPx"])
+        except Exception:
+            pass
+        
+        # Log da entrada
+        self._safe_log(
+            "entrada", df_for_log,
+            tipo=("long" if self._norm_side(side) == "buy" else "short"),
+            exec_price=fill_price,
+            exec_amount=primary_amount,
+            order_id=str(primary_order.get("id")) if primary_order.get("id") else None
+        )
+        
+        # Guardar dados da barra
+        try:
+            self._entry_bar_idx = (len(df_for_log) - 1) if isinstance(df_for_log, pd.DataFrame) else None
+            if isinstance(df_for_log, pd.DataFrame) and "data" in df_for_log.columns and len(df_for_log) > 0:
+                self._entry_bar_time = pd.to_datetime(df_for_log["data"].iloc[-1])
+        except Exception:
+            self._entry_bar_idx = None; self._entry_bar_time = None
+        
+        # Notificação
+        try:
+            note = f"Dual wallet: {len(orders_created)} carteiras | Total: ${total_notional:.2f}"
+            self._notify_trade(
+                kind="open",
+                side=self._norm_side(side),
+                price=fill_price,
+                amount=sum(o["amount"] for o in orders_created),
+                note=note,
+                include_hl=False,
+            )
+        except Exception:
+            pass
+        
+        # Sistema de aprendizado (usando dados da carteira principal)
+        try:
+            learner = get_learner()
+            learner_context = learner.record_entry(
+                symbol=self.symbol,
+                side=self._norm_side(side),
+                price=fill_price,
+                df=df_for_log
+            )
+            self._learner_context = learner_context
+        except Exception as e:
+            self._log(f"Erro no sistema de aprendizado (entrada): {e}", level="WARN")
+            self._learner_context = None
+        
+        # Criar proteções para TODAS as carteiras
+        norm_side = self._norm_side(side)
+        sl_price, tp_price = self._protection_prices(fill_price, norm_side)
+        manage_take = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT or 0.0) > 0.0
+        sl_side = "sell" if norm_side == "buy" else "buy"
+        tp_side = sl_side
+        
+        self._log(f"🛡️ Criando proteções em {len(orders_created)} carteiras | SL: {sl_price:.6f} | TP: {tp_price:.6f if manage_take else 'disabled'}", level="INFO")
+        
+        # Criar stops para cada carteira
+        for order_info in orders_created:
+            try:
+                wallet_name = order_info["wallet"]
+                wallet_dex = order_info["dex"]
+                wallet_amount = order_info["amount"]
+                
+                # Stop loss
+                stop_order = wallet_dex.create_order(self.symbol, "stop_market", sl_side, wallet_amount, sl_price, {"reduceOnly": True})
+                self._log(f"[{wallet_name}] Stop criado: {stop_order.get('id', 'N/A')}", level="DEBUG")
+                
+                # Take profit (se habilitado)
+                if manage_take and tp_price is not None:
+                    tp_order = wallet_dex.create_order(self.symbol, "limit", tp_side, wallet_amount, tp_price, {"reduceOnly": True})
+                    self._log(f"[{wallet_name}] TP criado: {tp_order.get('id', 'N/A')}", level="DEBUG")
+                    
+            except Exception as e:
+                self._log(f"[{order_info['wallet']}] Erro criando proteções: {e}", level="ERROR")
+        
+        # Log das proteções
+        self._safe_log(
+            "stop_inicial", df_for_log,
+            tipo=("long" if norm_side == "buy" else "short"),
+            exec_price=sl_price,
+            exec_amount=sum(o["amount"] for o in orders_created)
+        )
+        
+        if manage_take and tp_price is not None:
+            self._safe_log(
+                "take_profit_inicial", df_for_log,
+                tipo=("long" if norm_side == "buy" else "short"),
+                exec_price=tp_price,
+                exec_amount=sum(o["amount"] for o in orders_created)
+            )
+        
+        # Retornar ordem principal para compatibilidade
+        return primary_order, None
+
     def _abrir_posicao_com_stop(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
         if self._posicao_aberta():
             self._log("Entrada ignorada: posição já aberta.", level="DEBUG"); return None, None
@@ -5788,7 +6025,7 @@ class EMAGradientStrategy:
 
                     if can_long:
                         self._log("⚠️ SISTEMA INVERSO: Confirmação pós-cooldown LONG → Executando SHORT", level="INFO")
-                        self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._abrir_posicao_dual_wallet("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -5803,7 +6040,7 @@ class EMAGradientStrategy:
                     can_short = base_short or force_short
                     if can_short:
                         self._log("⚠️ SISTEMA INVERSO: Confirmação pós-cooldown SHORT → Executando LONG", level="INFO")
-                        self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                        self._abrir_posicao_dual_wallet("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                         pos_after = self._posicao_aberta()
                         self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                         self._pending_after_cd = None
@@ -5830,13 +6067,13 @@ class EMAGradientStrategy:
             can_short = base_short or force_short
             if can_long:
                 self._log("⚠️ SISTEMA INVERSO: Entrada LONG detectada → Executando SHORT", level="INFO")
-                self._abrir_posicao_com_stop("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._abrir_posicao_dual_wallet("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
             if can_short:
                 self._log("⚠️ SISTEMA INVERSO: Entrada SHORT detectada → Executando LONG", level="INFO")
-                self._abrir_posicao_com_stop("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
+                self._abrir_posicao_dual_wallet("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
                 pos_after = self._posicao_aberta()
                 self._last_pos_side = self._norm_side(pos_after.get("side")) if pos_after else None
                 return
@@ -6907,6 +7144,13 @@ if __name__ == "__main__":
                 
                 # VERIFICAR E ENVIAR NOTIFICAÇÕES DISCORD A CADA 10 TRADES
                 TRADING_MONITOR.check_and_notify_milestones()
+                
+                # VERIFICAR SALDOS DE CARTEIRAS A CADA CICLO COMPLETO (a cada 30 min)
+                try:
+                    total_balance = check_all_wallet_balances()
+                    _log_global("BALANCE", f"✅ Verificação de saldos completa: ${total_balance:.2f} USDC total")
+                except Exception as e:
+                    _log_global("BALANCE", f"⚠️ Erro na verificação de saldos: {e}", level="WARN")
 
                 # 🚀 OTIMIZAÇÃO: BUSCAR DADOS EM PARALELO
                 _log_global("ENGINE", "🚀 Iniciando coleta paralela de dados...")
@@ -7093,6 +7337,14 @@ if __name__ == "__main__":
     print("📊 Configuração: TP 10% | SL 40% | ROI Target: 2190%", flush=True)
     print("📅 Monitoramento desde: 03/10/2025 19:00 UTC", flush=True)
     monitor_print_status()
+    
+    # Verificar saldos de todas as carteiras na inicialização
+    try:
+        total_balance = check_all_wallet_balances()
+        print(f"💎 SALDO TOTAL VERIFICADO: ${total_balance:.2f} USDC")
+    except Exception as e:
+        print(f"⚠️ Erro verificando saldos: {e}")
+    
     print("="*80, flush=True)
 
     # Verificar argumentos de linha de comando para relatórios
