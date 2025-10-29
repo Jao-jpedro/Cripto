@@ -5967,11 +5967,25 @@ class EMAGradientStrategy:
                 diff = float(last.ema_short - last.ema_long)
                 # Calcular BREAKOUT_K_ATR atual do momento (distância close-ema7 / atr)
                 current_breakout_k = abs(float(last.valor_fechamento) - float(last.ema_short)) / float(last.atr) if float(last.atr) > 0 else 0.0
+                
+                # Calcular quantidade de trades atual e média dos últimos 30 candles
+                current_trades = float(last.volume) if hasattr(last, 'volume') else 0.0
+                try:
+                    # Pegar os últimos 30 candles para calcular média de trades
+                    last_30_volumes = df["volume_compra"].tail(30) if "volume_compra" in df.columns else df["volume"].tail(30) if "volume" in df.columns else []
+                    avg_trades_30 = float(last_30_volumes.mean()) if len(last_30_volumes) > 0 else 0.0
+                    # Calcular ratio atual/média
+                    trades_ratio = current_trades / avg_trades_30 if avg_trades_30 > 0 else 0.0
+                except Exception:
+                    avg_trades_30 = 0.0
+                    trades_ratio = 0.0
+                
                 self._log(
                     "Trigger snapshot | close={:.6f} ema7={:.6f} ema21={:.6f} atr={:.6f} atr%={:.3f} "
-                    "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | current_k_atr={:.3f}".format(
+                    "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | current_k_atr={:.3f} | trades_now={:.0f} avg_30c={:.0f} ratio={:.2f}x".format(
                         float(last.valor_fechamento), float(last.ema_short), float(last.ema_long), float(last.atr),
-                        float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, current_breakout_k
+                        float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, current_breakout_k,
+                        current_trades, avg_trades_30, trades_ratio
                     ),
                     level="DEBUG",
                 )
