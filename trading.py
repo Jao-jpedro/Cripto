@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 import logging
-from decimal import Decimal
 
 try:
     from dotenv import load_dotenv
@@ -266,31 +265,6 @@ class HyperliquidClient:
         except Exception as e:
             logging.error(f"Erro ao obter posição da subconta {self.subaccount}: {e}")
             return None
-    
-    def cancel_all_subaccount_orders(self, symbol: str) -> bool:
-        """Cancela todas as ordens da SUBCONTA para um símbolo"""
-        if not self.live_trading:
-            logging.info(f"🔶 DEMO CANCEL ALL [SUBCONTA: {self.subaccount}]: {symbol}")
-            return True
-            
-        try:
-            headers = self._get_headers()
-            cancel_data = {
-                "symbol": symbol,
-                "subaccount": self.subaccount
-            }
-            
-            response = requests.delete(
-                f"{self.base_url}/orders",
-                json=cancel_data,
-                headers=headers,
-                timeout=10
-            )
-            
-            return response.status_code == 200
-        except Exception as e:
-            logging.error(f"Erro ao cancelar ordens da subconta {self.subaccount}: {e}")
-            return False
 
 # =============================================================================
 # SISTEMA PRINCIPAL DE TRADING
@@ -773,4 +747,154 @@ class TradingSystem:
                 return
         else:
             if last.ema_short > last.ema_long and last.ema_short_grad_pct > 0.2:
-                self._
+                self._close_position("INVERSÃO TÉCNICA", current_price)
+                return
+        
+        # Estratégia 2: Trailing stop baseado em ATR
+        atr_trailing_multiplier = 1.5
+        trailing_distance = last.atr * atr_trailing_multiplier
+        
+        if side == "buy":
+            new_trailing_stop = current_price - trailing_distance
+            if new_trailing_stop > position['stop_loss'] and current_profit_pct > 10:
+                position['stop_loss'] = new_trailing_stop
+                logging.info(f"🔼 Trailing Stop ajustado: {new_trailing_stop:.6f}")
+        else:
+            new_trailing_stop = current_price + trailing_distance
+            if new_trailing_stop < position['stop_loss'] and current_profit_pct > 10:
+                position['stop_loss'] = new_trailing_stop
+                logging.info(f"🔽 Trailing Stop ajustado: {new_trailing_stop:.6f}")
+
+    def run_strategy(self):
+        """Loop principal da estratégia"""
+        try:
+            # Obter dados históricos
+            df = self.get_historical_data(self.asset.data_symbol, "15m", 260)
+            
+            if df.empty:
+                logging.warning(f"Dados vazios para {self.asset.name}")
+                return
+                
+            # Calcular indicadores
+            df = self.compute_indicators(df)
+            
+            if len(df) < self.config.EMA_LONG_SPAN:
+                return
+                
+            # Verificar posição atual
+            current_position = self._get_position()
+            
+            # Lógica de saída (se em posição)
+            if current_position:
+                self._check_exit_conditions(df)
+                return
+                
+            # Verificar cooldown
+            if self._cooldown_ativo():
+                return
+                
+            # Lógica de entrada
+            if self.check_long_entry(df):
+                self._open_position("buy", df)
+            elif self.check_short_entry(df):
+                self._open_position("sell", df)
+                
+        except Exception as e:
+            logging.error(f"Erro na execução da estratégia para {self.asset.name}: {e}")
+
+# =============================================================================
+# SISTEMA DE GERENCIAMENTO MULTI-ATIVOS
+# =============================================================================
+
+class MultiAssetTradingManager:
+    def __init__(self, config: TradingConfig):
+        self.config = config
+        self.trading_systems = {}
+        self.running = False
+        
+        # Inicializar sistemas para cada ativo
+        for asset in SUPPORTED_ASSETS:
+            self.trading_systems[asset.name] = TradingSystem(config, asset)
+            
+        logging.info(f"Gerenciador multi-ativos inicializado com {len(self.trading_systems)} ativos")
+
+    def start_trading(self):
+        """Inicia o loop de trading para todos os ativos"""
+        self.running = True
+        logging.info("🚀 INICIANDO SISTEMA DE TRADING AUTOMATIZADO")
+        logging.info(f"💰 Valor por operação: ${USD_PER_TRADE}")
+        logging.info(f"🔧 Modo: {'LIVE TRADING' if LIVE_TRADING else 'DEMO/MONITORAMENTO'}")
+        
+        cycle_count = 0
+        while self.running:
+            try:
+                cycle_count += 1
+                if cycle_count % 10 == 0:  # Log a cada 10 ciclos
+                    logging.info(f"🔁 Ciclo de verificação #{cycle_count} - {len(self.trading_systems)} ativos")
+                
+                for asset_name, system in self.trading_systems.items():
+                    system.run_strategy()
+                    
+                # Esperar 15 segundos entre ciclos
+                time.sleep(15)
+                
+            except KeyboardInterrupt:
+                logging.info("Parando sistema por interrupção do usuário...")
+                self.stop_trading()
+            except Exception as e:
+                logging.error(f"Erro no loop principal: {e}")
+                time.sleep(60)  # Esperar 1 minuto em caso de erro
+
+    def stop_trading(self):
+        """Para o sistema de trading"""
+        self.running = False
+        logging.info("Sistema de trading parado")
+
+# =============================================================================
+# EXECUÇÃO PRINCIPAL
+# =============================================================================
+
+def main():
+    """Função principal para executar o sistema"""
+    
+    # Verificar variáveis de ambiente críticas
+    if LIVE_TRADING:
+        required_vars = ['HYPERLIQUID_MAIN_WALLET', 'HYPERLIQUID_SUBACCOUNT', 'HYPERLIQUID_PRIVATE_KEY']
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        
+        if missing_vars:
+            logging.error(f"Variáveis de ambiente ausentes para LIVE TRADING: {missing_vars}")
+            logging.error("Configure as variáveis no Render ou altere LIVE_TRADING para 0")
+            return
+    
+    # Configuração global
+    config = TradingConfig()
+    
+    # Inicializar gerenciador multi-ativos
+    manager = MultiAssetTradingManager(config)
+    
+    try:
+        # Iniciar trading
+        manager.start_trading()
+        
+    except Exception as e:
+        logging.error(f"Erro fatal: {e}")
+    finally:
+        manager.stop_trading()
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🤖 SISTEMA DE TRADING AUTOMATIZADO - TRADINGV4")
+    print("=" * 70)
+    print(f"💰 Valor por operação: ${USD_PER_TRADE}")
+    print(f"🏠 Main Wallet: {HYPERLIQUID_MAIN_WALLET[:8]}...{HYPERLIQUID_MAIN_WALLET[-6:]}" if HYPERLIQUID_MAIN_WALLET else "Não configurado")
+    print(f"📊 Subaccount: {HYPERLIQUID_SUBACCOUNT}" if HYPERLIQUID_SUBACCOUNT else "Não configurado")
+    print(f"🔑 Private Key: {'***CONFIGURADO***' if HYPERLIQUID_PRIVATE_KEY else 'Não configurado'}")
+    print(f"🎯 Modo: {'LIVE TRADING' if LIVE_TRADING else 'DEMO/MONITORAMENTO'}")
+    print(f"🎯 FOCO: OPERAÇÕES NA SUBCONTA: {HYPERLIQUID_SUBACCOUNT}")
+    print(f"⏰ Timeframe: 15 minutos")
+    print(f"📊 Ativos monitorados: {len(SUPPORTED_ASSETS)}")
+    print(f"❄️ Cooldown: {TradingConfig.COOLDOWN_MINUTOS} minutos")
+    print("=" * 70)
+    
+    main()
