@@ -11,3 +11,5 @@ tzdata
 urllib3
 openpyxl
 pytz
+python-dotenv
+websocket-client
