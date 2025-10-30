@@ -806,7 +806,14 @@ class SimpleRatioStrategy:
             self._log(f"✅ POSIÇÃO ABERTA: {side.upper()} {amount:.2f} @ {current_price:.6f}", level="INFO")
             
         except Exception as e:
-            self._log(f"Erro abrindo posição: {e}", level="ERROR")
+            # Verificar se é erro de credenciais ou mercado
+            error_msg = str(e).lower()
+            if any(x in error_msg for x in ['user parameter', 'wallet address', 'authentication', 'credential']):
+                self._log(f"⚙️ Não é possível operar: credenciais não configuradas ({e})", level="INFO")
+            elif 'does not have market symbol' in error_msg:
+                self._log(f"⚙️ Mercado {self.symbol} não disponível na exchange", level="INFO")
+            else:
+                self._log(f"Erro abrindo posição: {e}", level="ERROR")
             
     def _close_position(self, df: pd.DataFrame):
         """Fecha posição atual"""
@@ -934,7 +941,14 @@ class SimpleRatioStrategy:
                 return pos[0]  # Retorna primeira posição
             return None
         except Exception as e:
-            self._log(f"Erro verificando posição: {e}", level="WARN")
+            # Verificar se é erro de autenticação ou credenciais
+            error_msg = str(e).lower()
+            if any(x in error_msg for x in ['user parameter', 'wallet address', 'authentication', 'credential']):
+                # Erro de credenciais - apenas log debug, não é crítico para funcionamento
+                self._log(f"⚙️ Credenciais não configuradas, assumindo sem posições: {e}", level="DEBUG")
+            else:
+                # Outros erros mais sérios
+                self._log(f"Erro verificando posição: {e}", level="WARN")
             return None
 
 # ===== FUNÇÃO PRINCIPAL DE BUILD DE DADOS =====
@@ -982,6 +996,7 @@ def main():
     print("📊 Assets: PUMP/USDT, AVNT/USDT")
     print("💰 Trade size: $3 USD, Leverage: 10x, Stop: 20%")
     print("⚡ Estratégia: Entradas/saídas por inversão de ratio avg_buy/sell")
+    print("🔄 Execução contínua a cada 30 segundos")
     print()
     
     # Configuração
@@ -991,24 +1006,42 @@ def main():
     wallet_config = WALLET_CONFIGS[1]  # Subconta
     dex = wallet_config.get_dex_instance()
     
-    # Loop principal para cada asset
-    for symbol in cfg.ASSETS:
-        try:
-            print(f"🔍 Processando {symbol}...")
-            
-            # Buscar dados
-            df = build_df(symbol, "15m", 100)
-            
-            # Criar estratégia
-            strategy = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
-            
-            # Executar step
-            strategy.step(df)
-            
-        except Exception as e:
-            _log_global("MAIN", f"Erro processando {symbol}: {e}", "ERROR")
+    cycle_count = 0
     
-    print("✅ Ciclo completo!")
+    # Loop contínuo
+    while True:
+        try:
+            cycle_count += 1
+            print(f"\n🔄 CICLO #{cycle_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # Loop principal para cada asset
+            for symbol in cfg.ASSETS:
+                try:
+                    print(f"🔍 Processando {symbol}...")
+                    
+                    # Buscar dados
+                    df = build_df(symbol, "15m", 100)
+                    
+                    # Criar estratégia
+                    strategy = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
+                    
+                    # Executar step
+                    strategy.step(df)
+                    
+                except Exception as e:
+                    _log_global("MAIN", f"Erro processando {symbol}: {e}", "ERROR")
+            
+            print("✅ Ciclo completo!")
+            print(f"⏰ Aguardando 30 segundos para próximo ciclo...")
+            time.sleep(30)
+            
+        except KeyboardInterrupt:
+            print("\n🛑 Trading interrompido pelo usuário!")
+            break
+        except Exception as e:
+            _log_global("MAIN", f"Erro no loop principal: {e}", "ERROR")
+            print(f"❌ Erro no ciclo, aguardando 30s antes de tentar novamente...")
+            time.sleep(30)
 
 if __name__ == "__main__":
     main()
