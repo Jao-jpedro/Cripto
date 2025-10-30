@@ -968,7 +968,7 @@ class TradingLearner:
         if db_path:
             self.db_path = db_path
         else:
-            self.db_path = os.getenv("LEARN_DB_PATH", "/var/data/hl_learn.db")
+            self.db_path = os.getenv("LEARN_DB_PATH", "/tmp/hl_learn.db")
         # Usar o mesmo webhook das notificações de entrada/saída
         self.discord_webhook = os.getenv("DISCORD_WEBHOOK", 
             "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM")
@@ -1421,7 +1421,7 @@ class TradingLearner:
             return features
             
         except Exception as e:
-            _log_global("LEARNER", f"Error extracting features: {e}", "WARN")
+            _log_global("LEARNER", f"Error extracting features: {e} | Available columns: {list(df.columns) if hasattr(df, 'columns') else 'N/A'}", "WARN")
             return {
                 "symbol": symbol,
                 "side": side,
@@ -3536,7 +3536,7 @@ class GradientConfig:
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
     POST_COOLDOWN_CONFIRM: int = 0        # confirmações pós-cooldown desativadas
     COOLDOWN_MINUTOS: int   = 120          # tempo mínimo entre entradas após saída
-    ANTI_SPAM_SECS: int     = 3
+    ANTI_SPAM_SECS: int     = 30           # Anti-spam mais conservador
     MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
 
     # Stops/TP
@@ -5113,6 +5113,10 @@ class EMAGradientStrategy:
         
         tp_display = f"{tp_price:.6f}" if manage_take else "disabled"
         self._log(f"🛡️ Criando proteções em {len(orders_created)} carteiras | Lado executado: {norm_side} | SL: {sl_side}@{sl_price:.6f} | TP: {tp_display}", level="INFO")
+        
+        # Aguardar um pouco para garantir que a posição foi criada na exchange antes das proteções
+        import time as _time_mod
+        _time_mod.sleep(1)
         
         # Criar stops para cada carteira
         for order_info in orders_created:
