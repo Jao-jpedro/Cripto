@@ -6007,6 +6007,17 @@ class EMAGradientStrategy:
                 buy_ratio = current_buy_volume / avg_buy_volume_30 if avg_buy_volume_30 > 0 else 0.0
                 sell_ratio = current_sell_volume / avg_sell_volume_30 if avg_sell_volume_30 > 0 else 0.0
                 
+                # Calcular ratios de buy/sell
+                if current_sell_volume > 0:
+                    buy_sell_ratio = current_buy_volume / current_sell_volume
+                else:
+                    buy_sell_ratio = float('inf') if current_buy_volume > 0 else 0.0
+                
+                if avg_sell_volume_30 > 0:
+                    avg_buy_sell_ratio = avg_buy_volume_30 / avg_sell_volume_30
+                else:
+                    avg_buy_sell_ratio = float('inf') if avg_buy_volume_30 > 0 else 0.0
+                
                 # Calcular trades
                 current_trades = current_volume
                 avg_trades_30 = avg_total_vol_30 if len(df) >= 30 and 'volume' in df.columns else 0.0
@@ -6015,12 +6026,14 @@ class EMAGradientStrategy:
                 self._log(
                     "Position snapshot | close={:.6f} ema7={:.6f} ema21={:.6f} atr={:.6f} atr%={:.3f} "
                     "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | current_k_atr={:.3f} | trades_now={:.0f} avg_30c={:.0f} ratio={:.2f}x | "
-                    "buy_vol={:.0f} buy_avg30={:.0f} buy_ratio={:.2f}x | sell_vol={:.0f} sell_avg30={:.0f} sell_ratio={:.2f}x".format(
+                    "buy_vol={:.0f} buy_avg30={:.0f} buy_ratio={:.2f}x | sell_vol={:.0f} sell_avg30={:.0f} sell_ratio={:.2f}x | "
+                    "buy/sell={:.2f} avg_buy/sell={:.2f}".format(
                         float(last.valor_fechamento), float(last.ema_short), float(last.ema_long), float(last.atr),
                         float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, current_breakout_k,
                         current_trades, avg_trades_30, trades_ratio,
                         current_buy_volume, avg_buy_volume_30, buy_ratio,
-                        current_sell_volume, avg_sell_volume_30, sell_ratio
+                        current_sell_volume, avg_sell_volume_30, sell_ratio,
+                        buy_sell_ratio, avg_buy_sell_ratio
                     ),
                     level="DEBUG",
                 )
@@ -6106,6 +6119,17 @@ class EMAGradientStrategy:
                     buy_ratio = current_buy_volume / avg_buy_volume_30 if avg_buy_volume_30 > 0 else 0.0
                     sell_ratio = current_sell_volume / avg_sell_volume_30 if avg_sell_volume_30 > 0 else 0.0
                     
+                    # Calcular ratios de buy/sell
+                    if current_sell_volume > 0:
+                        buy_sell_ratio = current_buy_volume / current_sell_volume
+                    else:
+                        buy_sell_ratio = float('inf') if current_buy_volume > 0 else 0.0
+                    
+                    if avg_sell_volume_30 > 0:
+                        avg_buy_sell_ratio = avg_buy_volume_30 / avg_sell_volume_30
+                    else:
+                        avg_buy_sell_ratio = float('inf') if avg_buy_volume_30 > 0 else 0.0
+                    
                 except Exception:
                     current_buy_volume = 0.0
                     current_sell_volume = 0.0
@@ -6113,16 +6137,20 @@ class EMAGradientStrategy:
                     avg_sell_volume_30 = 0.0
                     buy_ratio = 0.0
                     sell_ratio = 0.0
+                    buy_sell_ratio = 0.0
+                    avg_buy_sell_ratio = 0.0
                 
                 self._log(
                     "Trigger snapshot | close={:.6f} ema7={:.6f} ema21={:.6f} atr={:.6f} atr%={:.3f} "
                     "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | current_k_atr={:.3f} | trades_now={:.0f} avg_30c={:.0f} ratio={:.2f}x | "
-                    "buy_vol={:.0f} buy_avg30={:.0f} buy_ratio={:.2f}x | sell_vol={:.0f} sell_avg30={:.0f} sell_ratio={:.2f}x".format(
+                    "buy_vol={:.0f} buy_avg30={:.0f} buy_ratio={:.2f}x | sell_vol={:.0f} sell_avg30={:.0f} sell_ratio={:.2f}x | "
+                    "buy/sell={:.2f} avg_buy/sell={:.2f}".format(
                         float(last.valor_fechamento), float(last.ema_short), float(last.ema_long), float(last.atr),
                         float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, current_breakout_k,
                         current_trades, avg_trades_30, trades_ratio,
                         current_buy_volume, avg_buy_volume_30, buy_ratio,
-                        current_sell_volume, avg_sell_volume_30, sell_ratio
+                        current_sell_volume, avg_sell_volume_30, sell_ratio,
+                        buy_sell_ratio, avg_buy_sell_ratio
                     ),
                     level="DEBUG",
                 )
