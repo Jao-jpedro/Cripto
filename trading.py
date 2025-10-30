@@ -416,7 +416,29 @@ class WalletConfig:
         else:
             return RealDataDex()
 
-# Configurações de carteiras disponíveis
+# Configurações de carteiras usando variáveis de ambiente
+def get_wallet_config():
+    """Obtém configuração da carteira a partir das variáveis de ambiente"""
+    wallet_address = os.getenv("WALLET_ADDRESS")
+    private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY") 
+    subaccount = os.getenv("HYPERLIQUID_SUBACCOUNT")
+    
+    # Se há subaccount especificada, usar como subconta
+    if subaccount:
+        return WalletConfig(
+            name="Subconta Trading (ENV)",
+            is_subconta=True,
+            vault_address=subaccount
+        )
+    else:
+        # Usar carteira principal
+        return WalletConfig(
+            name="Carteira Principal (ENV)",
+            is_subconta=False,
+            vault_address=None
+        )
+
+# Configurações de carteiras disponíveis (fallback)
 WALLET_CONFIGS = [
     WalletConfig(
         name="Carteira Principal",
@@ -440,17 +462,39 @@ class RealDataDex:
         self._setup_hyperliquid()
     
     def _setup_hyperliquid(self):
-        """Configura conexão com Hyperliquid"""
+        """Configura conexão com Hyperliquid usando variáveis de ambiente"""
         try:
+            # Obter variáveis de ambiente
+            wallet_address = os.getenv("WALLET_ADDRESS")
+            private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")
+            subaccount = os.getenv("HYPERLIQUID_SUBACCOUNT")
+            
             # Configuração básica do ccxt para Hyperliquid
-            self.exchange = ccxt.hyperliquid({
+            config = {
                 'sandbox': False,
                 'options': {
                     'defaultType': 'swap',
                 }
-            })
+            }
+            
+            # Adicionar credenciais se disponíveis
+            if wallet_address and private_key:
+                config['apiKey'] = wallet_address
+                config['secret'] = private_key
+                _log_global("DEX", f"🔐 Credenciais configuradas: {wallet_address[:10]}...", "INFO")
+            
+            self.exchange = ccxt.hyperliquid(config)
+            
+            # Configurar subconta se especificada
             if self.vault_address:
                 self.exchange.options['vault'] = self.vault_address
+                _log_global("DEX", f"🏦 Vault configurado: {self.vault_address}", "INFO")
+            
+            # Configurar subaccount se especificada
+            if subaccount:
+                self.exchange.options['subAccount'] = subaccount
+                _log_global("DEX", f"📋 Subaccount configurado: {subaccount}", "INFO")
+                
         except Exception as e:
             _log_global("DEX", f"Erro configurando Hyperliquid: {e}", "ERROR")
     
@@ -460,7 +504,13 @@ class RealDataDex:
     
     def fetch_positions(self, symbols: List[str] = None):
         """Busca posições abertas"""
-        return self.exchange.fetch_positions(symbols)
+        # Para Hyperliquid, usar parâmetros específicos se disponível
+        wallet_address = os.getenv("WALLET_ADDRESS")
+        if wallet_address:
+            params = {'user': wallet_address}
+            return self.exchange.fetch_positions(symbols, params)
+        else:
+            return self.exchange.fetch_positions(symbols)
     
     def fetch_open_orders(self, symbol: str):
         """Busca ordens abertas"""
@@ -586,11 +636,10 @@ class SimpleRatioStrategy:
             if len(df) < 30:  # Precisamos de dados suficientes
                 return
             
-            # 1. Monitoramento e snapshot de indicadores técnicos
-            if trading_monitor.should_take_snapshot():
-                indicators = trading_monitor.calculate_indicators(df, self.symbol)
-                if indicators:
-                    trading_monitor.print_snapshot(indicators)
+            # 1. SEMPRE calcular e mostrar snapshot de indicadores técnicos para cada ativo
+            indicators = trading_monitor.calculate_indicators(df, self.symbol)
+            if indicators:
+                trading_monitor.print_snapshot(indicators)
             
             # 2. Calcular ratio avg_buy/sell atual
             current_ratio = self._calculate_avg_buy_sell_ratio(df)
@@ -997,14 +1046,34 @@ def main():
     print("💰 Trade size: $3 USD, Leverage: 10x, Stop: 20%")
     print("⚡ Estratégia: Entradas/saídas por inversão de ratio avg_buy/sell")
     print("🔄 Execução contínua a cada 30 segundos")
+    
+    # Verificar variáveis de ambiente
+    wallet_address = os.getenv("WALLET_ADDRESS")
+    private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")
+    subaccount = os.getenv("HYPERLIQUID_SUBACCOUNT")
+    
+    print("\n🔧 CONFIGURAÇÃO DE AMBIENTE:")
+    print(f"   📋 Wallet Address: {'✅ Configurado' if wallet_address else '❌ Não configurado'}")
+    print(f"   🔐 Private Key: {'✅ Configurado' if private_key else '❌ Não configurado'}")
+    print(f"   🏦 Subaccount: {'✅ ' + subaccount if subaccount else '❌ Não configurado'}")
+    
+    if not wallet_address or not private_key:
+        print("\n⚠️  MODO DEMONSTRAÇÃO: Algumas credenciais não estão configuradas")
+        print("   Para operação completa, configure as variáveis de ambiente:")
+        print("   - WALLET_ADDRESS")
+        print("   - HYPERLIQUID_PRIVATE_KEY")
+        print("   - HYPERLIQUID_SUBACCOUNT (opcional)")
     print()
     
     # Configuração
     cfg = SimpleRatioConfig()
     
-    # Configuração da subconta
-    wallet_config = WALLET_CONFIGS[1]  # Subconta
+    # Usar configuração baseada em variáveis de ambiente
+    wallet_config = get_wallet_config()
     dex = wallet_config.get_dex_instance()
+    
+    print(f"🏦 Usando carteira: {wallet_config.name}")
+    print()
     
     cycle_count = 0
     
