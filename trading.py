@@ -3659,6 +3659,11 @@ class EMAGradientStrategy:
         # Rastreamento de tempo de posição para saída em 4 horas
         self._position_entry_time: Optional[float] = None
 
+    @property
+    def _subconta_dex(self):
+        """Retorna sempre a instância DEX da subconta configurada"""
+        return _init_dex_if_needed(self.wallet_config)
+
     def _check_external_position_closure(self, current_pos: Optional[Dict[str, Any]]) -> None:
         """Detecta se uma posição foi fechada externamente (por stop/TP da Hyperliquid) e registra no learner"""
         try:
@@ -3678,7 +3683,7 @@ class EMAGradientStrategy:
                 
                 # Buscar preço atual para registrar o fechamento
                 try:
-                    ticker = self.dex.fetch_ticker(self.symbol)
+                    ticker = self._subconta_dex.fetch_ticker(self.symbol)
                     current_price = float(ticker["last"])
                     
                     # Registrar fechamento no learner
@@ -3971,7 +3976,7 @@ class EMAGradientStrategy:
         }
         kind_pt = kind_map.get(kind, kind.capitalize())
         parts = [
-            "📢 Operação",
+            "📢 Operação [SUBCONTA]",
             f"• Tipo: {kind_pt}",
             f"• Par: {base}",
             f"• Lado: {side_txt}",
@@ -4311,7 +4316,7 @@ class EMAGradientStrategy:
         
         try:
             # Usar cache para reduzir chamadas à API
-            t = _get_cached_api_call(cache_key, self.dex.fetch_ticker, self.symbol)
+            t = _get_cached_api_call(cache_key, self._subconta_dex.fetch_ticker, self.symbol)
             if t and t.get("last"):
                 price = float(t["last"])
                 self._last_price_snapshot = price
@@ -4394,14 +4399,14 @@ class EMAGradientStrategy:
         try:
             if force_fresh:
                 # FRESH: Sem cache para verificações críticas pós-criação
-                pos = self.dex.fetch_positions([self.symbol])  # Opera na carteira mãe
+                pos = self._subconta_dex.fetch_positions([self.symbol])  # Opera na subconta
                 current_pos = pos[0] if pos and float(pos[0].get("contracts", 0)) > 0 else None
                 self._log(f"[DEBUG_FRESH] Posição FRESH: {current_pos is not None} | size={float(current_pos.get('contracts', 0)) if current_pos else 0.0}", level="DEBUG")
             else:
                 # Cache key único por símbolo  
                 cache_key = f"positions_{self.symbol}"
                 # Usar cache para reduzir chamadas à API
-                pos = _get_cached_api_call(cache_key, self.dex.fetch_positions, [self.symbol])  # Opera na carteira mãe
+                pos = _get_cached_api_call(cache_key, self._subconta_dex.fetch_positions, [self.symbol])  # Opera na subconta
                 current_pos = pos[0] if pos and float(pos[0].get("contracts", 0)) > 0 else None
             
             # Verificar se posição foi fechada externamente
@@ -4419,7 +4424,7 @@ class EMAGradientStrategy:
                 return False
             # Usar cache para fetch_open_orders
             cache_key = f"open_orders_{self.symbol}"
-            orders = _get_cached_api_call(cache_key, self.dex.fetch_open_orders, self.symbol)  # Opera na carteira mãe
+            orders = _get_cached_api_call(cache_key, self._subconta_dex.fetch_open_orders, self.symbol)  # Opera na subconta
             for o in orders:
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
@@ -4549,7 +4554,7 @@ class EMAGradientStrategy:
         try:
             # Usar cache para fetch_open_orders
             cache_key = f"open_orders_{self.symbol}"
-            orders = _get_cached_api_call(cache_key, self.dex.fetch_open_orders, self.symbol)  # Opera na carteira mãe
+            orders = _get_cached_api_call(cache_key, self._subconta_dex.fetch_open_orders, self.symbol)  # Opera na subconta
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao obter open_orders para verificação de proteções: {type(e).__name__}: {e}", level="WARN")
@@ -4640,7 +4645,7 @@ class EMAGradientStrategy:
                 return
             # Usar cache para fetch_open_orders
             cache_key = f"open_orders_{self.symbol}"
-            orders = _get_cached_api_call(cache_key, self.dex.fetch_open_orders, self.symbol)  # Opera na carteira mãe
+            orders = _get_cached_api_call(cache_key, self._subconta_dex.fetch_open_orders, self.symbol)  # Opera na subconta
             for o in orders:
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
@@ -4692,7 +4697,7 @@ class EMAGradientStrategy:
             return existing
         try:
             # COPIADO DO TRADINGANTIGO.PY: Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)  # Carteira mãe
+            ret = self._subconta_dex.create_order(self.symbol, "stop_market", side, amt, px, params)  # Subconta
             
             # INVALIDAR CACHE após criar ordem para garantir fresh data
             cache_keys_to_clear = [
@@ -4757,7 +4762,7 @@ class EMAGradientStrategy:
                 )
             return existing
         try:
-            ret = self.dex.create_order(self.symbol, "limit", side, amt, px, params)  # Carteira mãe
+            ret = self._subconta_dex.create_order(self.symbol, "limit", side, amt, px, params)  # Subconta
         except Exception as e:
             msg = f"Falha ao criar TAKE PROFIT: {type(e).__name__}: {e}"
             text = str(e).lower()
@@ -4802,7 +4807,7 @@ class EMAGradientStrategy:
                 lev_type = str(leverage_info.get("type") or "").lower()
                 target_lev = int(self.cfg.LEVERAGE)
                 if lev_type != "isolated" and target_lev > 0:
-                    self.dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated"})  # Carteira mãe
+                    self._subconta_dex.set_leverage(target_lev, self.symbol, {"marginMode": "isolated"})  # Subconta
                     self._log("Leverage ajustada para isolated em posição existente.", level="INFO")
             except Exception as e:
                 self._log(f"Falha ao ajustar leverage isolada (posição existente): {type(e).__name__}: {e}", level="WARN")
@@ -5198,7 +5203,7 @@ class EMAGradientStrategy:
             lev_int = None
         if lev_int and lev_int > 0:
             try:
-                self.dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})  # Carteira mãe
+                self._subconta_dex.set_leverage(lev_int, self.symbol, {"marginMode": "isolated"})  # Subconta
                 if self.debug:
                     self._log(f"Leverage ajustada para {lev_int}x (isolated)", level="DEBUG")
             except Exception as e:
@@ -5215,7 +5220,7 @@ class EMAGradientStrategy:
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
             level="INFO",
         )
-        ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)  # Carteira mãe
+        ordem_entrada = self._subconta_dex.create_order(self.symbol, "market", side, amount, price)  # Subconta
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
         
         # INVALIDAR CACHE após criar entrada para garantir fresh data nas próximas verificações
@@ -5427,7 +5432,7 @@ class EMAGradientStrategy:
         # Diagnóstico: listar ordens abertas reduceOnly
         try:
             if os.getenv("LIVE_TRADING", "0") in ("1", "true", "True"):
-                open_orders = self.dex.fetch_open_orders(self.symbol)  # Carteira mãe
+                open_orders = self._subconta_dex.fetch_open_orders(self.symbol)  # Subconta
                 if open_orders:
                     self._log("Ordens reduceOnly ativas:", level="DEBUG")
                     for o in open_orders:
@@ -5460,7 +5465,7 @@ class EMAGradientStrategy:
         try:
             if os.getenv("LIVE_TRADING", "0") not in ("1", "true", "True"):
                 return None, None, None
-            for o in self.dex.fetch_open_orders(self.symbol):  # Carteira mãe
+            for o in self._subconta_dex.fetch_open_orders(self.symbol):  # Subconta
                 ro = o.get("reduceOnly")
                 if ro is None and isinstance(o.get("params"), dict):
                     ro = o["params"].get("reduceOnly")
@@ -5484,7 +5489,7 @@ class EMAGradientStrategy:
             if order_id:
                 if self.debug:
                     self._log(f"Cancelando ordem reduceOnly id={order_id}", level="DEBUG")
-                self.dex.cancel_order(order_id, self.symbol)  # Carteira mãe
+                self._subconta_dex.cancel_order(order_id, self.symbol)  # Subconta
         except Exception as e:
             if self.debug:
                 self._log(f"Falha ao cancelar ordem {order_id}: {e}", level="WARN")
@@ -5496,7 +5501,7 @@ class EMAGradientStrategy:
         params = {"reduceOnly": True}
         if self.debug:
             self._log(f"Fechando posição via MARKET reduceOnly {side.upper()} qty={amt} px_ref={px:.6f}", level="DEBUG")
-        return self.dex.create_order(self.symbol, "market", side, amt, px, params)  # Carteira mãe
+        return self._subconta_dex.create_order(self.symbol, "market", side, amt, px, params)  # Subconta
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()
@@ -5765,7 +5770,7 @@ class EMAGradientStrategy:
                             exit_side = "sell" if side in ("buy", "long") else "buy"
                             
                             # Buscar preço atual para ordem market
-                            ticker = self.dex.fetch_ticker(self.symbol)
+                            ticker = self._subconta_dex.fetch_ticker(self.symbol)
                             current_price = float(ticker.get("last", 0) or 0)
                             if current_price <= 0:
                                 self._log("Erro: preço atual inválido para fechamento de emergência por PnL", level="ERROR")
@@ -5777,13 +5782,13 @@ class EMAGradientStrategy:
                             else:
                                 order_price = current_price * 1.005  # Ligeiramente acima para short
                             
-                            self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Carteira mãe
+                            self._subconta_dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Subconta
                             emergency_closed = True
                             _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
                             self._log(f"[DEBUG_CLOSE] 🚨 FECHAMENTO POR PNL: {unrealized_pnl:.2f} <= {UNREALIZED_PNL_HARD_STOP}", level="ERROR")
-                            self._log(f"Emergência acionada (carteira mãe): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
+                            self._log(f"Emergência acionada (subconta): unrealizedPnL <= {UNREALIZED_PNL_HARD_STOP} USDC (PRIORITÁRIO), posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
-                            self._log(f"Erro ao fechar posição por PnL (carteira mãe): {e}", level="ERROR")
+                            self._log(f"Erro ao fechar posição por PnL (subconta): {e}", level="ERROR")
                 
                 # Se não fechou por PnL, verificar ROI
                 if not emergency_closed:
@@ -5806,7 +5811,7 @@ class EMAGradientStrategy:
                                 exit_side = "sell" if side in ("buy", "long") else "buy"
                                 
                                 # Buscar preço atual para ordem market
-                                ticker = self.dex.fetch_ticker(self.symbol)
+                                ticker = self._subconta_dex.fetch_ticker(self.symbol)
                                 current_price = float(ticker.get("last", 0) or 0)
                                 if current_price <= 0:
                                     self._log("Erro: preço atual inválido para fechamento de emergência por ROI", level="ERROR")
@@ -5818,16 +5823,16 @@ class EMAGradientStrategy:
                                 else:
                                     order_price = current_price * 1.005  # Ligeiramente acima para short
                                 
-                                self.dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Carteira mãe
+                                self._subconta_dex.create_order(self.symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})  # Subconta
                                 emergency_closed = True
                                 _clear_high_water_mark(self.symbol)  # Limpar HWM após fechamento de emergência
                                 self._log(f"[DEBUG_CLOSE] 🚨 FECHAMENTO POR ROI: {roi_f:.4f} <= {ROI_HARD_STOP}", level="ERROR")
-                                self._log(f"Emergência acionada (carteira mãe): ROI <= {ROI_HARD_STOP}%, posição fechada imediatamente.", level="ERROR")
+                                self._log(f"Emergência acionada (subconta): ROI <= {ROI_HARD_STOP}%, posição fechada imediatamente.", level="ERROR")
                         except Exception as e:
-                            self._log(f"Erro ao fechar posição por ROI (carteira mãe): {e}", level="ERROR")
+                            self._log(f"Erro ao fechar posição por ROI (subconta): {e}", level="ERROR")
                         
             except Exception as e:
-                self._log(f"Falha ao avaliar emergência de PnL/ROI (carteira mãe): {type(e).__name__}: {e}", level="WARN")
+                self._log(f"Falha ao avaliar emergência de PnL/ROI (subconta): {type(e).__name__}: {e}", level="WARN")
             
             if emergency_closed:
                 self._cancel_protective_orders(fetch_backup=True)
