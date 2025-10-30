@@ -5112,7 +5112,7 @@ class EMAGradientStrategy:
         tp_side = sl_side
         
         tp_display = f"{tp_price:.6f}" if manage_take else "disabled"
-        self._log(f"🛡️ Criando proteções em {len(orders_created)} carteiras | SL: {sl_price:.6f} | TP: {tp_display}", level="INFO")
+        self._log(f"🛡️ Criando proteções em {len(orders_created)} carteiras | Lado executado: {norm_side} | SL: {sl_side}@{sl_price:.6f} | TP: {tp_display}", level="INFO")
         
         # Criar stops para cada carteira
         for order_info in orders_created:
@@ -5120,6 +5120,13 @@ class EMAGradientStrategy:
                 wallet_name = order_info["wallet"]
                 wallet_dex = order_info["dex"]
                 wallet_amount = order_info["amount"]
+                
+                # DEBUG: Verificar posição antes de criar proteções
+                try:
+                    current_pos = wallet_dex.fetch_balance().get(self.symbol.split('/')[0], {}).get('total', 0)
+                    self._log(f"[{wallet_name}] DEBUG PROTEÇÃO: pos_atual={current_pos}, tentando_criar_sl={sl_side}_{wallet_amount}@{sl_price}", level="DEBUG")
+                except Exception as e:
+                    self._log(f"[{wallet_name}] Erro verificando posição para debug: {e}", level="DEBUG")
                 
                 # Stop loss
                 stop_order = wallet_dex.create_order(self.symbol, "stop_market", sl_side, wallet_amount, sl_price, {"reduceOnly": True})
@@ -5131,7 +5138,20 @@ class EMAGradientStrategy:
                     self._log(f"[{wallet_name}] TP criado: {tp_order.get('id', 'N/A')}", level="DEBUG")
                     
             except Exception as e:
-                self._log(f"[{order_info['wallet']}] Erro criando proteções: {e}", level="ERROR")
+                error_msg = str(e)
+                self._log(f"[{order_info['wallet']}] Erro criando proteções: {error_msg}", level="ERROR")
+                
+                # Log adicional para debug do erro "reduce only"
+                if "Reduce only order would increase position" in error_msg:
+                    self._log(f"[{order_info['wallet']}] 🔍 DEBUG REDUCE_ONLY ERROR:", level="ERROR")
+                    self._log(f"    • Tentando criar: {sl_side} {order_info['amount']} (reduce_only=True)", level="ERROR")
+                    self._log(f"    • Preço SL: {sl_price:.6f}", level="ERROR")
+                    self._log(f"    • Lado da posição aberta: {norm_side}", level="ERROR")
+                    try:
+                        pos_check = order_info['dex'].fetch_balance()
+                        self._log(f"    • Saldo atual da carteira: {pos_check}", level="ERROR")
+                    except:
+                        self._log(f"    • Erro verificando saldo da carteira", level="ERROR")
         
         # Log das proteções
         self._safe_log(
