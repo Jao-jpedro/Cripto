@@ -6095,33 +6095,23 @@ class EMAGradientStrategy:
                         rsi_val = float(df["rsi"].dropna().iloc[-1])
             except Exception:
                 rsi_val = float('nan')
-            force_long = False
-            force_short = False
-            if not math.isnan(rsi_val):
-                if rsi_val < 20.0:
-                    force_short = True  # INVERSO: RSI oversold → Force SHORT
-                    self._log(f"⚠️ SISTEMA INVERSO - RSI Force: RSI14={rsi_val:.2f} < 20 → Force SHORT", level="INFO")
-                elif rsi_val > 80.0:
-                    force_long = True   # INVERSO: RSI overbought → Force LONG
-                    self._log(f"⚠️ SISTEMA INVERSO - RSI Force: RSI14={rsi_val:.2f} > 80 → Force LONG", level="INFO")
 
-            # no-trade zone (desconsiderada se RSI exigir entrada)
+            # no-trade zone
             eps_nt = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
             diff_nt = abs(float(last.ema_short - last.ema_long))
             atr_ok = (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX)
-            if not (force_long or force_short):
-                if (diff_nt < eps_nt) or (not atr_ok):
-                    reasons_nt = []
-                    if diff_nt < eps_nt:
-                        reasons_nt.append(f"|ema7-ema21|({diff_nt:.6f})<eps({eps_nt:.6f})")
-                    if last.atr_pct < self.cfg.ATR_PCT_MIN:
-                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN}")
-                    if last.atr_pct > self.cfg.ATR_PCT_MAX:
-                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
-                    self._log("No-Trade Zone ativa: " + "; ".join(reasons_nt), level="INFO")
-                    self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
-                    self._last_pos_side = None
-                    return
+            if (diff_nt < eps_nt) or (not atr_ok):
+                reasons_nt = []
+                if diff_nt < eps_nt:
+                    reasons_nt.append(f"|ema7-ema21|({diff_nt:.6f})<eps({eps_nt:.6f})")
+                if last.atr_pct < self.cfg.ATR_PCT_MIN:
+                    reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN}")
+                if last.atr_pct > self.cfg.ATR_PCT_MAX:
+                    reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
+                self._log("No-Trade Zone ativa: " + "; ".join(reasons_nt), level="INFO")
+                self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
+                self._last_pos_side = None
+                return
 
             # intenção pós-cooldown: exigir confirmação adicional
             if self._pending_after_cd is not None:
@@ -6133,7 +6123,7 @@ class EMAGradientStrategy:
                         (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
                         (last.volume > last.vol_ma)
                     )
-                    can_long = base_long or force_long
+                    can_long = base_long
 
                     if can_long:
                         self._log("⚠️ SISTEMA INVERSO: Confirmação pós-cooldown LONG → Executando SHORT", level="INFO")
@@ -6149,7 +6139,7 @@ class EMAGradientStrategy:
                         (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
                         (last.volume > last.vol_ma)
                     )
-                    can_short = base_short or force_short
+                    can_short = base_short
                     if can_short:
                         self._log("⚠️ SISTEMA INVERSO: Confirmação pós-cooldown SHORT → Executando LONG", level="INFO")
                         self._abrir_posicao_dual_wallet("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
@@ -6175,8 +6165,8 @@ class EMAGradientStrategy:
                 (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
                 (last.volume > last.vol_ma)
             )
-            can_long = base_long or force_long
-            can_short = base_short or force_short
+            can_long = base_long
+            can_short = base_short
             if can_long:
                 self._log("⚠️ SISTEMA INVERSO: Entrada LONG detectada → Executando SHORT", level="INFO")
                 self._abrir_posicao_dual_wallet("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
