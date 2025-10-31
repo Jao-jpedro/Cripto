@@ -497,13 +497,21 @@ class RealDataDex:
                 
         except Exception as e:
             _log_global("DEX", f"Erro configurando Hyperliquid: {e}", "ERROR")
+            # Fallback para modo demo sem exchange real
+            self.exchange = None
     
     def fetch_ticker(self, symbol: str):
         """Busca ticker do símbolo"""
+        if not self.exchange:
+            # Retorna ticker fictício para modo demo
+            return {'symbol': symbol, 'last': 0.004500}
         return self.exchange.fetch_ticker(symbol)
     
     def fetch_positions(self, symbols: List[str] = None):
         """Busca posições abertas"""
+        if not self.exchange:
+            # Retorna lista vazia para modo demo
+            return []
         # Para Hyperliquid, usar parâmetros específicos se disponível
         wallet_address = os.getenv("WALLET_ADDRESS")
         if wallet_address:
@@ -514,18 +522,30 @@ class RealDataDex:
     
     def fetch_open_orders(self, symbol: str):
         """Busca ordens abertas"""
+        if not self.exchange:
+            return []
         return self.exchange.fetch_open_orders(symbol)
     
     def create_order(self, symbol: str, type_: str, side: str, amount: float, price: float, params: dict = None):
         """Cria ordem"""
+        if not self.exchange:
+            # Modo demo: log da ordem mas não executa
+            _log_global("DEX", f"💤 DEMO: {side.upper()} {amount:.2f} {symbol} @ {price:.6f}", "INFO")
+            return {'id': 'demo_order_12345', 'symbol': symbol, 'side': side, 'amount': amount}
         return self.exchange.create_order(symbol, type_, side, amount, price, params or {})
     
     def cancel_order(self, order_id: str, symbol: str):
         """Cancela ordem"""
+        if not self.exchange:
+            return {'id': order_id, 'status': 'canceled'}
         return self.exchange.cancel_order(order_id, symbol)
     
     def set_leverage(self, leverage: int, symbol: str, params: dict = None):
         """Define leverage"""
+        if not self.exchange:
+            _log_global("DEX", f"💤 DEMO: Set leverage {leverage}x for {symbol}", "DEBUG")
+            return
+        return self.exchange.set_leverage(leverage, symbol, params or {})
         return self.exchange.set_leverage(leverage, symbol, params or {})
 
 # ===== LOGGER DE TRADES =====
@@ -616,6 +636,9 @@ class SimpleRatioStrategy:
         self._last_ratio_value: Optional[float] = None  # Último valor do ratio avg_buy/sell
         self._ratio_history: List[float] = []           # Histórico de ratios para detectar inversões
         
+        # Debug
+        self.debug_force_ratio: Optional[float] = None  # Para testes: força um ratio específico
+        
         # Manter algumas variáveis essenciais para compatibilidade
         self._first_step_done: bool = False
 
@@ -654,12 +677,18 @@ class SimpleRatioStrategy:
                 trading_monitor.print_snapshot(indicators)
             
             # 2. Usar o ratio avg_buy/sell calculado pelo TechnicalIndicators
-            if not indicators or 'avg_buy_sell_ratio' not in indicators:
-                return
-                
-            current_ratio = indicators['avg_buy_sell_ratio']
-            if current_ratio is None or current_ratio <= 0:
-                return
+            if hasattr(self, 'debug_force_ratio') and self.debug_force_ratio is not None:
+                # Modo debug: usar ratio forçado
+                current_ratio = self.debug_force_ratio
+                self._log(f"🐛 DEBUG: Usando ratio forçado = {current_ratio:.3f}", level="DEBUG")
+            else:
+                # Modo normal: usar ratio calculado
+                if not indicators or 'avg_buy_sell_ratio' not in indicators:
+                    return
+                    
+                current_ratio = indicators['avg_buy_sell_ratio']
+                if current_ratio is None or current_ratio <= 0:
+                    return
             
             # 3. Atualizar histórico de ratios
             self._update_ratio_history(current_ratio)
@@ -668,12 +697,36 @@ class SimpleRatioStrategy:
             self._log(f"📊 Ratio avg_buy/sell: {current_ratio:.3f}", level="DEBUG")
             
             # Debug adicional: mostrar os últimos ratios no histórico
+            self._log(f"📊 Histórico size: {len(self._ratio_history)}", level="DEBUG")
             if len(self._ratio_history) >= 2:
                 recent_ratios = self._ratio_history[-3:] if len(self._ratio_history) >= 3 else self._ratio_history
                 self._log(f"📈 Histórico ratios: {[f'{r:.3f}' for r in recent_ratios]}", level="DEBUG")
             
+            # 5. Debug: verificar detecção de cruzamentos mesmo sem entrar nas condições
+            if len(self._ratio_history) >= 2:
+                prev_ratio = self._ratio_history[-2]
+                curr_ratio = self._ratio_history[-1]
+                self._log(f"🔍 Cross Debug: prev={prev_ratio:.3f}, curr={curr_ratio:.3f}", level="DEBUG")
+                
+                # Test up cross
+                up_cross = prev_ratio < 1.0 and curr_ratio > 1.0
+                down_cross = prev_ratio > 1.0 and curr_ratio < 1.0
+                
+                if up_cross:
+                    self._log(f"🟢 UP CROSS DETECTADO: {prev_ratio:.3f} → {curr_ratio:.3f}", level="INFO")
+                elif down_cross:
+                    self._log(f"🔴 DOWN CROSS DETECTADO: {prev_ratio:.3f} → {curr_ratio:.3f}", level="INFO")
+                else:
+                    self._log(f"⭕ SEM CROSS: {prev_ratio:.3f} → {curr_ratio:.3f}", level="DEBUG")
+            
             # 5. Verificar se já temos posição aberta
             pos = self._posicao_aberta()
+            
+            # Debug: mostrar status da posição
+            if pos:
+                self._log(f"📍 POSIÇÃO ATIVA: {pos.get('side', 'unknown')} size={pos.get('size', 0)}", level="DEBUG")
+            else:
+                self._log(f"📍 SEM POSIÇÃO ATIVA", level="DEBUG")
             
             if pos:
                 # Temos posição: verificar condições de saída
@@ -681,6 +734,8 @@ class SimpleRatioStrategy:
                 self._check_exit_conditions(pos, current_pos_side, current_ratio, df)
             else:
                 # Sem posição: verificar entrada
+                self._log(f"🎯 CHECANDO SINAIS DE ENTRADA...", level="DEBUG")
+                
                 # Entrada LONG: ratio cruza de <1.0 para >1.0
                 if self._detect_ratio_cross(current_ratio, direction="up"):
                     self._log(f"🔵 SINAL LONG: Ratio cruzou para cima {current_ratio:.3f}", level="INFO")
@@ -1110,6 +1165,14 @@ def main():
     print(f"🏦 Usando carteira: {wallet_config.name}")
     print()
     
+    # Criar estratégias uma vez só (para preservar histórico)
+    print("🎯 Inicializando estratégias...")
+    strategies = {}
+    for symbol in cfg.ASSETS:
+        strategies[symbol] = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
+        print(f"    ✅ Estratégia criada para {symbol}")
+    print()
+    
     cycle_count = 0
     
     # Loop contínuo
@@ -1130,10 +1193,8 @@ def main():
                     data_time = time.time() - start_time
                     print(f"    ✅ Dados obtidos em {data_time:.2f}s ({len(df)} candles)")
                     
-                    # Criar estratégia
-                    print(f"    🎯 Criando estratégia para {symbol}...")
-                    strategy = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
-                    print(f"    ✅ Estratégia criada")
+                    # Usar estratégia existente (preservando histórico)
+                    strategy = strategies[symbol]
                     
                     # Executar step
                     print(f"    🚀 Executando step...")

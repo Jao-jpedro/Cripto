@@ -1113,7 +1113,7 @@ class TradingLearner:
         
     def extract_features_raw(self, symbol: str, side: str, df: pd.DataFrame, price: float) -> dict:
         """Extrai features brutas COMPLETAS no momento da entrada - TODOS os indicadores"""
-        if df.empty or len(df) < 252:
+        if df.empty or len(df) < 20:  # Reduzido de 252 para 20 - mínimo para indicadores básicos
             return {}
             
         try:
@@ -1121,8 +1121,18 @@ class TradingLearner:
             last_row = df.iloc[-1]
             
             # =================== SEÇÃO A: PREÇO & VOLATILIDADE ===================
+            # Calcula ATR se não existe coluna ATR
             atr_series = df.get('atr', pd.Series())
-            atr_pct = (atr_series.iloc[-1] / price * 100) if not atr_series.empty else None
+            if atr_series.empty and 'high' in df.columns and 'low' in df.columns:
+                # Calcula ATR manualmente
+                df_temp = df.copy()
+                df_temp['tr1'] = df_temp['high'] - df_temp['low']
+                df_temp['tr2'] = abs(df_temp['high'] - df_temp['valor_fechamento'].shift(1))
+                df_temp['tr3'] = abs(df_temp['low'] - df_temp['valor_fechamento'].shift(1))
+                df_temp['tr'] = df_temp[['tr1', 'tr2', 'tr3']].max(axis=1)
+                atr_series = df_temp['tr'].rolling(window=14).mean()
+            
+            atr_pct = (atr_series.iloc[-1] / price * 100) if not atr_series.empty and pd.notna(atr_series.iloc[-1]) else None
             
             atr_252_percentile = None
             atr_50_percentile = None
@@ -2587,6 +2597,9 @@ def get_binance_data(symbol, interval, start_date, end_date):
             break
     formatted_data = [{
         "data": item[0],
+        "open": round(float(item[1]), 7),
+        "high": round(float(item[2]), 7), 
+        "low": round(float(item[3]), 7),
         "valor_fechamento": round(float(item[4]), 7),
         "criptomoeda": symbol,
         "volume_compra": float(item[5]),
@@ -2724,6 +2737,9 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
                     cc = cc[-n_target:]
                 data = [{
                     "data": o[0],
+                    "open": float(o[1]),
+                    "high": float(o[2]),
+                    "low": float(o[3]),
                     "valor_fechamento": float(o[4]),
                     "criptomoeda": symbol,
                     "volume_compra": float(o[5] or 0.0),
@@ -2772,6 +2788,9 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
             if live_price is not None:
                 data.append({
                     "data": cur_open_ms,
+                    "open": float(live_price),
+                    "high": float(live_price),
+                    "low": float(live_price),
                     "valor_fechamento": float(live_price),
                     "criptomoeda": symbol,
                     "volume_compra": 0.0,
