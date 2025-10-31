@@ -24,10 +24,33 @@ import ccxt
 import requests
 
 # ===== LOGGING GLOBAL =====
+# Configuração global de log file
+_LOG_FILE = None
+
+def setup_log_file():
+    """Configura arquivo de log baseado na data/hora atual"""
+    global _LOG_FILE
+    if _LOG_FILE is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _LOG_FILE = f"trading_session_{timestamp}.log"
+        print(f"📝 Log será salvo em: {_LOG_FILE}")
+
 def _log_global(channel: str, message: str, level: str = "INFO"):
-    """Sistema de log global simplificado"""
+    """Sistema de log global com gravação em arquivo"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] [{level}] [{channel}] {message}", flush=True)
+    log_line = f"[{timestamp}] [{level}] [{channel}] {message}"
+    
+    # Print no terminal
+    print(log_line, flush=True)
+    
+    # Salvar em arquivo se configurado
+    if _LOG_FILE:
+        try:
+            with open(_LOG_FILE, 'a', encoding='utf-8') as f:
+                f.write(log_line + '\n')
+                f.flush()
+        except Exception as e:
+            print(f"[ERROR] Erro salvando log: {e}")
 
 # ===== NOTIFICAÇÕES DISCORD =====
 class DiscordNotifier:
@@ -1131,6 +1154,9 @@ def build_df(symbol: str = "BTCUSDT", tf: str = "15m", limit: int = 260, source:
 # ===== FUNÇÃO PRINCIPAL DO SISTEMA =====
 def main():
     """Função principal do sistema de trading simplificado"""
+    # Configurar arquivo de log
+    setup_log_file()
+    
     print("🚀 SISTEMA DE TRADING SIMPLIFICADO - SimpleRatioStrategy")
     print("📊 Assets: PUMPUSDT, AVNTUSDT (dados) → PUMP/USDC:USDC, AVNT/USDC:USDC (trading)")
     print("💰 Trade size: $3 USD, Leverage: 10x, Stop: 20%")
@@ -1220,4 +1246,37 @@ def main():
             time.sleep(30)
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--testar-entrada-hyperliquid":
+        import ccxt
+        print("[TESTE] Simulando entrada real na Hyperliquid com AVNT/USDC:USDC...")
+        exchange = ccxt.hyperliquid({
+            'privateKey': '0xa524295ceec3e792d9aaa18b026dbc9ca74af350117631235ec62dcbe24bc405',
+            'walletAddress': '0x08183aa09eF03Cf8475D909F507606F5044cBdAB',
+            'subaccount': '0x5ff0f14d577166f9ede3d9568a423166be61ea9d',
+            'enableRateLimit': True,
+            'options': {
+                'defaultSlippage': 0.01  # 1% slippage apertado
+            }
+        })
+        symbol = 'AVNT/USDC:USDC'
+        markets = exchange.load_markets()
+        ticker = exchange.fetch_ticker(symbol)
+        preco = ticker['last']
+        print(f'[TESTE] Preço atual de {symbol}:', preco)
+        leverage = 5
+        valor_minimo = 10.10
+        contract_size = markets[symbol]['contractSize'] if 'contractSize' in markets[symbol] else 1.0
+        quantidade = round(valor_minimo / (preco * contract_size), 3)
+        valor_total = quantidade * preco * contract_size
+        print(f'[TESTE] Quantidade calculada: {quantidade} | Valor total: ${valor_total:.2f} | Preço: {preco} | ContractSize: {contract_size}')
+        try:
+            order = exchange.create_order(
+                symbol, 'market', 'buy', quantidade, preco,
+                params={"leverage": leverage}
+            )
+            print('[TESTE] Ordem criada:', order)
+        except Exception as e:
+            print('[TESTE] Erro ao criar ordem:', e)
+    else:
+        main()
