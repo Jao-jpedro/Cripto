@@ -1,0 +1,61 @@
+/Users/joaoreis/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+[2025-10-31 13:48:14] [INFO] [DEX] 🔧 Mock DEX aplicado - ccxt.hyperliquid agora disponível
+🚀 SISTEMA DE TRADING SIMPLIFICADO - SimpleRatioStrategy
+📊 Assets: PUMPUSDT, AVNTUSDT (dados) → PUMP/USDC:USDC, AVNT/USDC:USDC (trading)
+💰 Trade size: $3 USD, Leverage: 10x, Stop: 20%
+⚡ Estratégia: Entradas/saídas por inversão de ratio avg_buy/sell
+🔄 Execução contínua a cada 30 segundos
+
+🔧 CONFIGURAÇÃO DE AMBIENTE:
+   📋 Wallet Address: ✅ Configurado
+   🔐 Private Key: ✅ Configurado
+   🏦 Subaccount: ✅ 0x5ff0f14d577166f9ede3d9568a423166be61ea9d
+
+[2025-10-31 13:48:14] [INFO] [DEX] 🔐 Credenciais configuradas: 0x08183aa0...
+[2025-10-31 13:48:18] [INFO] [DEX] ✅ Mock DEX conectado à Binance para dados reais
+[2025-10-31 13:48:18] [INFO] [DEX] 🏦 Vault configurado: 0x5ff0f14d577166f9ede3d9568a423166be61ea9d
+[2025-10-31 13:48:18] [INFO] [DEX] 📋 Subaccount configurado: 0x5ff0f14d577166f9ede3d9568a423166be61ea9d
+🏦 Usando carteira: Subconta Trading (ENV)
+
+
+🔄 CICLO #1 - 2025-10-31 13:48:18
+🔍 Processando PUMPUSDT...
+    📊 Buscando dados de PUMPUSDT...
+[2025-10-31 13:48:18] [INFO] [DATA] Iniciando build_df symbol=PUMPUSDT tf=15m alvo=100
+[2025-10-31 13:48:20] [INFO] [DATA] Total candles retornados: 100
+    ✅ Dados obtidos em 2.80s (100 candles)
+    🎯 Criando estratégia para PUMPUSDT...
+    ✅ Estratégia criada e armazenada no cache
+    🚀 Executando step...
+[DEBUG] [PUMPUSDT] Trigger snapshot | close=0.004330 ema7=0.004373 ema21=0.004391 atr=0.000073 atr%=1.688 vol=46355144.00 vol_ma=187826938.07 grad%_ema7=-0.3285
+[DEBUG] [PUMPUSDT] Volume data | current_k_atr=59.257 | trades_now=46355144 avg_30c=187826938 ratio=0.25x
+[DEBUG] [PUMPUSDT] Buy/Sell | buy_vol=25318687 buy_avg30=91084401 buy_ratio=0.28x | sell_vol=21036457 sell_avg30=96742537 sell_ratio=0.22x | buy/sell=1.20 avg_buy/sell=0.94
+[2025-10-31 13:48:20] [DEBUG] [STRATEGY] [PUMPUSDT] 📊 Ratio avg_buy/sell: 0.942
+[2025-10-31 13:48:20] [INFO] [DEX] 🔐 Credenciais configuradas: 0x08183aa0...
+[2025-10-31 13:48:23] [INFO] [DEX] ✅ Mock DEX conectado à Binance para dados reais
+[2025-10-31 13:48:23] [INFO] [DEX] 🏦 Vault configurado: 0x5ff0f14d577166f9ede3d9568a423166be61ea9d
+[2025-10-31 13:48:23] [INFO] [DEX] 📋 Subaccount configurado: 0x5ff0f14d577166f9ede3d9568a423166be61ea9d
+[2025-10-31 13:48:23] [DEBUG] [STRATEGY] [PUMPUSDT] 🔍 SEM POSIÇÃO: Verificando sinais de entrada
+[2025-10-31 13:48:23] [DEBUG] [STRATEGY] [PUMPUSDT] 🔍 NENHUM SINAL: Aguardando cruzamento (ratio atual: 0.942)
+[2025-10-31 13:48:23] [DEBUG] [STRATEGY] [PUMPUSDT] 📈 Histórico ratios (últimos 1): 0.942
+    ✅ Step executado em 3.07s
+🔍 Processando AVNTUSDT...
+    📊 Buscando dados de AVNTUSDT...
+[2025-10-31 13:48:23] [INFO] [DATA] Iniciando build_df symbol=AVNTUSDT tf=15m alvo=100
+[2025-10-31 13:48:27] [INFO] [DATA] Total candles retornados: 100
+    ✅ Dados obtidos em 3.88s (100 candles)
+    🎯 Criando estratégia para AVNTUSDT...
+    ✅ Estratégia criada e armazenada no cache
+    🚀 Executando step...
+[DEBUG] [AVNTUSDT] Trigger snapshot | close=0.649400 ema7=0.657555 ema21=0.660507 atr=0.010207 atr%=1.572 vol=44157.80 vol_ma=421736.11 grad%_ema7=-0.4117
+[DEBUG] [AVNTUSDT] Volume data | current_k_atr=63.622 | trades_now=44158 avg_30c=421736 ratio=0.10x
+[DEBUG] [AVNTUSDT] Buy/Sell | buy_vol=21943 buy_avg30=224594 buy_ratio=0.10x | sell_vol=22215 sell_avg30=197142 sell_ratio=0.11x | buy/sell=0.99 avg_buy/sell=1.14
+[2025-10-31 13:48:27] [DEBUG] [STRATEGY] [AVNTUSDT] 📊 Ratio avg_buy/sell: 1.139
+[2025-10-31 13:48:27] [INFO] [DEX] 🔐 Credenciais configuradas: 0x08183aa0...
+[2025-10-31 13:48:30] [INFO] [DEX] ✅ Mock DEX conectado à Binance para dados reais
+[2025-10-31 13:48:30] [INFO] [DEX] 🏦 Vault configurado: 0x5ff0f14d577166f9ede3d9568a423166be61ea9d
+[2025-10-31 13:48:30] [INFO] [DEX] 📋 Subaccount configurado: 0x5ff0f14d577166f9ede3d9568a423166be61ea9d
+[2025-10-31 13:48:30] [DEBUG] [STRATEGY] [AVNTUSDT] 🔍 SEM POSIÇÃO: Verificando sinais de entrada
+[2025-10-31 13:48:30] [DEBUG] [STRATEGY] [AVNTUSDT] 🔍 NENHUM SINAL: Aguardando cruzamento (ratio atual: 1.139)
+[2025-10-31 13:48:30] [DEBUG] [STRATEGY] [AVNTUSDT] 📈 Histórico ratios (últimos 1): 1.139

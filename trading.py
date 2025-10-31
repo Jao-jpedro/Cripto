@@ -27,102 +27,7 @@ import requests
 def _log_global(channel: str, message: str, level: str = "INFO"):
     """Sistema de log global simplificado"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_line = f"[{timestamp}] [{level}] [{channel}] {message}"
-    print(log_line, flush=True)
-    
-    # Força flush do sistema para garantir saída imediata
-    sys.stdout.flush()
-    sys.stderr.flush()
-
-# ===== MOCK HYPERLIQUID DEX =====
-class MockHyperliquidDEX:
-    """Mock DEX para contornar problema ccxt.hyperliquid não disponível"""
-    
-    def __init__(self, config=None, **kwargs):
-        # Aceitar tanto config dict quanto kwargs individuais
-        if config:
-            self.walletAddress = config.get('walletAddress', 'mock_wallet')
-            self.privateKey = config.get('privateKey', 'mock_key')
-            self.timeout = config.get('timeout', 5000)
-            self.options = config.get('options', {})
-        else:
-            self.walletAddress = kwargs.get('walletAddress', 'mock_wallet')
-            self.privateKey = kwargs.get('privateKey', 'mock_key')
-            self.timeout = kwargs.get('timeout', 5000)
-            self.options = kwargs.get('options', {})
-        
-        # Conectar à Binance para dados REAIS de mercado
-        try:
-            self.binance = ccxt.binance({
-                'apiKey': '',
-                'secret': '',
-                'enableRateLimit': True,
-                'sandbox': False
-            })
-            self.binance.load_markets()
-            _log_global("DEX", "✅ Mock DEX conectado à Binance para dados reais", "INFO")
-        except Exception as e:
-            _log_global("DEX", f"❌ Erro conectando Binance no Mock DEX: {e}", "ERROR")
-        
-    def fetch_balance(self):
-        """Retorna balance mock"""
-        return {"USDC": {"free": 1000.0, "used": 0.0, "total": 1000.0}}
-        
-    def fetch_ticker(self, symbol):
-        """Busca ticker real da Binance"""
-        try:
-            # Converter símbolo para Binance
-            if symbol.endswith('/USDC:USDC'):
-                base = symbol.split('/')[0]
-                binance_symbol = f"{base}USDT"
-            else:
-                binance_symbol = symbol
-                
-            ticker = self.binance.fetch_ticker(binance_symbol)
-            return ticker
-        except Exception as e:
-            _log_global("DEX", f"Erro buscando ticker {symbol}: {e}", "WARN")
-            return {"last": 1.0, "bid": 0.999, "ask": 1.001}
-    
-    def fetch_positions(self, symbols=None, params=None):
-        """Retorna posições mock vazias"""
-        # symbols pode ser uma lista ou None
-        if symbols is None:
-            return []
-        elif isinstance(symbols, list):
-            return []
-        else:
-            # symbols pode ser passado como string único
-            return []
-    
-    def create_order(self, symbol, type_, side, amount, price=None, params=None):
-        """Mock de criação de ordem"""
-        live_trading = os.getenv('LIVE_TRADING', '0') == '1'
-        
-        if live_trading:
-            _log_global("DEX", f"⚠️ LIVE TRADING: Ordem real seria criada - {side} {amount} {symbol}", "WARN")
-            # TODO: Implementar criação real de ordem quando necessário
-        else:
-            _log_global("DEX", f"📝 MOCK ORDER: {side} {amount} {symbol} @ {price}", "INFO")
-            
-        return {
-            "id": f"mock_{int(time.time())}",
-            "symbol": symbol,
-            "side": side,
-            "amount": amount,
-            "price": price,
-            "status": "filled"
-        }
-    
-    def set_leverage(self, leverage, symbol, params=None):
-        """Mock de configuração de leverage"""
-        _log_global("DEX", f"📊 MOCK LEVERAGE: {leverage}x para {symbol}", "DEBUG")
-        return True
-
-# Monkey patch para ccxt se hyperliquid não estiver disponível  
-if not hasattr(ccxt, 'hyperliquid'):
-    ccxt.hyperliquid = MockHyperliquidDEX
-    _log_global("DEX", "🔧 Mock DEX aplicado - ccxt.hyperliquid agora disponível", "INFO")
+    print(f"[{timestamp}] [{level}] [{channel}] {message}", flush=True)
 
 # ===== NOTIFICAÇÕES DISCORD =====
 class DiscordNotifier:
@@ -431,12 +336,8 @@ class TradingMonitor:
         if not indicators:
             return
         
-        # Quebrar em linhas menores para evitar truncamento no terminal
-        symbol = indicators['symbol']
-        
-        # Linha 1: Dados básicos de preço e indicadores
-        line1 = (
-            f"[DEBUG] [{symbol}] Trigger snapshot | "
+        snapshot = (
+            f"[DEBUG] [{indicators['symbol']}] Trigger snapshot | "
             f"close={indicators['close']:.6f} "
             f"ema7={indicators['ema7']:.6f} "
             f"ema21={indicators['ema21']:.6f} "
@@ -444,21 +345,11 @@ class TradingMonitor:
             f"atr%={indicators['atr_pct']:.3f} "
             f"vol={indicators['volume']:.2f} "
             f"vol_ma={indicators['vol_ma']:.2f} "
-            f"grad%_ema7={indicators['grad_ema7']:.4f}"
-        )
-        
-        # Linha 2: Dados de volume e ratios
-        line2 = (
-            f"[DEBUG] [{symbol}] Volume data | "
+            f"grad%_ema7={indicators['grad_ema7']:.4f} | "
             f"current_k_atr={indicators['k_atr']:.3f} | "
             f"trades_now={indicators['trades_now']:.0f} "
             f"avg_30c={indicators['avg_30c']:.0f} "
-            f"ratio={indicators['vol_ratio']:.2f}x"
-        )
-        
-        # Linha 3: Detalhes de compra e venda
-        line3 = (
-            f"[DEBUG] [{symbol}] Buy/Sell | "
+            f"ratio={indicators['vol_ratio']:.2f}x | "
             f"buy_vol={indicators['buy_vol']:.0f} "
             f"buy_avg30={indicators['buy_avg30']:.0f} "
             f"buy_ratio={indicators['buy_ratio']:.2f}x | "
@@ -469,13 +360,7 @@ class TradingMonitor:
             f"avg_buy/sell={indicators['avg_buy_sell_ratio']:.2f}"
         )
         
-        # Imprimir as três linhas com flush forçado
-        print(line1, flush=True)
-        sys.stdout.flush()
-        print(line2, flush=True)
-        sys.stdout.flush()
-        print(line3, flush=True)
-        sys.stdout.flush()
+        print(snapshot, flush=True)
 
 # Instância global do monitor
 trading_monitor = TradingMonitor()
@@ -617,7 +502,7 @@ class RealDataDex:
         """Busca ticker do símbolo"""
         return self.exchange.fetch_ticker(symbol)
     
-    def fetch_positions(self, symbols: List[str] = None, params: dict = None):
+    def fetch_positions(self, symbols: List[str] = None):
         """Busca posições abertas"""
         # Para Hyperliquid, usar parâmetros específicos se disponível
         wallet_address = os.getenv("WALLET_ADDRESS")
@@ -776,23 +661,26 @@ class SimpleRatioStrategy:
             if current_ratio is None or current_ratio <= 0:
                 return
             
-            # 3. Debug: mostrar ratio atual
+            # 3. Atualizar histórico de ratios
+            self._update_ratio_history(current_ratio)
+            
+            # 4. Debug: mostrar ratio atual e histórico
             self._log(f"📊 Ratio avg_buy/sell: {current_ratio:.3f}", level="DEBUG")
             
-            # 4. Verificar se já temos posição aberta
+            # Debug adicional: mostrar os últimos ratios no histórico
+            if len(self._ratio_history) >= 2:
+                recent_ratios = self._ratio_history[-3:] if len(self._ratio_history) >= 3 else self._ratio_history
+                self._log(f"📈 Histórico ratios: {[f'{r:.3f}' for r in recent_ratios]}", level="DEBUG")
+            
+            # 5. Verificar se já temos posição aberta
             pos = self._posicao_aberta()
             
-            # Debug detalhado da verificação de posição
             if pos:
-                pos_size = pos.get('contracts', 0)
-                pos_side = pos.get('side', 'unknown')
-                self._log(f"🔍 POSIÇÃO DETECTADA: side={pos_side}, size={pos_size}", level="DEBUG")
                 # Temos posição: verificar condições de saída
                 current_pos_side = self._norm_side(pos.get("side"))
                 self._check_exit_conditions(pos, current_pos_side, current_ratio, df)
             else:
-                self._log(f"🔍 SEM POSIÇÃO: Verificando sinais de entrada", level="DEBUG")
-                # Sem posição: verificar entrada ANTES de atualizar histórico
+                # Sem posição: verificar entrada
                 # Entrada LONG: ratio cruza de <1.0 para >1.0
                 if self._detect_ratio_cross(current_ratio, direction="up"):
                     self._log(f"🔵 SINAL LONG: Ratio cruzou para cima {current_ratio:.3f}", level="INFO")
@@ -802,24 +690,6 @@ class SimpleRatioStrategy:
                 elif self._detect_ratio_cross(current_ratio, direction="down"):
                     self._log(f"🔴 SINAL SHORT: Ratio cruzou para baixo {current_ratio:.3f}", level="INFO")
                     self._enter_position("sell", self.cfg.TRADE_SIZE_USD, df)
-                else:
-                    self._log(f"🔍 NENHUM SINAL: Aguardando cruzamento (ratio atual: {current_ratio:.3f})", level="DEBUG")
-            
-            # 5. APÓS verificar sinais, atualizar histórico para próximo ciclo
-            self._update_ratio_history(current_ratio)
-            
-            # Debug: mostrar histórico atualizado
-            if len(self._ratio_history) >= 1:
-                recent_ratios = self._ratio_history[-5:] if len(self._ratio_history) >= 5 else self._ratio_history
-                history_str = " → ".join([f'{r:.3f}' for r in recent_ratios])
-                self._log(f"📈 Histórico ratios (últimos {len(recent_ratios)}): {history_str}", level="DEBUG")
-                
-                # Se temos pelo menos 2 valores, mostrar a comparação
-                if len(self._ratio_history) >= 2:
-                    prev = self._ratio_history[-2]
-                    curr = current_ratio
-                    change = "↗️" if curr > prev else "↘️" if curr < prev else "➡️"
-                    self._log(f"🔄 Mudança: {prev:.3f} → {curr:.3f} {change}", level="DEBUG")
             
         except Exception as e:
             self._log(f"Erro na função step: {type(e).__name__}: {e}", level="ERROR")
@@ -884,26 +754,27 @@ class SimpleRatioStrategy:
             
     def _detect_ratio_cross(self, current_ratio: float, direction: str) -> bool:
         """Detecta se houve cruzamento do ratio na direção especificada"""
-        if len(self._ratio_history) < 1:
+        if len(self._ratio_history) < 2:
             return False
             
-        # Usar o valor atual passado como parâmetro e o anterior do histórico
-        previous_ratio = self._ratio_history[-1]  # O último valor do histórico é o anterior
+        # Pegar o penúltimo e último valor do histórico
+        previous_ratio = self._ratio_history[-2]
+        last_ratio = self._ratio_history[-1]
         
         # Debug detalhado
-        self._log(f"🔍 Debug Cross: previous={previous_ratio:.3f}, current={current_ratio:.3f}, direction={direction}", level="DEBUG")
+        self._log(f"🔍 Debug Cross: previous={previous_ratio:.3f}, current={last_ratio:.3f}, direction={direction}", level="DEBUG")
         
         if direction == "up":
-            # Cruzamento para cima: anterior <1.0 e atual >=1.0 (incluindo igualdade)
-            cross_detected = previous_ratio < 1.0 and current_ratio >= 1.0
+            # Cruzamento para cima: anterior <1.0 e atual >1.0
+            cross_detected = previous_ratio < 1.0 and last_ratio > 1.0
             if cross_detected:
-                self._log(f"✅ CROSS UP detectado: {previous_ratio:.3f} → {current_ratio:.3f}", level="INFO")
+                self._log(f"✅ CROSS UP detectado: {previous_ratio:.3f} → {last_ratio:.3f}", level="INFO")
             return cross_detected
         elif direction == "down":
-            # Cruzamento para baixo: anterior >=1.0 e atual <1.0 (incluindo igualdade na origem)
-            cross_detected = previous_ratio >= 1.0 and current_ratio < 1.0
+            # Cruzamento para baixo: anterior >1.0 e atual <1.0
+            cross_detected = previous_ratio > 1.0 and last_ratio < 1.0
             if cross_detected:
-                self._log(f"✅ CROSS DOWN detectado: {previous_ratio:.3f} → {current_ratio:.3f}", level="INFO")
+                self._log(f"✅ CROSS DOWN detectado: {previous_ratio:.3f} → {last_ratio:.3f}", level="INFO")
             return cross_detected
         else:
             return False
@@ -1241,9 +1112,6 @@ def main():
     
     cycle_count = 0
     
-    # Cache de estratégias para manter histórico entre ciclos
-    strategies_cache = {}
-    
     # Loop contínuo
     while True:
         try:
@@ -1262,15 +1130,10 @@ def main():
                     data_time = time.time() - start_time
                     print(f"    ✅ Dados obtidos em {data_time:.2f}s ({len(df)} candles)")
                     
-                    # Usar estratégia cached ou criar nova
-                    if symbol not in strategies_cache:
-                        print(f"    🎯 Criando estratégia para {symbol}...")
-                        strategy = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
-                        strategies_cache[symbol] = strategy
-                        print(f"    ✅ Estratégia criada e armazenada no cache")
-                    else:
-                        strategy = strategies_cache[symbol]
-                        print(f"    🔄 Usando estratégia existente (histórico preservado)")
+                    # Criar estratégia
+                    print(f"    🎯 Criando estratégia para {symbol}...")
+                    strategy = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
+                    print(f"    ✅ Estratégia criada")
                     
                     # Executar step
                     print(f"    🚀 Executando step...")
