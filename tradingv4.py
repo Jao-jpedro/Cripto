@@ -1003,38 +1003,70 @@ class TradingLearner:
         self._setup_database()
         
     def _setup_database(self):
-        """Inicializa banco SQLite com WAL mode e schema"""
+        """Inicializa banco SQLite com WAL mode e schema - RENDER COMPATIBLE"""
         try:
-            # Criar diretório se não existir
-            db_dir = Path(self.db_path).parent
-            db_dir.mkdir(parents=True, exist_ok=True)
+            # RENDER FIX: Tentar múltiplos caminhos seguros
+            possible_paths = [
+                self.db_path,                    # Caminho original
+                f"/tmp/{Path(self.db_path).name}",  # /tmp sempre existe
+                f"./data/{Path(self.db_path).name}",  # Diretório local
+                f"./{Path(self.db_path).name}"      # Raiz do projeto
+            ]
             
-            self.conn = sqlite3.connect(
-                self.db_path,
-                check_same_thread=False,
-                timeout=10.0
-            )
+            success = False
+            for path in possible_paths:
+                try:
+                    # Criar diretório se necessário
+                    db_dir = Path(path).parent
+                    if not db_dir.exists():
+                        db_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Testar criação do banco
+                    test_conn = sqlite3.connect(
+                        path,
+                        check_same_thread=False,
+                        timeout=15.0  # Timeout maior para Render
+                    )
+                    
+                    # Testar escrita básica
+                    test_conn.execute("CREATE TABLE IF NOT EXISTS test_table (id INTEGER)")
+                    test_conn.execute("INSERT OR IGNORE INTO test_table (id) VALUES (1)")
+                    test_conn.commit()
+                    
+                    # Se chegou aqui, o caminho funciona
+                    self.conn = test_conn
+                    self.db_path = path  # Atualizar para o caminho que funcionou
+                    success = True
+                    
+                    _log_global("LEARNER", f"✅ RENDER: Database OK at {path}", "INFO")
+                    break
+                    
+                except Exception as e:
+                    if test_conn:
+                        test_conn.close()
+                    _log_global("LEARNER", f"⚠️ RENDER: Path {path} failed: {e}", "DEBUG")
+                    continue
             
-            # Configurar WAL mode e otimizações
-            self.conn.execute("PRAGMA journal_mode=WAL")
+            if not success:
+                # Fallback extremo: banco em memória (dados perdidos no restart)
+                _log_global("LEARNER", "🔥 RENDER: Usando banco em memória - dados temporários!", "WARN")
+                self.conn = sqlite3.connect(":memory:", check_same_thread=False)
+                self.db_path = ":memory:"
+            
+            # Configurar otimizações para Render
+            self.conn.execute("PRAGMA journal_mode=DELETE")  # Mais simples que WAL
             self.conn.execute("PRAGMA synchronous=NORMAL")
-            self.conn.execute("PRAGMA cache_size=-16000")  # 16MB cache
+            self.conn.execute("PRAGMA cache_size=-8000")  # Cache menor (8MB)
             self.conn.execute("PRAGMA foreign_keys=ON")
+            self.conn.execute("PRAGMA temp_store=MEMORY")  # Temporários em RAM
             
             # Criar tabelas
             self._create_tables()
             
-            _log_global("LEARNER", f"Database initialized at {self.db_path}", "INFO")
-            
         except Exception as e:
-            # Fallback para /tmp com warning
-            _log_global("LEARNER", f"Failed to create DB at {self.db_path}: {e}", "WARN")
-            fallback_path = "/tmp/hl_learn_fallback.db"
-            _log_global("LEARNER", f"Using fallback path: {fallback_path}", "WARN")
-            
-            self.conn = sqlite3.connect(fallback_path, check_same_thread=False)
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            self._create_tables()
+            # Último recurso: banco desabilitado
+            _log_global("LEARNER", f"❌ RENDER: Database DISABLED due to: {e}", "ERROR")
+            self.conn = None
             
     def _create_tables(self):
         """Cria schema do banco"""
@@ -1091,21 +1123,41 @@ class TradingLearner:
         
         self.conn.commit()
         
-    def _retry_db_operation(self, operation, *args, max_retries=3):
-        """Executa operação de BD com retry em caso de SQLITE_BUSY"""
+    def _retry_db_operation(self, operation, *args, max_retries=5):
+        """Executa operação de BD com retry robusto para RENDER"""
+        if self.conn is None:
+            _log_global("LEARNER", "⚠️ RENDER: Database disabled, skipping operation", "DEBUG")
+            return None
+            
         for attempt in range(max_retries):
             try:
-                return operation(*args)
+                with self.lock:  # Thread safety
+                    return operation(*args)
+                    
             except sqlite3.OperationalError as e:
-                if "database is locked" in str(e) and attempt < max_retries - 1:
-                    wait_time = 0.1 * (2 ** attempt)  # Exponential backoff
-                    time_module.sleep(wait_time)
-                    continue
-                raise
-            except Exception as e:
+                error_str = str(e).lower()
+                
+                if any(err in error_str for err in ["database is locked", "database is busy", "disk i/o error"]):
+                    if attempt < max_retries - 1:
+                        wait_time = 0.2 * (2 ** attempt)  # Backoff exponencial
+                        _log_global("LEARNER", f"🔄 RENDER: DB busy, retry {attempt+1}/{max_retries} in {wait_time:.1f}s", "DEBUG")
+                        time_module.sleep(wait_time)
+                        continue
+                
+                # Erro irrecuperável
+                _log_global("LEARNER", f"❌ RENDER: SQLite error (attempt {attempt+1}): {e}", "WARN")
                 if attempt == max_retries - 1:
-                    _log_global("LEARNER", f"DB operation failed after {max_retries} attempts: {e}", "ERROR")
-                raise
+                    _log_global("LEARNER", "🔥 RENDER: Disabling database due to persistent errors", "ERROR")
+                    self.conn = None  # Desabilitar banco
+                    return None
+                    
+            except Exception as e:
+                _log_global("LEARNER", f"❌ RENDER: Unexpected DB error: {e}", "ERROR")
+                if attempt == max_retries - 1:
+                    return None
+                time_module.sleep(0.1)
+                
+        return None
                 
     def get_current_brt_time(self):
         """Retorna datetime atual em BRT"""
@@ -1119,6 +1171,13 @@ class TradingLearner:
         try:
             current_time = self.get_current_brt_time()
             last_row = df.iloc[-1]
+            
+            # VALIDAR COLUNAS DISPONÍVEIS
+            required_cols = ['valor_fechamento', 'criptomoeda', 'data']
+            missing_required = [col for col in required_cols if col not in df.columns]
+            if missing_required:
+                _log_global("LEARNER", f"Colunas obrigatórias ausentes: {missing_required}", "WARN")
+                return {}
             
             # =================== SEÇÃO A: PREÇO & VOLATILIDADE ===================
             atr_series = df.get('atr', pd.Series())
@@ -1563,6 +1622,11 @@ class TradingLearner:
         Calcula P(stop) com backoff hierárquico.
         Retorna (p_stop, n_samples) ou (None, 0) se não encontrar dados suficientes
         """
+        # RENDER SAFETY: Se banco desabilitado, retornar probabilidade neutra
+        if self.conn is None:
+            _log_global("LEARNER", "⚠️ RENDER: Database disabled, returning neutral stop probability", "DEBUG")
+            return 0.5, 0  # Probabilidade neutra sem dados
+            
         try:
             # Tentar chave completa primeiro
             full_key = self.generate_profile_key(features_binned)
@@ -1692,6 +1756,18 @@ class TradingLearner:
         Retorna contexto para usar no fechamento.
         """
         try:
+            # RENDER SAFETY: Se banco desabilitado, retornar contexto mínimo
+            if self.conn is None:
+                _log_global("LEARNER", "⚠️ RENDER: Database disabled, using minimal context", "DEBUG")
+                return {
+                    "event_id": f"mem_{symbol}_{side}_{int(time_module.time())}",
+                    "symbol": symbol,
+                    "side": side,
+                    "entry_price": price,
+                    "timestamp": time_module.time(),
+                    "database_available": False
+                }
+            
             # Extrair features
             features_raw = self.extract_features_raw(symbol, side, df, price)
             features_binned = self.bin_features(features_raw)
@@ -1759,6 +1835,11 @@ class TradingLearner:
         
         if not context:
             _log_global("LEARNER", "🔍 DEBUG: context vazio, retornando", "INFO")
+            return
+            
+        # RENDER SAFETY: Se banco desabilitado ou context indica isso
+        if self.conn is None or context.get("database_available") is False:
+            _log_global("LEARNER", "⚠️ RENDER: Database disabled, skipping close recording", "DEBUG")
             return
             
         try:
@@ -1843,6 +1924,11 @@ class TradingLearner:
             
     def _update_stats(self, features_binned: dict, is_stop: bool):
         """Atualiza estatísticas para diferentes níveis de granularidade"""
+        # RENDER SAFETY: Se banco desabilitado, apenas logar
+        if self.conn is None:
+            _log_global("LEARNER", "⚠️ RENDER: Database disabled, skipping stats update", "DEBUG")
+            return
+            
         try:
             _log_global("LEARNER", f"🔍 DEBUG UPDATE_STATS: is_stop={is_stop}, features={len(features_binned)} fields", "INFO")
             
@@ -1977,6 +2063,21 @@ class TradingLearner:
             
     def _generate_report_data(self) -> dict:
         """Gera dados do relatório watchlist"""
+        # RENDER SAFETY: Se banco desabilitado, retornar dados básicos
+        if self.conn is None:
+            _log_global("LEARNER", "⚠️ RENDER: Database disabled, returning basic report", "DEBUG")
+            return {
+                "report_type": "basic",
+                "problematic_profiles": [],
+                "reliable_profiles": [],
+                "recent_activity": {
+                    "total_closes": 0,
+                    "stop_closes": 0,
+                    "stop_rate": 0.0
+                },
+                "database_status": "disabled"
+            }
+            
         try:
             cursor = self.conn.cursor()
             
@@ -2240,6 +2341,17 @@ class TradingLearner:
         Returns:
             Dict com estatísticas do banco de dados
         """
+        # RENDER SAFETY: Se banco desabilitado, retornar estatísticas vazias
+        if self.conn is None:
+            _log_global("LEARNER", "⚠️ RENDER: Database disabled, returning empty summary", "DEBUG")
+            return {
+                "total_entries": 0,
+                "reliable_entries": 0,
+                "reliability_rate": 0.0,
+                "patterns_by_level": {},
+                "database_status": "disabled"
+            }
+            
         try:
             def _get_summary():
                 cursor = self.conn.cursor()
@@ -5127,8 +5239,8 @@ class EMAGradientStrategy:
         _time_mod.sleep(1)
         
         # Função auxiliar para verificar se posição realmente existe
-        def _verificar_posicao_ativa(wallet_dex, timeout_secs=5):
-            """Verifica se há posição ativa na carteira, com retry"""
+        def _verificar_posicao_ativa(wallet_dex, timeout_secs=8):
+            """Verifica se há posição ativa na carteira, com retry estendido"""
             import time as tm
             start_time = tm.time()
             
@@ -5140,11 +5252,20 @@ class EMAGradientStrategy:
                             size = abs(float(pos.get('contracts', 0)))
                             side_pos = pos.get('side')
                             if size > 0 and side_pos:
+                                self._log(f"[DEBUG_POS] Posição encontrada: {side_pos} {size:.6f}", level="DEBUG")
                                 return True, size, side_pos
-                    tm.sleep(0.5)  # Aguardar 500ms antes de tentar novamente
-                except Exception:
-                    tm.sleep(0.5)
+                    
+                    # Log de progresso a cada 2 segundos
+                    elapsed = tm.time() - start_time
+                    if elapsed >= 2 and elapsed % 2 < 0.5:
+                        self._log(f"[DEBUG_POS] Aguardando posição... ({elapsed:.1f}s)", level="DEBUG")
+                    
+                    tm.sleep(0.8)  # Aguardar 800ms antes de tentar novamente
+                except Exception as e:
+                    self._log(f"[DEBUG_POS] Erro verificando posição: {e}", level="DEBUG")
+                    tm.sleep(0.8)
             
+            self._log(f"[DEBUG_POS] Timeout após {timeout_secs}s - posição não encontrada", level="WARN")
             return False, 0.0, None
         
         # Criar stops para cada carteira
@@ -5155,10 +5276,10 @@ class EMAGradientStrategy:
                 wallet_amount = order_info["amount"]
                 
                 # CORREÇÃO: Verificar se posição realmente existe antes de criar proteções
-                has_position, pos_size, pos_side = _verificar_posicao_ativa(wallet_dex, timeout_secs=3)
+                has_position, pos_size, pos_side = _verificar_posicao_ativa(wallet_dex, timeout_secs=6)
                 
                 if not has_position:
-                    self._log(f"[{wallet_name}] ⚠️ POSIÇÃO NÃO ENCONTRADA após 3s - Pulando proteções (posição pode ter fechado rapidamente)", level="WARN")
+                    self._log(f"[{wallet_name}] ⚠️ POSIÇÃO NÃO ENCONTRADA após 6s - Pulando proteções (posição pode ter fechado rapidamente)", level="WARN")
                     continue
                 
                 self._log(f"[{wallet_name}] ✅ POSIÇÃO CONFIRMADA: {pos_side} {pos_size:.6f} - Criando proteções", level="DEBUG")

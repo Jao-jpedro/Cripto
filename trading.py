@@ -27,7 +27,12 @@ import requests
 def _log_global(channel: str, message: str, level: str = "INFO"):
     """Sistema de log global simplificado"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] [{level}] [{channel}] {message}", flush=True)
+    log_line = f"[{timestamp}] [{level}] [{channel}] {message}"
+    print(log_line, flush=True)
+    
+    # Força flush do sistema para garantir saída imediata
+    sys.stdout.flush()
+    sys.stderr.flush()
 
 # ===== NOTIFICAÇÕES DISCORD =====
 class DiscordNotifier:
@@ -336,8 +341,12 @@ class TradingMonitor:
         if not indicators:
             return
         
-        snapshot = (
-            f"[DEBUG] [{indicators['symbol']}] Trigger snapshot | "
+        # Quebrar em linhas menores para evitar truncamento no terminal
+        symbol = indicators['symbol']
+        
+        # Linha 1: Dados básicos de preço e indicadores
+        line1 = (
+            f"[DEBUG] [{symbol}] Trigger snapshot | "
             f"close={indicators['close']:.6f} "
             f"ema7={indicators['ema7']:.6f} "
             f"ema21={indicators['ema21']:.6f} "
@@ -345,11 +354,21 @@ class TradingMonitor:
             f"atr%={indicators['atr_pct']:.3f} "
             f"vol={indicators['volume']:.2f} "
             f"vol_ma={indicators['vol_ma']:.2f} "
-            f"grad%_ema7={indicators['grad_ema7']:.4f} | "
+            f"grad%_ema7={indicators['grad_ema7']:.4f}"
+        )
+        
+        # Linha 2: Dados de volume e ratios
+        line2 = (
+            f"[DEBUG] [{symbol}] Volume data | "
             f"current_k_atr={indicators['k_atr']:.3f} | "
             f"trades_now={indicators['trades_now']:.0f} "
             f"avg_30c={indicators['avg_30c']:.0f} "
-            f"ratio={indicators['vol_ratio']:.2f}x | "
+            f"ratio={indicators['vol_ratio']:.2f}x"
+        )
+        
+        # Linha 3: Detalhes de compra e venda
+        line3 = (
+            f"[DEBUG] [{symbol}] Buy/Sell | "
             f"buy_vol={indicators['buy_vol']:.0f} "
             f"buy_avg30={indicators['buy_avg30']:.0f} "
             f"buy_ratio={indicators['buy_ratio']:.2f}x | "
@@ -360,7 +379,13 @@ class TradingMonitor:
             f"avg_buy/sell={indicators['avg_buy_sell_ratio']:.2f}"
         )
         
-        print(snapshot, flush=True)
+        # Imprimir as três linhas com flush forçado
+        print(line1, flush=True)
+        sys.stdout.flush()
+        print(line2, flush=True)
+        sys.stdout.flush()
+        print(line3, flush=True)
+        sys.stdout.flush()
 
 # Instância global do monitor
 trading_monitor = TradingMonitor()
