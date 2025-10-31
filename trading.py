@@ -1250,12 +1250,15 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--testar-entrada-hyperliquid":
         import ccxt
         print("[TESTE] Simulando entrada real na Hyperliquid com AVNT/USDC:USDC...")
+        WALLET_ADDRESS = '0x08183aa09eF03Cf8475D909F507606F5044cBdAB'
+    HYPERLIQUID_SUBACCOUNT = '0x5ff0f14d577166f9ede3d9568a423166be61ea9d'
         exchange = ccxt.hyperliquid({
             'privateKey': '0xa524295ceec3e792d9aaa18b026dbc9ca74af350117631235ec62dcbe24bc405',
-            'walletAddress': '0x08183aa09eF03Cf8475D909F507606F5044cBdAB',
-            'subaccount': '0x5ff0f14d577166f9ede3d9568a423166be61ea9d',
+            'walletAddress': WALLET_ADDRESS,  # Vault = WALLET_ADDRESS
+            'subaccount': HYPERLIQUID_SUBACCOUNT, # Subconta correta
             'enableRateLimit': True,
             'options': {
+                'vaultAddress': WALLET_ADDRESS, # Garantir que vault é igual ao WALLET_ADDRESS
                 'defaultSlippage': 0.01  # 1% slippage apertado
             }
         })
