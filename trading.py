@@ -557,8 +557,19 @@ class TradeLogger:
 class SimpleRatioConfig:
     """Configuração simples para estratégia baseada em avg_buy/sell ratio"""
     
-    # Assets permitidos (apenas PUMP e AVNT para testes)
-    ASSETS: List[str] = ["PUMP/USDT", "AVNT/USDT"]
+    # Assets permitidos (símbolos corretos da Binance para dados históricos)
+    ASSETS: List[str] = ["PUMPUSDT", "AVNTUSDT"]
+    
+    # Mapeamento de símbolos: Binance (dados) -> Hyperliquid (trading)
+    SYMBOL_MAPPING = {
+        "PUMPUSDT": "PUMP/USDC:USDC",  # Binance -> Hyperliquid
+        "AVNTUSDT": "AVNT/USDC:USDC"   # Binance -> Hyperliquid
+    }
+    
+    @classmethod
+    def get_trading_symbol(cls, data_symbol: str) -> str:
+        """Converte símbolo de dados para símbolo de trading"""
+        return cls.SYMBOL_MAPPING.get(data_symbol, data_symbol)
     
     # Execução
     LEVERAGE: int           = 10          # Leverage moderado
@@ -591,7 +602,8 @@ class SimpleRatioStrategy:
     
     def __init__(self, dex, symbol: str, cfg: SimpleRatioConfig = SimpleRatioConfig(), logger: "TradeLogger" = None, debug: bool = True, wallet_config: WalletConfig = None):
         self.dex = dex
-        self.symbol = symbol
+        self.symbol = symbol  # Símbolo para dados (Binance)
+        self.trading_symbol = cfg.get_trading_symbol(symbol)  # Símbolo para trading (Hyperliquid)
         self.cfg = cfg
         self.logger = logger
         self.debug = debug
@@ -641,16 +653,24 @@ class SimpleRatioStrategy:
             if indicators:
                 trading_monitor.print_snapshot(indicators)
             
-            # 2. Calcular ratio avg_buy/sell atual
-            current_ratio = self._calculate_avg_buy_sell_ratio(df)
-            if current_ratio is None:
+            # 2. Usar o ratio avg_buy/sell calculado pelo TechnicalIndicators
+            if not indicators or 'avg_buy_sell_ratio' not in indicators:
+                return
+                
+            current_ratio = indicators['avg_buy_sell_ratio']
+            if current_ratio is None or current_ratio <= 0:
                 return
             
             # 3. Atualizar histórico de ratios
             self._update_ratio_history(current_ratio)
             
-            # 4. Debug: mostrar ratio atual
+            # 4. Debug: mostrar ratio atual e histórico
             self._log(f"📊 Ratio avg_buy/sell: {current_ratio:.3f}", level="DEBUG")
+            
+            # Debug adicional: mostrar os últimos ratios no histórico
+            if len(self._ratio_history) >= 2:
+                recent_ratios = self._ratio_history[-3:] if len(self._ratio_history) >= 3 else self._ratio_history
+                self._log(f"📈 Histórico ratios: {[f'{r:.3f}' for r in recent_ratios]}", level="DEBUG")
             
             # 5. Verificar se já temos posição aberta
             pos = self._posicao_aberta()
@@ -741,12 +761,21 @@ class SimpleRatioStrategy:
         previous_ratio = self._ratio_history[-2]
         last_ratio = self._ratio_history[-1]
         
+        # Debug detalhado
+        self._log(f"🔍 Debug Cross: previous={previous_ratio:.3f}, current={last_ratio:.3f}, direction={direction}", level="DEBUG")
+        
         if direction == "up":
             # Cruzamento para cima: anterior <1.0 e atual >1.0
-            return previous_ratio < 1.0 and last_ratio > 1.0
+            cross_detected = previous_ratio < 1.0 and last_ratio > 1.0
+            if cross_detected:
+                self._log(f"✅ CROSS UP detectado: {previous_ratio:.3f} → {last_ratio:.3f}", level="INFO")
+            return cross_detected
         elif direction == "down":
             # Cruzamento para baixo: anterior >1.0 e atual <1.0
-            return previous_ratio > 1.0 and last_ratio < 1.0
+            cross_detected = previous_ratio > 1.0 and last_ratio < 1.0
+            if cross_detected:
+                self._log(f"✅ CROSS DOWN detectado: {previous_ratio:.3f} → {last_ratio:.3f}", level="INFO")
+            return cross_detected
         else:
             return False
             
@@ -833,7 +862,7 @@ class SimpleRatioStrategy:
             amount = usd_to_spend * self.cfg.LEVERAGE / current_price
             
             # Criar ordem market
-            order = self._subconta_dex.create_order(self.symbol, "market", side, amount, current_price)
+            order = self._subconta_dex.create_order(self.trading_symbol, "market", side, amount, current_price)
             
             # Registrar tempo de entrada
             self._position_entry_time = _time.time()
@@ -845,7 +874,7 @@ class SimpleRatioStrategy:
             if sl_price:
                 sl_side = "sell" if side == "buy" else "buy"
                 try:
-                    self._subconta_dex.create_order(self.symbol, "stop_market", sl_side, amount, sl_price, {"reduceOnly": True})
+                    self._subconta_dex.create_order(self.trading_symbol, "stop_market", sl_side, amount, sl_price, {"reduceOnly": True})
                     self._log(f"🛡️ Stop loss criado: {sl_side} @ {sl_price:.6f}", level="INFO")
                 except Exception as e:
                     self._log(f"Erro criando stop loss: {e}", level="WARN")
@@ -855,13 +884,16 @@ class SimpleRatioStrategy:
             self._log(f"✅ POSIÇÃO ABERTA: {side.upper()} {amount:.2f} @ {current_price:.6f}", level="INFO")
             
         except Exception as e:
-            # Verificar se é erro de credenciais ou mercado
+            # Verificar se é erro de credenciais ou mercado não disponível
             error_msg = str(e).lower()
             if any(x in error_msg for x in ['user parameter', 'wallet address', 'authentication', 'credential']):
-                self._log(f"⚙️ Não é possível operar: credenciais não configuradas ({e})", level="INFO")
+                # Modo demo - log discreto
+                self._log(f"💤 Sinal detectado mas sem credenciais para operar", level="DEBUG")
             elif 'does not have market symbol' in error_msg:
-                self._log(f"⚙️ Mercado {self.symbol} não disponível na exchange", level="INFO")
+                # Mercado não disponível - log discreto
+                self._log(f"💤 Sinal detectado mas mercado {self.trading_symbol} não disponível", level="DEBUG")
             else:
+                # Erros reais de execução - manter ERROR
                 self._log(f"Erro abrindo posição: {e}", level="ERROR")
             
     def _close_position(self, df: pd.DataFrame):
@@ -884,7 +916,7 @@ class SimpleRatioStrategy:
             current_price = self._preco_atual()
             
             # Fechar posição
-            self._subconta_dex.create_order(self.symbol, "market", close_side, amount, current_price, {"reduceOnly": True})
+            self._subconta_dex.create_order(self.trading_symbol, "market", close_side, amount, current_price, {"reduceOnly": True})
             
             # Limpar estado
             self._position_entry_time = None
@@ -969,8 +1001,8 @@ class SimpleRatioStrategy:
     def _preco_atual(self) -> float:
         """Obtém preço atual do ativo"""
         try:
-            cache_key = f"ticker_{self.symbol}"
-            t = _get_cached_api_call(cache_key, self._subconta_dex.fetch_ticker, self.symbol)
+            cache_key = f"ticker_{self.trading_symbol}"
+            t = _get_cached_api_call(cache_key, self._subconta_dex.fetch_ticker, self.trading_symbol)
             return float(t.get('last', 0))
         except Exception as e:
             self._log(f"Erro obtendo preço atual: {e}", level="WARN")
@@ -979,24 +1011,27 @@ class SimpleRatioStrategy:
     def _posicao_aberta(self, force_fresh: bool = False) -> Optional[Dict[str, Any]]:
         """Verifica se há posição aberta"""
         try:
-            cache_key = f"positions_{self.symbol}"
+            cache_key = f"positions_{self.trading_symbol}"
             
             if force_fresh:
-                pos = self._subconta_dex.fetch_positions([self.symbol])  # Opera na subconta
+                pos = self._subconta_dex.fetch_positions([self.trading_symbol])  # Opera na subconta
             else:
-                pos = _get_cached_api_call(cache_key, self._subconta_dex.fetch_positions, [self.symbol])  # Opera na subconta
+                pos = _get_cached_api_call(cache_key, self._subconta_dex.fetch_positions, [self.trading_symbol])  # Opera na subconta
             
             if pos and len(pos) > 0:
                 return pos[0]  # Retorna primeira posição
             return None
         except Exception as e:
-            # Verificar se é erro de autenticação ou credenciais
+            # Verificar se é erro de autenticação, credenciais ou mercado não disponível
             error_msg = str(e).lower()
             if any(x in error_msg for x in ['user parameter', 'wallet address', 'authentication', 'credential']):
-                # Erro de credenciais - apenas log debug, não é crítico para funcionamento
-                self._log(f"⚙️ Credenciais não configuradas, assumindo sem posições: {e}", level="DEBUG")
+                # Erro de credenciais - log discreto DEBUG
+                self._log(f"💤 Sem credenciais para verificar posições", level="DEBUG")
+            elif 'does not have market symbol' in error_msg:
+                # Mercado não disponível - log discreto DEBUG  
+                self._log(f"💤 Mercado {self.trading_symbol} não listado na exchange", level="DEBUG")
             else:
-                # Outros erros mais sérios
+                # Outros erros realmente problemáticos - manter WARN
                 self._log(f"Erro verificando posição: {e}", level="WARN")
             return None
 
@@ -1042,7 +1077,7 @@ def build_df(symbol: str = "BTCUSDT", tf: str = "15m", limit: int = 260, source:
 def main():
     """Função principal do sistema de trading simplificado"""
     print("🚀 SISTEMA DE TRADING SIMPLIFICADO - SimpleRatioStrategy")
-    print("📊 Assets: PUMP/USDT, AVNT/USDT")
+    print("📊 Assets: PUMPUSDT, AVNTUSDT (dados) → PUMP/USDC:USDC, AVNT/USDC:USDC (trading)")
     print("💰 Trade size: $3 USD, Leverage: 10x, Stop: 20%")
     print("⚡ Estratégia: Entradas/saídas por inversão de ratio avg_buy/sell")
     print("🔄 Execução contínua a cada 30 segundos")
@@ -1088,17 +1123,28 @@ def main():
                 try:
                     print(f"🔍 Processando {symbol}...")
                     
-                    # Buscar dados
+                    # Buscar dados com timeout de debug
+                    start_time = time.time()
+                    print(f"    📊 Buscando dados de {symbol}...")
                     df = build_df(symbol, "15m", 100)
+                    data_time = time.time() - start_time
+                    print(f"    ✅ Dados obtidos em {data_time:.2f}s ({len(df)} candles)")
                     
                     # Criar estratégia
+                    print(f"    🎯 Criando estratégia para {symbol}...")
                     strategy = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
+                    print(f"    ✅ Estratégia criada")
                     
                     # Executar step
+                    print(f"    🚀 Executando step...")
+                    step_start = time.time()
                     strategy.step(df)
+                    step_time = time.time() - step_start
+                    print(f"    ✅ Step executado em {step_time:.2f}s")
                     
                 except Exception as e:
                     _log_global("MAIN", f"Erro processando {symbol}: {e}", "ERROR")
+                    print(f"    ❌ Erro: {e}")
             
             print("✅ Ciclo completo!")
             print(f"⏰ Aguardando 30 segundos para próximo ciclo...")
