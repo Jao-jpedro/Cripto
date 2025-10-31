@@ -754,27 +754,26 @@ class SimpleRatioStrategy:
             
     def _detect_ratio_cross(self, current_ratio: float, direction: str) -> bool:
         """Detecta se houve cruzamento do ratio na direção especificada"""
-        if len(self._ratio_history) < 2:
+        if len(self._ratio_history) < 1:
             return False
             
-        # Pegar o penúltimo e último valor do histórico
-        previous_ratio = self._ratio_history[-2]
-        last_ratio = self._ratio_history[-1]
+        # Usar o valor atual passado como parâmetro e o anterior do histórico
+        previous_ratio = self._ratio_history[-1]  # O último valor do histórico é o anterior
         
         # Debug detalhado
-        self._log(f"🔍 Debug Cross: previous={previous_ratio:.3f}, current={last_ratio:.3f}, direction={direction}", level="DEBUG")
+        self._log(f"🔍 Debug Cross: previous={previous_ratio:.3f}, current={current_ratio:.3f}, direction={direction}", level="DEBUG")
         
         if direction == "up":
-            # Cruzamento para cima: anterior <1.0 e atual >1.0
-            cross_detected = previous_ratio < 1.0 and last_ratio > 1.0
+            # Cruzamento para cima: anterior <1.0 e atual >=1.0 (incluindo igualdade)
+            cross_detected = previous_ratio < 1.0 and current_ratio >= 1.0
             if cross_detected:
-                self._log(f"✅ CROSS UP detectado: {previous_ratio:.3f} → {last_ratio:.3f}", level="INFO")
+                self._log(f"✅ CROSS UP detectado: {previous_ratio:.3f} → {current_ratio:.3f}", level="INFO")
             return cross_detected
         elif direction == "down":
-            # Cruzamento para baixo: anterior >1.0 e atual <1.0
-            cross_detected = previous_ratio > 1.0 and last_ratio < 1.0
+            # Cruzamento para baixo: anterior >=1.0 e atual <1.0 (incluindo igualdade na origem)
+            cross_detected = previous_ratio >= 1.0 and current_ratio < 1.0
             if cross_detected:
-                self._log(f"✅ CROSS DOWN detectado: {previous_ratio:.3f} → {last_ratio:.3f}", level="INFO")
+                self._log(f"✅ CROSS DOWN detectado: {previous_ratio:.3f} → {current_ratio:.3f}", level="INFO")
             return cross_detected
         else:
             return False

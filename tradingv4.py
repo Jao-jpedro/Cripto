@@ -1226,49 +1226,57 @@ class TradingLearner:
                     vol_percentile_20 = (volume.iloc[-20:] <= volume.iloc[-1]).mean() * 100
                     
             # =================== SEÇÃO D: CANDLE & MICROESTRUTURA ===================
+            # CORREÇÃO: DataFrame da Binance não tem colunas OHLC separadas
+            # Usar apenas 'valor_fechamento' que está disponível
             candle_body_pct = None
             candle_upper_shadow_pct = None
             candle_lower_shadow_pct = None
             candle_range_atr = None
             
-            if all(col in df.columns for col in ['open', 'close', 'high', 'low']):
-                high_low = last_row['high'] - last_row['low']
-                body = abs(last_row['close'] - last_row['open'])
-                upper_shadow = last_row['high'] - max(last_row['open'], last_row['close'])
-                lower_shadow = min(last_row['open'], last_row['close']) - last_row['low']
+            # Como não temos OHLC, calcular proxies usando close price
+            if len(df) >= 2:
+                current_close = last_row['valor_fechamento']
+                prev_close = df['valor_fechamento'].iloc[-2]
                 
-                if high_low > 0:
-                    candle_body_pct = (body / high_low) * 100
-                    candle_upper_shadow_pct = (upper_shadow / high_low) * 100
-                    candle_lower_shadow_pct = (lower_shadow / high_low) * 100
-                    
+                # Proxy para análise de "vela" usando apenas preços de fechamento
+                price_change_pct = ((current_close - prev_close) / prev_close * 100) if prev_close > 0 else 0
+                
+                # Aproximação de range usando ATR se disponível
                 if not atr_series.empty:
                     current_atr = atr_series.iloc[-1]
-                    candle_range_atr = high_low / current_atr if current_atr > 0 else None
+                    # Proxy: usar mudança de preço vs ATR
+                    candle_range_atr = abs(price_change_pct) / (current_atr / current_close * 100) if current_atr > 0 else None
                     
-            # Padrões de velas recentes (última vs penúltima)
-            bullish_candle = last_row['close'] > last_row['open'] if all(col in df.columns for col in ['open', 'close']) else None
+            # Padrões de movimento (alta vs baixa) usando fechamentos
+            bullish_candle = None
             prev_bullish = None
             candle_size_ratio = None
             
-            if len(df) >= 2 and all(col in df.columns for col in ['open', 'close', 'high', 'low']):
-                prev_row = df.iloc[-2]
-                prev_bullish = prev_row['close'] > prev_row['open']
+            if len(df) >= 2:
+                current_close = last_row['valor_fechamento']
+                prev_close = df['valor_fechamento'].iloc[-2]
+                bullish_candle = current_close > prev_close
                 
-                current_range = last_row['high'] - last_row['low']
-                prev_range = prev_row['high'] - prev_row['low']
-                candle_size_ratio = current_range / prev_range if prev_range > 0 else None
+                if len(df) >= 3:
+                    prev2_close = df['valor_fechamento'].iloc[-3]
+                    prev_bullish = prev_close > prev2_close
+                    
+                    # Ratio de mudança de preço (proxy para tamanho de vela)
+                    current_change = abs(current_close - prev_close)
+                    prev_change = abs(prev_close - prev2_close)
+                    candle_size_ratio = current_change / prev_change if prev_change > 0 else None
                     
             # =================== SEÇÃO E: NÍVEIS & ESTRUTURA ===================
-            # Múltiplos períodos de high/low
-            high_10 = df['high'].rolling(10).max() if len(df) >= 10 else None
-            low_10 = df['low'].rolling(10).min() if len(df) >= 10 else None
-            high_20 = df['high'].rolling(20).max() if len(df) >= 20 else None
-            low_20 = df['low'].rolling(20).min() if len(df) >= 20 else None
-            high_50 = df['high'].rolling(50).max() if len(df) >= 50 else None
-            low_50 = df['low'].rolling(50).min() if len(df) >= 50 else None
-            high_100 = df['high'].rolling(100).max() if len(df) >= 100 else None
-            low_100 = df['low'].rolling(100).min() if len(df) >= 100 else None
+            # CORREÇÃO: Usar 'valor_fechamento' em vez de 'high'/'low' que não existem
+            # Calcular proxies usando apenas preços de fechamento
+            high_10 = df['valor_fechamento'].rolling(10).max() if len(df) >= 10 else None
+            low_10 = df['valor_fechamento'].rolling(10).min() if len(df) >= 10 else None
+            high_20 = df['valor_fechamento'].rolling(20).max() if len(df) >= 20 else None
+            low_20 = df['valor_fechamento'].rolling(20).min() if len(df) >= 20 else None
+            high_50 = df['valor_fechamento'].rolling(50).max() if len(df) >= 50 else None
+            low_50 = df['valor_fechamento'].rolling(50).min() if len(df) >= 50 else None
+            high_100 = df['valor_fechamento'].rolling(100).max() if len(df) >= 100 else None
+            low_100 = df['valor_fechamento'].rolling(100).min() if len(df) >= 100 else None
             
             # Distâncias em ATRs
             dist_hhv10_atr = None
@@ -5118,6 +5126,27 @@ class EMAGradientStrategy:
         import time as _time_mod
         _time_mod.sleep(1)
         
+        # Função auxiliar para verificar se posição realmente existe
+        def _verificar_posicao_ativa(wallet_dex, timeout_secs=5):
+            """Verifica se há posição ativa na carteira, com retry"""
+            import time as tm
+            start_time = tm.time()
+            
+            while tm.time() - start_time < timeout_secs:
+                try:
+                    positions = wallet_dex.fetch_positions(symbols=[self.symbol])
+                    for pos in positions:
+                        if pos.get('symbol') == self.symbol:
+                            size = abs(float(pos.get('contracts', 0)))
+                            side_pos = pos.get('side')
+                            if size > 0 and side_pos:
+                                return True, size, side_pos
+                    tm.sleep(0.5)  # Aguardar 500ms antes de tentar novamente
+                except Exception:
+                    tm.sleep(0.5)
+            
+            return False, 0.0, None
+        
         # Criar stops para cada carteira
         for order_info in orders_created:
             try:
@@ -5125,20 +5154,25 @@ class EMAGradientStrategy:
                 wallet_dex = order_info["dex"]
                 wallet_amount = order_info["amount"]
                 
-                # DEBUG: Verificar posição antes de criar proteções
-                try:
-                    current_pos = wallet_dex.fetch_balance().get(self.symbol.split('/')[0], {}).get('total', 0)
-                    self._log(f"[{wallet_name}] DEBUG PROTEÇÃO: pos_atual={current_pos}, tentando_criar_sl={sl_side}_{wallet_amount}@{sl_price}", level="DEBUG")
-                except Exception as e:
-                    self._log(f"[{wallet_name}] Erro verificando posição para debug: {e}", level="DEBUG")
+                # CORREÇÃO: Verificar se posição realmente existe antes de criar proteções
+                has_position, pos_size, pos_side = _verificar_posicao_ativa(wallet_dex, timeout_secs=3)
+                
+                if not has_position:
+                    self._log(f"[{wallet_name}] ⚠️ POSIÇÃO NÃO ENCONTRADA após 3s - Pulando proteções (posição pode ter fechado rapidamente)", level="WARN")
+                    continue
+                
+                self._log(f"[{wallet_name}] ✅ POSIÇÃO CONFIRMADA: {pos_side} {pos_size:.6f} - Criando proteções", level="DEBUG")
+                
+                # Ajustar quantidade das proteções para o tamanho real da posição
+                protection_amount = min(wallet_amount, pos_size)
                 
                 # Stop loss
-                stop_order = wallet_dex.create_order(self.symbol, "stop_market", sl_side, wallet_amount, sl_price, {"reduceOnly": True})
+                stop_order = wallet_dex.create_order(self.symbol, "stop_market", sl_side, protection_amount, sl_price, {"reduceOnly": True})
                 self._log(f"[{wallet_name}] Stop criado: {stop_order.get('id', 'N/A')}", level="DEBUG")
                 
                 # Take profit (se habilitado)
                 if manage_take and tp_price is not None:
-                    tp_order = wallet_dex.create_order(self.symbol, "limit", tp_side, wallet_amount, tp_price, {"reduceOnly": True})
+                    tp_order = wallet_dex.create_order(self.symbol, "limit", tp_side, protection_amount, tp_price, {"reduceOnly": True})
                     self._log(f"[{wallet_name}] TP criado: {tp_order.get('id', 'N/A')}", level="DEBUG")
                     
             except Exception as e:
@@ -5152,10 +5186,17 @@ class EMAGradientStrategy:
                     self._log(f"    • Preço SL: {sl_price:.6f}", level="ERROR")
                     self._log(f"    • Lado da posição aberta: {norm_side}", level="ERROR")
                     try:
-                        pos_check = order_info['dex'].fetch_balance()
-                        self._log(f"    • Saldo atual da carteira: {pos_check}", level="ERROR")
-                    except:
-                        self._log(f"    • Erro verificando saldo da carteira", level="ERROR")
+                        # Verificar posições reais em vez de balance
+                        pos_check = order_info['dex'].fetch_positions(symbols=[self.symbol])
+                        active_positions = [p for p in pos_check if abs(float(p.get('contracts', 0))) > 0]
+                        self._log(f"    • Posições ativas: {len(active_positions)}", level="ERROR")
+                        if active_positions:
+                            for p in active_positions:
+                                self._log(f"      - {p.get('symbol')}: {p.get('side')} {p.get('contracts')}", level="ERROR")
+                        else:
+                            self._log(f"    • NENHUMA POSIÇÃO ATIVA ENCONTRADA - Posição fechou antes das proteções", level="ERROR")
+                    except Exception as balance_err:
+                        self._log(f"    • Erro verificando posições: {balance_err}", level="ERROR")
         
         # Log das proteções
         self._safe_log(
