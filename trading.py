@@ -661,18 +661,10 @@ class SimpleRatioStrategy:
             if current_ratio is None or current_ratio <= 0:
                 return
             
-            # 3. Atualizar histórico de ratios
-            self._update_ratio_history(current_ratio)
-            
-            # 4. Debug: mostrar ratio atual e histórico
+            # 3. Debug: mostrar ratio atual
             self._log(f"📊 Ratio avg_buy/sell: {current_ratio:.3f}", level="DEBUG")
             
-            # Debug adicional: mostrar os últimos ratios no histórico
-            if len(self._ratio_history) >= 2:
-                recent_ratios = self._ratio_history[-3:] if len(self._ratio_history) >= 3 else self._ratio_history
-                self._log(f"📈 Histórico ratios: {[f'{r:.3f}' for r in recent_ratios]}", level="DEBUG")
-            
-            # 5. Verificar se já temos posição aberta
+            # 4. Verificar se já temos posição aberta
             pos = self._posicao_aberta()
             
             if pos:
@@ -680,7 +672,7 @@ class SimpleRatioStrategy:
                 current_pos_side = self._norm_side(pos.get("side"))
                 self._check_exit_conditions(pos, current_pos_side, current_ratio, df)
             else:
-                # Sem posição: verificar entrada
+                # Sem posição: verificar entrada ANTES de atualizar histórico
                 # Entrada LONG: ratio cruza de <1.0 para >1.0
                 if self._detect_ratio_cross(current_ratio, direction="up"):
                     self._log(f"🔵 SINAL LONG: Ratio cruzou para cima {current_ratio:.3f}", level="INFO")
@@ -690,6 +682,22 @@ class SimpleRatioStrategy:
                 elif self._detect_ratio_cross(current_ratio, direction="down"):
                     self._log(f"🔴 SINAL SHORT: Ratio cruzou para baixo {current_ratio:.3f}", level="INFO")
                     self._enter_position("sell", self.cfg.TRADE_SIZE_USD, df)
+            
+            # 5. APÓS verificar sinais, atualizar histórico para próximo ciclo
+            self._update_ratio_history(current_ratio)
+            
+            # Debug: mostrar histórico atualizado
+            if len(self._ratio_history) >= 1:
+                recent_ratios = self._ratio_history[-5:] if len(self._ratio_history) >= 5 else self._ratio_history
+                history_str = " → ".join([f'{r:.3f}' for r in recent_ratios])
+                self._log(f"📈 Histórico ratios (últimos {len(recent_ratios)}): {history_str}", level="DEBUG")
+                
+                # Se temos pelo menos 2 valores, mostrar a comparação
+                if len(self._ratio_history) >= 2:
+                    prev = self._ratio_history[-2]
+                    curr = current_ratio
+                    change = "↗️" if curr > prev else "↘️" if curr < prev else "➡️"
+                    self._log(f"🔄 Mudança: {prev:.3f} → {curr:.3f} {change}", level="DEBUG")
             
         except Exception as e:
             self._log(f"Erro na função step: {type(e).__name__}: {e}", level="ERROR")
@@ -1111,6 +1119,9 @@ def main():
     
     cycle_count = 0
     
+    # Cache de estratégias para manter histórico entre ciclos
+    strategies_cache = {}
+    
     # Loop contínuo
     while True:
         try:
@@ -1129,10 +1140,15 @@ def main():
                     data_time = time.time() - start_time
                     print(f"    ✅ Dados obtidos em {data_time:.2f}s ({len(df)} candles)")
                     
-                    # Criar estratégia
-                    print(f"    🎯 Criando estratégia para {symbol}...")
-                    strategy = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
-                    print(f"    ✅ Estratégia criada")
+                    # Usar estratégia cached ou criar nova
+                    if symbol not in strategies_cache:
+                        print(f"    🎯 Criando estratégia para {symbol}...")
+                        strategy = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
+                        strategies_cache[symbol] = strategy
+                        print(f"    ✅ Estratégia criada e armazenada no cache")
+                    else:
+                        strategy = strategies_cache[symbol]
+                        print(f"    🔄 Usando estratégia existente (histórico preservado)")
                     
                     # Executar step
                     print(f"    🚀 Executando step...")
