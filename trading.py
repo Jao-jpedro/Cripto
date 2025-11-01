@@ -700,28 +700,53 @@ class SimpleRatioStrategy:
             if indicators:
                 trading_monitor.print_snapshot(indicators)
 
-            # 2. Calcular médias de volumes de compra para 30, 10, 5 e 3 candles
-            def rolling_buy_vol_sum(df, window):
+
+            # 2. Calcular médias e somas de volumes de compra/venda para 30, 10, 5 e 3 candles
+            def rolling_buy_sell_vol_sum(df, window):
                 buy_vols = []
+                sell_vols = []
                 for i in range(-window, 0):
                     if abs(i) <= len(df):
                         temp_df = df.iloc[max(0, len(df) + i - 1):len(df) + i + 1]
                         if len(temp_df) >= 2:
                             temp_buysell = TechnicalIndicators.estimate_buy_sell_volumes(temp_df)
                             buy_vols.append(temp_buysell["buy_vol"])
-                return sum(buy_vols)
+                            sell_vols.append(temp_buysell["sell_vol"])
+                return sum(buy_vols), sum(sell_vols)
 
-            buy_vol_30 = rolling_buy_vol_sum(df, 30) if len(df) >= 30 else 0
-            buy_vol_10 = rolling_buy_vol_sum(df, 10) if len(df) >= 10 else 0
-            buy_vol_5 = rolling_buy_vol_sum(df, 5) if len(df) >= 5 else 0
-            buy_vol_3 = rolling_buy_vol_sum(df, 3) if len(df) >= 3 else 0
+            def rolling_avg_buy_sell_ratio(df, window):
+                ratios = []
+                for i in range(-window, 0):
+                    if abs(i) <= len(df):
+                        temp_df = df.iloc[max(0, len(df) + i - 1):len(df) + i + 1]
+                        if len(temp_df) >= 2:
+                            temp_buysell = TechnicalIndicators.estimate_buy_sell_volumes(temp_df)
+                            buy = temp_buysell["buy_vol"]
+                            sell = temp_buysell["sell_vol"]
+                            if sell > 0:
+                                ratios.append(buy / sell)
+                return np.mean(ratios) if ratios else 0
 
-            # Calcular avg dos volumes de compra dos últimos 3 candles
-            avg_buy_3 = buy_vol_3 / 3 if buy_vol_3 > 0 else 0
+            # Ratio avg_buy/sell (média dos ratios)
+            ratio_avg_30 = rolling_avg_buy_sell_ratio(df, 30) if len(df) >= 30 else 0
+            ratio_avg_10 = rolling_avg_buy_sell_ratio(df, 10) if len(df) >= 10 else 0
+            ratio_avg_5 = rolling_avg_buy_sell_ratio(df, 5) if len(df) >= 5 else 0
+            ratio_avg_3 = rolling_avg_buy_sell_ratio(df, 3) if len(df) >= 3 else 0
 
-            # Adicionar log das médias e ratios
-            self._log(f"[AVG 3 candles] Média volume compra últimos 3: {avg_buy_3:.2f}", level="DEBUG")
-            self._log(f"[RATIO BUY VOLS] Soma compra 30: {buy_vol_30:.2f} | 10: {buy_vol_10:.2f} | 5: {buy_vol_5:.2f} | 3: {buy_vol_3:.2f}", level="DEBUG")
+            # Ratio das somas dos volumes
+            buy_sum_30, sell_sum_30 = rolling_buy_sell_vol_sum(df, 30) if len(df) >= 30 else (0, 0)
+            buy_sum_10, sell_sum_10 = rolling_buy_sell_vol_sum(df, 10) if len(df) >= 10 else (0, 0)
+            buy_sum_5, sell_sum_5 = rolling_buy_sell_vol_sum(df, 5) if len(df) >= 5 else (0, 0)
+            buy_sum_3, sell_sum_3 = rolling_buy_sell_vol_sum(df, 3) if len(df) >= 3 else (0, 0)
+
+            ratio_sum_30 = buy_sum_30 / sell_sum_30 if sell_sum_30 > 0 else 0
+            ratio_sum_10 = buy_sum_10 / sell_sum_10 if sell_sum_10 > 0 else 0
+            ratio_sum_5 = buy_sum_5 / sell_sum_5 if sell_sum_5 > 0 else 0
+            ratio_sum_3 = buy_sum_3 / sell_sum_3 if sell_sum_3 > 0 else 0
+
+            # Logs no formato solicitado
+            self._log(f"📊 Ratio avg_buy/sell: 30={ratio_avg_30:.3f} | 10={ratio_avg_10:.3f} | 5={ratio_avg_5:.3f} | 3={ratio_avg_3:.3f}", level="DEBUG")
+            self._log(f"📊 Ratio soma_buy/sell: 30={ratio_sum_30:.3f} | 10={ratio_sum_10:.3f} | 5={ratio_sum_5:.3f} | 3={ratio_sum_3:.3f}", level="DEBUG")
 
             # 3. Usar o ratio avg_buy/sell calculado pelo TechnicalIndicators
             if hasattr(self, 'debug_force_ratio') and self.debug_force_ratio is not None:
