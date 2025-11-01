@@ -451,14 +451,14 @@ def get_wallet_config():
         return WalletConfig(
             name="Subconta Trading (ENV)",
             is_subconta=True,
-            vault_address=subaccount
+            vault_address=wallet_address  # Vault sempre igual ao WALLET_ADDRESS
         )
     else:
         # Usar carteira principal
         return WalletConfig(
             name="Carteira Principal (ENV)",
             is_subconta=False,
-            vault_address=None
+            vault_address=wallet_address  # Vault sempre igual ao WALLET_ADDRESS
         )
 
 # Configurações de carteiras disponíveis (fallback)
@@ -491,7 +491,7 @@ class RealDataDex:
             wallet_address = os.getenv("WALLET_ADDRESS")
             private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")
             subaccount = os.getenv("HYPERLIQUID_SUBACCOUNT")
-            
+
             # Configuração básica do ccxt para Hyperliquid
             config = {
                 'sandbox': False,
@@ -499,25 +499,25 @@ class RealDataDex:
                     'defaultType': 'swap',
                 }
             }
-            
+
             # Adicionar credenciais se disponíveis
             if wallet_address and private_key:
                 config['apiKey'] = wallet_address
                 config['secret'] = private_key
                 _log_global("DEX", f"🔐 Credenciais configuradas: {wallet_address[:10]}...", "INFO")
-            
+
             self.exchange = ccxt.hyperliquid(config)
-            
-            # Configurar subconta se especificada
-            if self.vault_address:
-                self.exchange.options['vault'] = self.vault_address
-                _log_global("DEX", f"🏦 Vault configurado: {self.vault_address}", "INFO")
-            
+
+            # Vault sempre igual ao WALLET_ADDRESS
+            if wallet_address:
+                self.exchange.options['vault'] = wallet_address
+                _log_global("DEX", f"🏦 Vault configurado: {wallet_address}", "INFO")
+
             # Configurar subaccount se especificada
             if subaccount:
                 self.exchange.options['subAccount'] = subaccount
                 _log_global("DEX", f"📋 Subaccount configurado: {subaccount}", "INFO")
-                
+
         except Exception as e:
             _log_global("DEX", f"Erro configurando Hyperliquid: {e}", "ERROR")
             # Fallback para modo demo sem exchange real
