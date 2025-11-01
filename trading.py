@@ -740,12 +740,13 @@ class SimpleRatioStrategy:
             ratio_30 = calc_ratio(df, 30)
             ratio_20 = calc_ratio(df, 20)
             ratio_10 = calc_ratio(df, 10)
+            ratio_5 = calc_ratio(df, 5)
 
             # 4. Atualizar histórico de ratios
             self._update_ratio_history(current_ratio)
 
             # 5. Debug: mostrar ratio atual e histórico
-            self._log(f"📊 Ratio avg_buy/sell: atual(30)={ratio_30} | 20={ratio_20} | 10={ratio_10}", level="DEBUG")
+            self._log(f"📊 Ratio avg_buy/sell: 30={ratio_30} | 20={ratio_20} | 10={ratio_10} | 5={ratio_5}", level="DEBUG")
 
             # Debug adicional: mostrar os últimos ratios no histórico
             self._log(f"📊 Histórico size: {len(self._ratio_history)}", level="DEBUG")
