@@ -773,58 +773,8 @@ class SimpleRatioStrategy:
                     if prev_ratio <= 0.99 and curr_ratio >= 1.0:
                         self._log(f"🚪 SAÍDA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
                         self._close_position(df)
-            current_sell_volume = current_volume * (1 - buy_volume_ratio)
-            
-            # Calcular médias dos últimos 30 períodos
-            if len(df) >= 30:
-                last_30_volume = df["volume"].tail(30)
-                avg_total_vol_30 = float(last_30_volume.mean())
-                
-                # Estimar proporção histórica baseada na tendência
-                price_trend = (current_close - float(df["valor_fechamento"].iloc[-30])) / float(df["valor_fechamento"].iloc[-30])
-                if price_trend > 0:
-                    avg_buy_ratio = 0.55  # Tendência de alta = mais compra
-                try:
-                    if len(df) < 30:
-                        return None
-                    last_row = df.iloc[-1]
-                    current_volume = float(last_row.get('volume', 0))
-                    current_close = float(last_row.get('valor_fechamento', 0))
-                    if current_volume <= 0 or len(df) < 2:
-                        return None
-                    prev_close = float(df.iloc[-2].get('valor_fechamento', current_close))
-                    price_change = current_close - prev_close
-                    if price_change > 0:
-                        buy_volume_ratio = min(0.7, 0.5 + abs(price_change) / current_close * 10)
-                    elif price_change < 0:
-                        buy_volume_ratio = max(0.3, 0.5 - abs(price_change) / current_close * 10)
-                    else:
-                        buy_volume_ratio = 0.5
-                    current_buy_volume = current_volume * buy_volume_ratio
-                    current_sell_volume = current_volume * (1 - buy_volume_ratio)
-                    if len(df) >= 30:
-                        last_30_volume = df["volume"].tail(30)
-                        avg_total_vol_30 = float(last_30_volume.mean())
-                        price_trend = (current_close - float(df["valor_fechamento"].iloc[-30])) / float(df["valor_fechamento"].iloc[-30])
-                        if price_trend > 0:
-                            avg_buy_ratio = 0.55
-                        elif price_trend < 0:
-                            avg_buy_ratio = 0.45
-                        else:
-                            avg_buy_ratio = 0.5
-                        avg_buy_volume_30 = avg_total_vol_30 * avg_buy_ratio
-                        avg_sell_volume_30 = avg_total_vol_30 * (1 - avg_buy_ratio)
-                    else:
-                        return None
-                    if 'avg_sell_volume_30' in locals() and avg_sell_volume_30 > 0:
-                        ratio = avg_buy_volume_30 / avg_sell_volume_30
-                        return ratio
-                    else:
-                        return None
-                except Exception as e:
-                    self._log(f"Erro calculando ratio avg_buy/sell: {e}", level="WARN")
-                    return None
-                # Bloco removido: toda a lógica de entrada/saída já está implementada acima usando apenas o ratio de 3 candles
+            # Bloco removido: toda a lógica de entrada/saída já está implementada acima usando apenas o ratio de 3 candles
+            # Garantir que não há uso de variáveis fora do escopo
                         
             # 3. Verificar fechamento por tempo (4 horas) - mantido do sistema anterior
             if self._position_entry_time is not None:
@@ -856,52 +806,59 @@ class SimpleRatioStrategy:
         """Abre posição simples na subconta"""
         try:
             import time as _time
-            
+            self._log(f"[ENTRADA] Sinal detectado para {side.upper()} em {self.trading_symbol}", level="INFO")
             # Configurar leverage
             self._subconta_dex.set_leverage(self.cfg.LEVERAGE, self.symbol, {"marginMode": "isolated"})
-            
-            # Calcular quantidade
+
+            # Sempre buscar o preço atual da Hyperliquid
             current_price = self._preco_atual()
+            self._log(f"[ENTRADA] Preço atual Hyperliquid: {current_price}", level="DEBUG")
             if not current_price or current_price <= 0:
-                self._log("Preço inválido para entrada", level="ERROR")
+                self._log(f"[ENTRADA] Preço inválido para entrada: {current_price}", level="ERROR")
                 return
-                
+
             amount = usd_to_spend * self.cfg.LEVERAGE / current_price
-            
+            self._log(f"[ENTRADA] Quantidade calculada: {amount}", level="DEBUG")
+
             # Criar ordem market
-            order = self._subconta_dex.create_order(self.trading_symbol, "market", side, amount, current_price)
-            
+            try:
+                order = self._subconta_dex.create_order(self.trading_symbol, "market", side, amount, current_price)
+                self._log(f"[ENTRADA] Ordem enviada para Hyperliquid: {order}", level="INFO")
+            except Exception as e:
+                self._log(f"[ENTRADA] Falha ao enviar ordem para Hyperliquid: {e}", level="ERROR")
+                raise
+
             # Registrar tempo de entrada
             self._position_entry_time = _time.time()
             self._last_pos_side = self._norm_side(side)
             self._entry_price = current_price  # Rastrear preço de entrada para P&L
-            
+
             # Criar stop loss simples
             sl_price = self._calculate_stop_price(current_price, side)
             if sl_price:
                 sl_side = "sell" if side == "buy" else "buy"
                 try:
-                    self._subconta_dex.create_order(self.trading_symbol, "stop_market", sl_side, amount, sl_price, {"reduceOnly": True})
-                    self._log(f"🛡️ Stop loss criado: {sl_side} @ {sl_price:.6f}", level="INFO")
+                    sl_order = self._subconta_dex.create_order(self.trading_symbol, "stop_market", sl_side, amount, sl_price, {"reduceOnly": True})
+                    self._log(f"🛡️ Stop loss criado: {sl_side} @ {sl_price:.6f} | Ordem: {sl_order}", level="INFO")
                 except Exception as e:
                     self._log(f"Erro criando stop loss: {e}", level="WARN")
-            
+
             # Notificar
             self._notify_trade("open", side, current_price, amount, f"Entrada por ratio", include_hl=False)
             self._log(f"✅ POSIÇÃO ABERTA: {side.upper()} {amount:.2f} @ {current_price:.6f}", level="INFO")
-            
+
         except Exception as e:
-            # Verificar se é erro de credenciais ou mercado não disponível
             error_msg = str(e).lower()
-            if any(x in error_msg for x in ['user parameter', 'wallet address', 'authentication', 'credential']):
-                # Modo demo - log discreto
-                self._log(f"💤 Sinal detectado mas sem credenciais para operar", level="DEBUG")
-            elif 'does not have market symbol' in error_msg:
-                # Mercado não disponível - log discreto
-                self._log(f"💤 Sinal detectado mas mercado {self.trading_symbol} não disponível", level="DEBUG")
+            self._log(f"[ENTRADA] Erro ao tentar abrir posição: {e}", level="ERROR")
+            # Log detalhado do motivo do fallback
+            if not self._subconta_dex.exchange:
+                self._log(f"[ENTRADA] Fallback para modo demo: Exchange não inicializada.", level="WARN")
+            elif any(x in error_msg for x in ['user parameter', 'wallet address', 'authentication', 'credential']):
+                self._log(f"[ENTRADA] Fallback para modo demo: Credenciais ausentes ou inválidas.", level="WARN")
+            elif 'does not have market symbol' in error_msg or 'market' in error_msg:
+                self._log(f"[ENTRADA] Fallback para modo demo: Mercado {self.trading_symbol} não disponível na Hyperliquid.", level="WARN")
             else:
-                # Erros reais de execução - manter ERROR
-                self._log(f"Erro abrindo posição: {e}", level="ERROR")
+                self._log(f"[ENTRADA] Fallback para modo demo: Erro inesperado: {e}", level="WARN")
             
     def _close_position(self, df: pd.DataFrame):
         """Fecha posição atual"""
