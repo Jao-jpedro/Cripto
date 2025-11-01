@@ -728,71 +728,51 @@ class SimpleRatioStrategy:
                 return np.mean(ratios) if ratios else 0
 
             # Ratio avg_buy/sell (média dos ratios)
-            ratio_avg_30 = rolling_avg_buy_sell_ratio(df, 30) if len(df) >= 30 else 0
-            ratio_avg_10 = rolling_avg_buy_sell_ratio(df, 10) if len(df) >= 10 else 0
-            ratio_avg_5 = rolling_avg_buy_sell_ratio(df, 5) if len(df) >= 5 else 0
-            ratio_avg_3 = rolling_avg_buy_sell_ratio(df, 3) if len(df) >= 3 else 0
+            # 1. Calcular e mostrar snapshot de indicadores técnicos para cada ativo
+            indicators = trading_monitor.calculate_indicators(df, self.symbol)
+            if indicators:
+                trading_monitor.print_snapshot(indicators)
 
-            # Ratio das somas dos volumes
-            buy_sum_30, sell_sum_30 = rolling_buy_sell_vol_sum(df, 30) if len(df) >= 30 else (0, 0)
-            buy_sum_10, sell_sum_10 = rolling_buy_sell_vol_sum(df, 10) if len(df) >= 10 else (0, 0)
-            buy_sum_5, sell_sum_5 = rolling_buy_sell_vol_sum(df, 5) if len(df) >= 5 else (0, 0)
-            buy_sum_3, sell_sum_3 = rolling_buy_sell_vol_sum(df, 3) if len(df) >= 3 else (0, 0)
+            ratio_3 = rolling_avg_buy_sell_ratio(df, 3) if len(df) >= 3 else 0
 
-            ratio_sum_30 = buy_sum_30 / sell_sum_30 if sell_sum_30 > 0 else 0
-            ratio_sum_10 = buy_sum_10 / sell_sum_10 if sell_sum_10 > 0 else 0
-            ratio_sum_5 = buy_sum_5 / sell_sum_5 if sell_sum_5 > 0 else 0
-            ratio_sum_3 = buy_sum_3 / sell_sum_3 if sell_sum_3 > 0 else 0
+            # Atualizar histórico do ratio_3
+            if not hasattr(self, '_ratio_3_history'):
+                self._ratio_3_history = []
+            self._ratio_3_history.append(ratio_3)
+            if len(self._ratio_3_history) > 2:
+                self._ratio_3_history = self._ratio_3_history[-2:]
 
-            # Logs no formato solicitado
-            self._log(f"📊 Ratio avg_buy/sell: 30={ratio_avg_30:.3f} | 10={ratio_avg_10:.3f} | 5={ratio_avg_5:.3f} | 3={ratio_avg_3:.3f}", level="DEBUG")
-            self._log(f"📊 Ratio soma_buy/sell: 30={ratio_sum_30:.3f} | 10={ratio_sum_10:.3f} | 5={ratio_sum_5:.3f} | 3={ratio_sum_3:.3f}", level="DEBUG")
+            # Log do ratio_3
+            self._log(f"📊 Ratio avg_buy/sell 3 candles: {ratio_3:.3f}", level="DEBUG")
 
-            # 3. Usar o ratio avg_buy/sell calculado pelo TechnicalIndicators
-            if hasattr(self, 'debug_force_ratio') and self.debug_force_ratio is not None:
-                # Modo debug: usar ratio forçado
-                current_ratio = self.debug_force_ratio
-                self._log(f"🐛 DEBUG: Usando ratio forçado = {current_ratio:.3f}", level="DEBUG")
+            # Detectar cruzamento para entrada/saída
+            pos = self._posicao_aberta()
+            if len(self._ratio_3_history) < 2:
+                return
+            prev_ratio = self._ratio_3_history[-2]
+            curr_ratio = self._ratio_3_history[-1]
+
+            # LONG: entra quando cruza de <=0.99 para >=1.0, sai quando cruza de >=1.0 para <=0.99
+            # SHORT: entra quando cruza de >=1.0 para <=0.99, sai quando cruza de <=0.99 para >=1.0
+            if not pos:
+                # Sem posição aberta
+                if prev_ratio <= 0.99 and curr_ratio >= 1.0:
+                    self._log(f"🚀 ENTRADA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
+                    self._enter_position("buy", self.cfg.TRADE_SIZE_USD, df)
+                elif prev_ratio >= 1.0 and curr_ratio <= 0.99:
+                    self._log(f"🚀 ENTRADA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
+                    self._enter_position("sell", self.cfg.TRADE_SIZE_USD, df)
             else:
-                # Modo normal: usar ratio calculado
-                if not indicators or 'avg_buy_sell_ratio' not in indicators:
-                    return
-
-                current_ratio = indicators['avg_buy_sell_ratio']
-                if current_ratio is None or current_ratio <= 0:
-                    return
-
-            # ...existing code...
-            
-        except Exception as e:
-            self._log(f"Erro na função step: {type(e).__name__}: {e}", level="ERROR")
-            
-    def _calculate_avg_buy_sell_ratio(self, df: pd.DataFrame) -> Optional[float]:
-        """Calcula o ratio avg_buy/sell baseado no volume e movimento de preço"""
-        try:
-            if len(df) < 30:  # Precisamos de pelo menos 30 períodos para média
-                return None
-                
-            last_row = df.iloc[-1]
-            current_volume = float(last_row.get('volume', 0))
-            current_close = float(last_row.get('valor_fechamento', 0))
-            
-            if current_volume <= 0 or len(df) < 2:
-                return None
-                
-            # Estimar volume de compra/venda baseado na movimentação do preço
-            prev_close = float(df.iloc[-2].get('valor_fechamento', current_close))
-            price_change = current_close - prev_close
-            
-            # Estimativa simples: se preço subiu, mais volume de compra
-            if price_change > 0:
-                buy_volume_ratio = min(0.7, 0.5 + abs(price_change) / current_close * 10)
-            elif price_change < 0:
-                buy_volume_ratio = max(0.3, 0.5 - abs(price_change) / current_close * 10)
-            else:
-                buy_volume_ratio = 0.5
-                
-            current_buy_volume = current_volume * buy_volume_ratio
+                # Com posição aberta
+                side = self._norm_side(pos.get("side"))
+                if side == "buy":
+                    if prev_ratio >= 1.0 and curr_ratio <= 0.99:
+                        self._log(f"🚪 SAÍDA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
+                        self._close_position(df)
+                elif side == "sell":
+                    if prev_ratio <= 0.99 and curr_ratio >= 1.0:
+                        self._log(f"🚪 SAÍDA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
+                        self._close_position(df)
             current_sell_volume = current_volume * (1 - buy_volume_ratio)
             
             # Calcular médias dos últimos 30 períodos
@@ -804,93 +784,47 @@ class SimpleRatioStrategy:
                 price_trend = (current_close - float(df["valor_fechamento"].iloc[-30])) / float(df["valor_fechamento"].iloc[-30])
                 if price_trend > 0:
                     avg_buy_ratio = 0.55  # Tendência de alta = mais compra
-                elif price_trend < 0:
-                    avg_buy_ratio = 0.45  # Tendência de baixa = mais venda
-                else:
-                    avg_buy_ratio = 0.5
-                    
-                avg_buy_volume_30 = avg_total_vol_30 * avg_buy_ratio
-                avg_sell_volume_30 = avg_total_vol_30 * (1 - avg_buy_ratio)
-            else:
-                return None
-                
-            # Calcular ratio avg_buy/sell
-            if avg_sell_volume_30 > 0:
-                ratio = avg_buy_volume_30 / avg_sell_volume_30
-                return ratio
-            else:
-                return None
-                
-        except Exception as e:
-            self._log(f"Erro calculando ratio avg_buy/sell: {e}", level="WARN")
-            return None
-            
-    def _detect_ratio_cross(self, current_ratio: float, direction: str) -> bool:
-        """Detecta se houve cruzamento do ratio na direção especificada"""
-        if len(self._ratio_history) < 2:
-            return False
-            
-        # Pegar o penúltimo e último valor do histórico
-        previous_ratio = self._ratio_history[-2]
-        last_ratio = self._ratio_history[-1]
-        
-        # Debug detalhado
-        self._log(f"🔍 Debug Cross: previous={previous_ratio:.3f}, current={last_ratio:.3f}, direction={direction}", level="DEBUG")
-        
-        if direction == "up":
-            # Cruzamento para cima: anterior <1.0 e atual >1.0
-            cross_detected = previous_ratio < 1.0 and last_ratio > 1.0
-            if cross_detected:
-                self._log(f"✅ CROSS UP detectado: {previous_ratio:.3f} → {last_ratio:.3f}", level="INFO")
-            return cross_detected
-        elif direction == "down":
-            # Cruzamento para baixo: anterior >1.0 e atual <1.0
-            cross_detected = previous_ratio > 1.0 and last_ratio < 1.0
-            if cross_detected:
-                self._log(f"✅ CROSS DOWN detectado: {previous_ratio:.3f} → {last_ratio:.3f}", level="INFO")
-            return cross_detected
-        else:
-            return False
-            
-    def _check_exit_conditions(self, pos: dict, current_pos_side: str, ratio_5: float, df: pd.DataFrame):
-        """Verifica condições de saída: inversão do ratio ou stop loss"""
-        try:
-            # 1. Verificar saída por inversão do ratio
-            should_exit_by_ratio = False
-            
-            if current_pos_side == "buy":
-                # Posição LONG: sair se ratio_5 cruza para baixo (<1.0)
-                should_exit_by_ratio = self._detect_ratio_cross(ratio_5, direction="down")
-                exit_reason = "RATIO_CROSS_DOWN_5"
-            elif current_pos_side == "sell":
-                # Posição SHORT: sair se ratio_5 cruza para cima (>1.0)
-                should_exit_by_ratio = self._detect_ratio_cross(ratio_5, direction="up")
-                exit_reason = "RATIO_CROSS_UP_5"
-                
-            if should_exit_by_ratio:
-                self._log(f"🚪 SAÍDA POR RATIO: {exit_reason} - ratio={ratio_5:.3f}", level="INFO")
-                self._close_position(df)
-                return
-                
-            # 2. Verificar stop loss de 20%
-            entry_price = float(pos.get("entryPrice", 0))
-            current_price = float(df.iloc[-1].get('valor_fechamento', 0))
-            
-            if entry_price > 0 and current_price > 0:
-                if current_pos_side == "buy":
-                    # LONG: stop se preço caiu 20%
-                    loss_pct = (entry_price - current_price) / entry_price
-                    if loss_pct >= self.cfg.STOP_LOSS_PCT:
-                        self._log(f"🛑 STOP LOSS LONG: {loss_pct*100:.1f}% - saindo", level="WARN")
-                        self._close_position(df)
-                        return
-                elif current_pos_side == "sell":
-                    # SHORT: stop se preço subiu 20%
-                    loss_pct = (current_price - entry_price) / entry_price
-                    if loss_pct >= self.cfg.STOP_LOSS_PCT:
-                        self._log(f"🛑 STOP LOSS SHORT: {loss_pct*100:.1f}% - saindo", level="WARN")
-                        self._close_position(df)
-                        return
+                try:
+                    if len(df) < 30:
+                        return None
+                    last_row = df.iloc[-1]
+                    current_volume = float(last_row.get('volume', 0))
+                    current_close = float(last_row.get('valor_fechamento', 0))
+                    if current_volume <= 0 or len(df) < 2:
+                        return None
+                    prev_close = float(df.iloc[-2].get('valor_fechamento', current_close))
+                    price_change = current_close - prev_close
+                    if price_change > 0:
+                        buy_volume_ratio = min(0.7, 0.5 + abs(price_change) / current_close * 10)
+                    elif price_change < 0:
+                        buy_volume_ratio = max(0.3, 0.5 - abs(price_change) / current_close * 10)
+                    else:
+                        buy_volume_ratio = 0.5
+                    current_buy_volume = current_volume * buy_volume_ratio
+                    current_sell_volume = current_volume * (1 - buy_volume_ratio)
+                    if len(df) >= 30:
+                        last_30_volume = df["volume"].tail(30)
+                        avg_total_vol_30 = float(last_30_volume.mean())
+                        price_trend = (current_close - float(df["valor_fechamento"].iloc[-30])) / float(df["valor_fechamento"].iloc[-30])
+                        if price_trend > 0:
+                            avg_buy_ratio = 0.55
+                        elif price_trend < 0:
+                            avg_buy_ratio = 0.45
+                        else:
+                            avg_buy_ratio = 0.5
+                        avg_buy_volume_30 = avg_total_vol_30 * avg_buy_ratio
+                        avg_sell_volume_30 = avg_total_vol_30 * (1 - avg_buy_ratio)
+                    else:
+                        return None
+                    if 'avg_sell_volume_30' in locals() and avg_sell_volume_30 > 0:
+                        ratio = avg_buy_volume_30 / avg_sell_volume_30
+                        return ratio
+                    else:
+                        return None
+                except Exception as e:
+                    self._log(f"Erro calculando ratio avg_buy/sell: {e}", level="WARN")
+                    return None
+                # Bloco removido: toda a lógica de entrada/saída já está implementada acima usando apenas o ratio de 3 candles
                         
             # 3. Verificar fechamento por tempo (4 horas) - mantido do sistema anterior
             if self._position_entry_time is not None:
