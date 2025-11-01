@@ -694,12 +694,36 @@ class SimpleRatioStrategy:
             if len(df) < 30:  # Precisamos de dados suficientes
                 return
 
-            # 1. SEMPRE calcular e mostrar snapshot de indicadores técnicos para cada ativo
+
+            # 1. Calcular e mostrar snapshot de indicadores técnicos para cada ativo
             indicators = trading_monitor.calculate_indicators(df, self.symbol)
             if indicators:
                 trading_monitor.print_snapshot(indicators)
 
-            # 2. Usar o ratio avg_buy/sell calculado pelo TechnicalIndicators
+            # 2. Calcular médias de volumes de compra para 30, 10, 5 e 3 candles
+            def rolling_buy_vol_sum(df, window):
+                buy_vols = []
+                for i in range(-window, 0):
+                    if abs(i) <= len(df):
+                        temp_df = df.iloc[max(0, len(df) + i - 1):len(df) + i + 1]
+                        if len(temp_df) >= 2:
+                            temp_buysell = TechnicalIndicators.estimate_buy_sell_volumes(temp_df)
+                            buy_vols.append(temp_buysell["buy_vol"])
+                return sum(buy_vols)
+
+            buy_vol_30 = rolling_buy_vol_sum(df, 30) if len(df) >= 30 else 0
+            buy_vol_10 = rolling_buy_vol_sum(df, 10) if len(df) >= 10 else 0
+            buy_vol_5 = rolling_buy_vol_sum(df, 5) if len(df) >= 5 else 0
+            buy_vol_3 = rolling_buy_vol_sum(df, 3) if len(df) >= 3 else 0
+
+            # Calcular avg dos volumes de compra dos últimos 3 candles
+            avg_buy_3 = buy_vol_3 / 3 if buy_vol_3 > 0 else 0
+
+            # Adicionar log das médias e ratios
+            self._log(f"[AVG 3 candles] Média volume compra últimos 3: {avg_buy_3:.2f}", level="DEBUG")
+            self._log(f"[RATIO BUY VOLS] Soma compra 30: {buy_vol_30:.2f} | 10: {buy_vol_10:.2f} | 5: {buy_vol_5:.2f} | 3: {buy_vol_3:.2f}", level="DEBUG")
+
+            # 3. Usar o ratio avg_buy/sell calculado pelo TechnicalIndicators
             if hasattr(self, 'debug_force_ratio') and self.debug_force_ratio is not None:
                 # Modo debug: usar ratio forçado
                 current_ratio = self.debug_force_ratio
@@ -713,90 +737,7 @@ class SimpleRatioStrategy:
                 if current_ratio is None or current_ratio <= 0:
                     return
 
-            # 3. Calcular ratios dos últimos 30, 10, 5 e 3 candles
-            def calc_ratio(df, n):
-                if len(df) < n:
-                    return None
-                sub_df = df.tail(n)
-                buy = 0.0
-                sell = 0.0
-                for i in range(1, len(sub_df)):
-                    curr = sub_df.iloc[i]
-                    prev = sub_df.iloc[i-1]
-                    curr_close = float(curr.get('valor_fechamento', 0))
-                    prev_close = float(prev.get('valor_fechamento', curr_close))
-                    curr_vol = float(curr.get('volume', 0))
-                    price_change = curr_close - prev_close
-                    if price_change > 0:
-                        buy_ratio = min(0.8, 0.5 + abs(price_change) / curr_close * 20)
-                    elif price_change < 0:
-                        buy_ratio = max(0.2, 0.5 - abs(price_change) / curr_close * 20)
-                    else:
-                        buy_ratio = 0.5
-                    buy += curr_vol * buy_ratio
-                    sell += curr_vol * (1 - buy_ratio)
-                return round(buy / sell, 3) if sell > 0 else None
-
-            ratio_30 = calc_ratio(df, 30)
-            ratio_10 = calc_ratio(df, 10)
-            ratio_5 = calc_ratio(df, 5)
-            ratio_3 = calc_ratio(df, 3)
-
-            # 4. Atualizar histórico de ratios
-            self._update_ratio_history(current_ratio)
-
-            # 5. Debug: mostrar ratio atual e histórico
-            self._log(f"📊 Ratio avg_buy/sell: 30={ratio_30} | 10={ratio_10} | 5={ratio_5} | 3={ratio_3}", level="DEBUG")
-
-            # Debug adicional: mostrar os últimos ratios no histórico
-            self._log(f"📊 Histórico size: {len(self._ratio_history)}", level="DEBUG")
-            if len(self._ratio_history) >= 2:
-                recent_ratios = self._ratio_history[-3:] if len(self._ratio_history) >= 3 else self._ratio_history
-                self._log(f"📈 Histórico ratios: {[f'{r:.3f}' for r in recent_ratios]}", level="DEBUG")
-            
-            # 5. Debug: verificar detecção de cruzamentos mesmo sem entrar nas condições
-            if len(self._ratio_history) >= 2:
-                prev_ratio = self._ratio_history[-2]
-                curr_ratio = self._ratio_history[-1]
-                self._log(f"🔍 Cross Debug: prev={prev_ratio:.3f}, curr={curr_ratio:.3f}", level="DEBUG")
-                
-                # Test up cross
-                up_cross = prev_ratio < 1.0 and curr_ratio > 1.0
-                down_cross = prev_ratio > 1.0 and curr_ratio < 1.0
-                
-                if up_cross:
-                    self._log(f"🟢 UP CROSS DETECTADO: {prev_ratio:.3f} → {curr_ratio:.3f}", level="INFO")
-                elif down_cross:
-                    self._log(f"🔴 DOWN CROSS DETECTADO: {prev_ratio:.3f} → {curr_ratio:.3f}", level="INFO")
-                else:
-                    self._log(f"⭕ SEM CROSS: {prev_ratio:.3f} → {curr_ratio:.3f}", level="DEBUG")
-            
-            # 5. Verificar se já temos posição aberta
-            pos = self._posicao_aberta()
-            
-            # Debug: mostrar status da posição
-            if pos:
-                self._log(f"📍 POSIÇÃO ATIVA: {pos.get('side', 'unknown')} size={pos.get('size', 0)}", level="DEBUG")
-            else:
-                self._log(f"📍 SEM POSIÇÃO ATIVA", level="DEBUG")
-            
-            if pos:
-                # Temos posição: verificar condições de saída
-                current_pos_side = self._norm_side(pos.get("side"))
-                self._check_exit_conditions(pos, current_pos_side, ratio_5, df)
-            else:
-                # Sem posição: verificar entrada
-                self._log(f"🎯 CHECANDO SINAIS DE ENTRADA...", level="DEBUG")
-                
-                # Entrada LONG: ratio_5 cruza de <1.0 para >1.0
-                if self._detect_ratio_cross(ratio_5, direction="up"):
-                    self._log(f"🔵 SINAL LONG: Ratio_5 cruzou para cima {ratio_5}", level="INFO")
-                    self._enter_position("buy", self.cfg.TRADE_SIZE_USD, df)
-                
-                # Entrada SHORT: ratio_5 cruza de >1.0 para <1.0 
-                elif self._detect_ratio_cross(ratio_5, direction="down"):
-                    self._log(f"🔴 SINAL SHORT: Ratio_5 cruzou para baixo {ratio_5}", level="INFO")
-                    self._enter_position("sell", self.cfg.TRADE_SIZE_USD, df)
+            # ...existing code...
             
         except Exception as e:
             self._log(f"Erro na função step: {type(e).__name__}: {e}", level="ERROR")
@@ -902,7 +843,7 @@ class SimpleRatioStrategy:
                 exit_reason = "RATIO_CROSS_UP_5"
                 
             if should_exit_by_ratio:
-                self._log(f"🚪 SAÍDA POR RATIO: {exit_reason} - ratio={current_ratio:.3f}", level="INFO")
+                self._log(f"🚪 SAÍDA POR RATIO: {exit_reason} - ratio={ratio_5:.3f}", level="INFO")
                 self._close_position(df)
                 return
                 
