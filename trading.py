@@ -1251,7 +1251,7 @@ if __name__ == "__main__":
         import ccxt
         print("[TESTE] Simulando entrada real na Hyperliquid com AVNT/USDC:USDC...")
         WALLET_ADDRESS = '0x08183aa09eF03Cf8475D909F507606F5044cBdAB'
-    HYPERLIQUID_SUBACCOUNT = '0x5ff0f14d577166f9ede3d9568a423166be61ea9d'
+        HYPERLIQUID_SUBACCOUNT = '0x5ff0f14d577166f9ede3d9568a423166be61ea9d'
         exchange = ccxt.hyperliquid({
             'privateKey': '0xa524295ceec3e792d9aaa18b026dbc9ca74af350117631235ec62dcbe24bc405',
             'walletAddress': WALLET_ADDRESS,  # Vault = WALLET_ADDRESS
