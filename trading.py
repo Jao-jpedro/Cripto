@@ -713,7 +713,7 @@ class SimpleRatioStrategy:
                 if current_ratio is None or current_ratio <= 0:
                     return
 
-            # 3. Calcular ratios dos últimos 30, 20 e 10 candles
+            # 3. Calcular ratios dos últimos 30, 10, 5 e 3 candles
             def calc_ratio(df, n):
                 if len(df) < n:
                     return None
@@ -738,15 +738,15 @@ class SimpleRatioStrategy:
                 return round(buy / sell, 3) if sell > 0 else None
 
             ratio_30 = calc_ratio(df, 30)
-            ratio_20 = calc_ratio(df, 20)
             ratio_10 = calc_ratio(df, 10)
             ratio_5 = calc_ratio(df, 5)
+            ratio_3 = calc_ratio(df, 3)
 
             # 4. Atualizar histórico de ratios
             self._update_ratio_history(current_ratio)
 
             # 5. Debug: mostrar ratio atual e histórico
-            self._log(f"📊 Ratio avg_buy/sell: 30={ratio_30} | 20={ratio_20} | 10={ratio_10} | 5={ratio_5}", level="DEBUG")
+            self._log(f"📊 Ratio avg_buy/sell: 30={ratio_30} | 10={ratio_10} | 5={ratio_5} | 3={ratio_3}", level="DEBUG")
 
             # Debug adicional: mostrar os últimos ratios no histórico
             self._log(f"📊 Histórico size: {len(self._ratio_history)}", level="DEBUG")
