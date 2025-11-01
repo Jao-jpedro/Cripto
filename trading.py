@@ -502,21 +502,19 @@ class RealDataDex:
 
             # Adicionar credenciais se disponíveis
             if wallet_address and private_key:
-                config['apiKey'] = wallet_address
+                config['apiKey'] = wallet_address  # Sempre usar a conta mãe como apiKey
                 config['secret'] = private_key
-                _log_global("DEX", f"🔐 Credenciais configuradas: {wallet_address[:10]}...", "INFO")
+                
+                # Se houver subconta, configurar como vault
+                if subaccount:
+                    config['options']['vaultAddress'] = subaccount
+                    _log_global("DEX", f"🔐 Wallet: {wallet_address[:10]}... | 🏦 Vault (subconta): {subaccount[:10]}...", "INFO")
+                else:
+                    _log_global("DEX", f"🔐 Credenciais configuradas: {wallet_address[:10]}...", "INFO")
 
             self.exchange = ccxt.hyperliquid(config)
-
-            # Vault sempre igual ao WALLET_ADDRESS
-            if wallet_address:
-                self.exchange.options['vault'] = wallet_address
-                _log_global("DEX", f"🏦 Vault configurado: {wallet_address}", "INFO")
-
-            # Configurar subaccount se especificada
-            if subaccount:
-                self.exchange.options['subAccount'] = subaccount
-                _log_global("DEX", f"📋 Subaccount configurado: {subaccount}", "INFO")
+            
+            # Não precisar configurar mais nada, já está tudo no config acima
 
         except Exception as e:
             _log_global("DEX", f"Erro configurando Hyperliquid: {e}", "ERROR")
@@ -604,9 +602,10 @@ class SimpleRatioConfig:
     ASSETS: List[str] = ["PUMPUSDT", "AVNTUSDT"]
     
     # Mapeamento de símbolos: Binance (dados) -> Hyperliquid (trading)
+    # Usar mercados perpétuos (:USDC) para trading com alavancagem
     SYMBOL_MAPPING = {
-        "PUMPUSDT": "PUMP/USDC:USDC",  # Binance -> Hyperliquid
-        "AVNTUSDT": "AVNT/USDC:USDC"   # Binance -> Hyperliquid
+        "PUMPUSDT": "PUMP/USDC:USDC",  # Binance -> Hyperliquid Perp
+        "AVNTUSDT": "AVNT/USDC:USDC"   # Binance -> Hyperliquid Perp
     }
     
     @classmethod
@@ -1132,40 +1131,5 @@ def main():
             time.sleep(30)
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "--testar-entrada-hyperliquid":
-        import ccxt
-        print("[TESTE] Simulando entrada real na Hyperliquid com AVNT/USDC:USDC...")
-        WALLET_ADDRESS = '0x08183aa09eF03Cf8475D909F507606F5044cBdAB'
-        HYPERLIQUID_SUBACCOUNT = '0x5ff0f14d577166f9ede3d9568a423166be61ea9d'
-        exchange = ccxt.hyperliquid({
-            'privateKey': '0xa524295ceec3e792d9aaa18b026dbc9ca74af350117631235ec62dcbe24bc405',
-            'walletAddress': WALLET_ADDRESS,  # Vault = WALLET_ADDRESS
-            'subaccount': HYPERLIQUID_SUBACCOUNT, # Subconta correta
-            'enableRateLimit': True,
-            'options': {
-                'vaultAddress': WALLET_ADDRESS, # Garantir que vault é igual ao WALLET_ADDRESS
-                'defaultSlippage': 0.01  # 1% slippage apertado
-            }
-        })
-        symbol = 'AVNT/USDC:USDC'
-        markets = exchange.load_markets()
-        ticker = exchange.fetch_ticker(symbol)
-        preco = ticker['last']
-        print(f'[TESTE] Preço atual de {symbol}:', preco)
-        leverage = 5
-        valor_minimo = 10.10
-        contract_size = markets[symbol]['contractSize'] if 'contractSize' in markets[symbol] else 1.0
-        quantidade = round(valor_minimo / (preco * contract_size), 3)
-        valor_total = quantidade * preco * contract_size
-        print(f'[TESTE] Quantidade calculada: {quantidade} | Valor total: ${valor_total:.2f} | Preço: {preco} | ContractSize: {contract_size}')
-        try:
-            order = exchange.create_order(
-                symbol, 'market', 'buy', quantidade, preco,
-                params={"leverage": leverage}
-            )
-            print('[TESTE] Ordem criada:', order)
-        except Exception as e:
-            print('[TESTE] Erro ao criar ordem:', e)
-    else:
-        main()
+    main()
+
