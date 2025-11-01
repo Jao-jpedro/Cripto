@@ -807,7 +807,7 @@ class SimpleRatioStrategy:
             import time as _time
             self._log(f"[ENTRADA] Sinal detectado para {side.upper()} em {self.trading_symbol}", level="INFO")
             # Configurar leverage
-            self._subconta_dex.set_leverage(self.cfg.LEVERAGE, self.symbol, {"marginMode": "isolated"})
+            self._subconta_dex.set_leverage(self.cfg.LEVERAGE, self.trading_symbol, {"marginMode": "isolated"})
 
             # Sempre buscar o preço atual da Hyperliquid
             current_price = self._preco_atual()
