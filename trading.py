@@ -783,19 +783,19 @@ class SimpleRatioStrategy:
             if pos:
                 # Temos posição: verificar condições de saída
                 current_pos_side = self._norm_side(pos.get("side"))
-                self._check_exit_conditions(pos, current_pos_side, current_ratio, df)
+                self._check_exit_conditions(pos, current_pos_side, ratio_5, df)
             else:
                 # Sem posição: verificar entrada
                 self._log(f"🎯 CHECANDO SINAIS DE ENTRADA...", level="DEBUG")
                 
-                # Entrada LONG: ratio cruza de <1.0 para >1.0
-                if self._detect_ratio_cross(current_ratio, direction="up"):
-                    self._log(f"🔵 SINAL LONG: Ratio cruzou para cima {current_ratio:.3f}", level="INFO")
+                # Entrada LONG: ratio_5 cruza de <1.0 para >1.0
+                if self._detect_ratio_cross(ratio_5, direction="up"):
+                    self._log(f"🔵 SINAL LONG: Ratio_5 cruzou para cima {ratio_5}", level="INFO")
                     self._enter_position("buy", self.cfg.TRADE_SIZE_USD, df)
                 
-                # Entrada SHORT: ratio cruza de >1.0 para <1.0 
-                elif self._detect_ratio_cross(current_ratio, direction="down"):
-                    self._log(f"🔴 SINAL SHORT: Ratio cruzou para baixo {current_ratio:.3f}", level="INFO")
+                # Entrada SHORT: ratio_5 cruza de >1.0 para <1.0 
+                elif self._detect_ratio_cross(ratio_5, direction="down"):
+                    self._log(f"🔴 SINAL SHORT: Ratio_5 cruzou para baixo {ratio_5}", level="INFO")
                     self._enter_position("sell", self.cfg.TRADE_SIZE_USD, df)
             
         except Exception as e:
@@ -886,20 +886,20 @@ class SimpleRatioStrategy:
         else:
             return False
             
-    def _check_exit_conditions(self, pos: dict, current_pos_side: str, current_ratio: float, df: pd.DataFrame):
+    def _check_exit_conditions(self, pos: dict, current_pos_side: str, ratio_5: float, df: pd.DataFrame):
         """Verifica condições de saída: inversão do ratio ou stop loss"""
         try:
             # 1. Verificar saída por inversão do ratio
             should_exit_by_ratio = False
             
             if current_pos_side == "buy":
-                # Posição LONG: sair se ratio cruza para baixo (<1.0)
-                should_exit_by_ratio = self._detect_ratio_cross(current_ratio, direction="down")
-                exit_reason = "RATIO_CROSS_DOWN"
+                # Posição LONG: sair se ratio_5 cruza para baixo (<1.0)
+                should_exit_by_ratio = self._detect_ratio_cross(ratio_5, direction="down")
+                exit_reason = "RATIO_CROSS_DOWN_5"
             elif current_pos_side == "sell":
-                # Posição SHORT: sair se ratio cruza para cima (>1.0)
-                should_exit_by_ratio = self._detect_ratio_cross(current_ratio, direction="up")
-                exit_reason = "RATIO_CROSS_UP"
+                # Posição SHORT: sair se ratio_5 cruza para cima (>1.0)
+                should_exit_by_ratio = self._detect_ratio_cross(ratio_5, direction="up")
+                exit_reason = "RATIO_CROSS_UP_5"
                 
             if should_exit_by_ratio:
                 self._log(f"🚪 SAÍDA POR RATIO: {exit_reason} - ratio={current_ratio:.3f}", level="INFO")
