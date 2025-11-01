@@ -693,12 +693,12 @@ class SimpleRatioStrategy:
         try:
             if len(df) < 30:  # Precisamos de dados suficientes
                 return
-            
+
             # 1. SEMPRE calcular e mostrar snapshot de indicadores técnicos para cada ativo
             indicators = trading_monitor.calculate_indicators(df, self.symbol)
             if indicators:
                 trading_monitor.print_snapshot(indicators)
-            
+
             # 2. Usar o ratio avg_buy/sell calculado pelo TechnicalIndicators
             if hasattr(self, 'debug_force_ratio') and self.debug_force_ratio is not None:
                 # Modo debug: usar ratio forçado
@@ -708,17 +708,45 @@ class SimpleRatioStrategy:
                 # Modo normal: usar ratio calculado
                 if not indicators or 'avg_buy_sell_ratio' not in indicators:
                     return
-                    
+
                 current_ratio = indicators['avg_buy_sell_ratio']
                 if current_ratio is None or current_ratio <= 0:
                     return
-            
-            # 3. Atualizar histórico de ratios
+
+            # 3. Calcular ratios dos últimos 30, 20 e 10 candles
+            def calc_ratio(df, n):
+                if len(df) < n:
+                    return None
+                sub_df = df.tail(n)
+                buy = 0.0
+                sell = 0.0
+                for i in range(1, len(sub_df)):
+                    curr = sub_df.iloc[i]
+                    prev = sub_df.iloc[i-1]
+                    curr_close = float(curr.get('valor_fechamento', 0))
+                    prev_close = float(prev.get('valor_fechamento', curr_close))
+                    curr_vol = float(curr.get('volume', 0))
+                    price_change = curr_close - prev_close
+                    if price_change > 0:
+                        buy_ratio = min(0.8, 0.5 + abs(price_change) / curr_close * 20)
+                    elif price_change < 0:
+                        buy_ratio = max(0.2, 0.5 - abs(price_change) / curr_close * 20)
+                    else:
+                        buy_ratio = 0.5
+                    buy += curr_vol * buy_ratio
+                    sell += curr_vol * (1 - buy_ratio)
+                return round(buy / sell, 3) if sell > 0 else None
+
+            ratio_30 = calc_ratio(df, 30)
+            ratio_20 = calc_ratio(df, 20)
+            ratio_10 = calc_ratio(df, 10)
+
+            # 4. Atualizar histórico de ratios
             self._update_ratio_history(current_ratio)
-            
-            # 4. Debug: mostrar ratio atual e histórico
-            self._log(f"📊 Ratio avg_buy/sell: {current_ratio:.3f}", level="DEBUG")
-            
+
+            # 5. Debug: mostrar ratio atual e histórico
+            self._log(f"📊 Ratio avg_buy/sell: atual(30)={ratio_30} | 20={ratio_20} | 10={ratio_10}", level="DEBUG")
+
             # Debug adicional: mostrar os últimos ratios no histórico
             self._log(f"📊 Histórico size: {len(self._ratio_history)}", level="DEBUG")
             if len(self._ratio_history) >= 2:
