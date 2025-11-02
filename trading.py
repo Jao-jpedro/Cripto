@@ -736,7 +736,19 @@ class SimpleRatioConfig:
         return cls.SYMBOL_MAPPING.get(data_symbol, data_symbol)
     
     # Execução
-    LEVERAGE: int           = 10          # Leverage moderado
+    LEVERAGE: int           = 10          # Leverage padrão moderado
+    
+    # Leverage específico por símbolo (sobrescreve o padrão)
+    LEVERAGE_PER_SYMBOL = {
+        "PUMPUSDT": 10,
+        "AVNTUSDT": 5   # Leverage reduzido para AVNT
+    }
+    
+    @classmethod
+    def get_leverage(cls, data_symbol: str) -> int:
+        """Retorna leverage para o símbolo específico"""
+        return cls.LEVERAGE_PER_SYMBOL.get(data_symbol, cls.LEVERAGE)
+    
     STOP_LOSS_PCT: float    = 0.20        # Stop loss fixo 20%
     TRADE_SIZE_USD: float   = 3.0         # Valor fixo por trade
     
@@ -815,6 +827,17 @@ class SimpleRatioStrategy:
             if len(df) < 30:  # Precisamos de dados suficientes
                 return
 
+            # Log do estado da posição no início do step
+            pos = self._posicao_aberta()
+            if pos:
+                import time as _time
+                if self._position_entry_time is not None:
+                    time_in_pos = _time.time() - self._position_entry_time
+                    self._log(f"[STEP_INIT] Posição ativa: {pos.get('side')} {abs(float(pos.get('contracts', 0))):.2f} (há {time_in_pos/60:.2f}min)", level="DEBUG")
+                else:
+                    self._log(f"[STEP_INIT] Posição ativa: {pos.get('side')} {abs(float(pos.get('contracts', 0))):.2f} (AVISO: entry_time é None!)", level="WARN")
+            else:
+                self._log(f"[STEP_INIT] Sem posição aberta", level="DEBUG")
 
             # 1. Calcular e mostrar snapshot de indicadores técnicos para cada ativo
             indicators = trading_monitor.calculate_indicators(df, self.symbol)
@@ -889,6 +912,9 @@ class SimpleRatioStrategy:
                 time_in_position = 0
                 if self._position_entry_time is not None:
                     time_in_position = _time.time() - self._position_entry_time
+                    self._log(f"[EXIT_CHECK] Posição aberta há {time_in_position/60:.2f} minutos", level="DEBUG")
+                else:
+                    self._log(f"[EXIT_CHECK] AVISO: _position_entry_time é None, mas posição existe!", level="WARN")
                 
                 # Tempo mínimo de 5 minutos (300 segundos) antes de permitir saída por cruzamento
                 min_time_before_exit = 300  # 5 minutos
@@ -900,14 +926,14 @@ class SimpleRatioStrategy:
                             self._log(f"🚪 SAÍDA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
                             self._close_position(df)
                         else:
-                            self._log(f"⏸️  SAÍDA LONG IGNORADA: muito cedo ({time_in_position/60:.1f}min < {min_time_before_exit/60:.1f}min)", level="DEBUG")
+                            self._log(f"⏸️  SAÍDA LONG IGNORADA: muito cedo ({time_in_position/60:.1f}min < {min_time_before_exit/60:.1f}min)", level="INFO")
                 elif side == "sell":
                     if prev_ratio <= 0.99 and curr_ratio >= 1.0:
                         if time_in_position >= min_time_before_exit:
                             self._log(f"🚪 SAÍDA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
                             self._close_position(df)
                         else:
-                            self._log(f"⏸️  SAÍDA SHORT IGNORADA: muito cedo ({time_in_position/60:.1f}min < {min_time_before_exit/60:.1f}min)", level="DEBUG")
+                            self._log(f"⏸️  SAÍDA SHORT IGNORADA: muito cedo ({time_in_position/60:.1f}min < {min_time_before_exit/60:.1f}min)", level="INFO")
             # Bloco removido: toda a lógica de entrada/saída já está implementada acima usando apenas o ratio de 3 candles
             # Garantir que não há uso de variáveis fora do escopo
                         
@@ -956,8 +982,10 @@ class SimpleRatioStrategy:
             except Exception as e:
                 self._log(f"[ENTRADA] Aviso: não foi possível verificar saldo: {e}", level="WARN")
             
-            # Configurar leverage
-            self._subconta_dex.set_leverage(self.cfg.LEVERAGE, self.trading_symbol, {"marginMode": "isolated"})
+            # Configurar leverage específico para o símbolo
+            leverage = self.cfg.get_leverage(self.symbol)
+            self._subconta_dex.set_leverage(leverage, self.trading_symbol, {"marginMode": "isolated"})
+            self._log(f"[ENTRADA] Leverage configurado: {leverage}x para {self.symbol}", level="DEBUG")
 
             # Sempre buscar o preço atual da Hyperliquid
             current_price = self._preco_atual()
@@ -967,9 +995,9 @@ class SimpleRatioStrategy:
                 return
 
             # Calcular quantidade e arredondar para precisão da exchange
-            amount_raw = usd_to_spend * self.cfg.LEVERAGE / current_price
+            amount_raw = usd_to_spend * leverage / current_price
             amount = self._round_amount(amount_raw)
-            self._log(f"[ENTRADA] Quantidade calculada: {amount_raw:.8f} → arredondada: {amount:.8f} (${usd_to_spend:.2f} × {self.cfg.LEVERAGE}x ÷ ${current_price:.6f})", level="DEBUG")
+            self._log(f"[ENTRADA] Quantidade calculada: {amount_raw:.8f} → arredondada: {amount:.8f} (${usd_to_spend:.2f} × {leverage}x ÷ ${current_price:.6f})", level="DEBUG")
             
             # Verificar quantidade mínima
             notional_value = amount * current_price
@@ -1001,15 +1029,35 @@ class SimpleRatioStrategy:
             self._last_pos_side = self._norm_side(side)
             self._entry_price = current_price  # Rastrear preço de entrada para P&L
 
-            # Criar stop loss simples
+            # Criar stop loss - seguindo padrão do tradingv4.py
             sl_price = self._calculate_stop_price(current_price, side)
             if sl_price:
                 sl_side = "sell" if side == "buy" else "buy"
                 try:
-                    sl_order = self._subconta_dex.create_order(self.trading_symbol, "stop_market", sl_side, amount, sl_price, {"reduceOnly": True})
-                    self._log(f"🛡️ Stop loss criado: {sl_side} @ {sl_price:.6f} | Ordem: {sl_order}", level="INFO")
+                    # Log detalhado antes de criar stop
+                    self._log(f"[STOP] Criando stop loss: entry={current_price:.6f}, stop_trigger={sl_price:.6f}, side={sl_side}", level="DEBUG")
+                    
+                    # Para Hyperliquid, seguir padrão do tradingv4.py
+                    sl_params = {
+                        "reduceOnly": True,
+                        "triggerPrice": sl_price,      # Preço de gatilho
+                        "stopLossPrice": sl_price,     # Preço do stop loss
+                        "trigger": "mark",             # Usar mark price
+                    }
+                    
+                    # Hyperliquid exige especificar preço base mesmo para stop_market
+                    sl_order = self._subconta_dex.create_order(
+                        self.trading_symbol, 
+                        "stop_market", 
+                        sl_side, 
+                        amount, 
+                        sl_price,  # Preço base (exigido pelo Hyperliquid)
+                        sl_params
+                    )
+                    self._log(f"🛡️ Stop loss criado: {sl_side} @ trigger={sl_price:.6f} | Ordem: {sl_order}", level="INFO")
                 except Exception as e:
-                    self._log(f"Erro criando stop loss: {e}", level="WARN")
+                    self._log(f"⚠️  Erro criando stop loss: {e}", level="WARN")
+                    self._log(f"   Continuando sem stop loss - posição vulnerável!", level="WARN")
 
             # Notificar
             self._notify_trade("open", side, current_price, amount, f"Entrada por ratio", include_hl=False)
@@ -1233,7 +1281,7 @@ def main():
     
     print("🚀 SISTEMA DE TRADING SIMPLIFICADO - SimpleRatioStrategy")
     print("📊 Assets: PUMPUSDT, AVNTUSDT (dados) → PUMP/USDC:USDC, AVNT/USDC:USDC (trading)")
-    print("💰 Trade size: $3 USD, Leverage: 10x, Stop: 20%")
+    print("💰 Trade size: $3 USD, Leverage: 10x (PUMP) / 5x (AVNT), Stop: 20%")
     print("⚡ Estratégia: Entradas/saídas por inversão de ratio avg_buy/sell")
     print("🔄 Execução contínua a cada 30 segundos")
     
