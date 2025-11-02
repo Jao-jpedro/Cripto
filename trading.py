@@ -487,37 +487,65 @@ class RealDataDex:
     def _setup_hyperliquid(self):
         """Configura conexão com Hyperliquid usando variáveis de ambiente"""
         try:
-            # Obter variáveis de ambiente
-            wallet_address = os.getenv("WALLET_ADDRESS")
-            private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-            subaccount = os.getenv("HYPERLIQUID_SUBACCOUNT")
+            # Obter variáveis de ambiente OBRIGATÓRIAS
+            wallet_address = os.getenv("WALLET_ADDRESS")  # Conta mãe (sempre necessária)
+            private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")  # Chave privada da conta mãe
+            vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")  # Subconta (vault) - OPCIONAL
+            
+            # Validar credenciais obrigatórias
+            if not wallet_address or not private_key:
+                _log_global("DEX", "❌ ERRO: WALLET_ADDRESS e HYPERLIQUID_PRIVATE_KEY são obrigatórias", "ERROR")
+                _log_global("DEX", f"   WALLET_ADDRESS: {'✅ OK' if wallet_address else '❌ FALTANDO'}", "ERROR")
+                _log_global("DEX", f"   HYPERLIQUID_PRIVATE_KEY: {'✅ OK' if private_key else '❌ FALTANDO'}", "ERROR")
+                self.exchange = None
+                return
 
-            # Configuração básica do ccxt para Hyperliquid
+            # Configuração no formato do tradingv4.py (testado e funcional)
             config = {
-                'sandbox': False,
+                'walletAddress': wallet_address,  # Conta mãe (obrigatória)
+                'privateKey': private_key,         # Chave privada (obrigatória)
+                'enableRateLimit': True,
+                'timeout': 45000,
                 'options': {
+                    'timeout': 45000,
                     'defaultType': 'swap',
                 }
             }
 
-            # Adicionar credenciais se disponíveis
-            if wallet_address and private_key:
-                config['apiKey'] = wallet_address  # Sempre usar a conta mãe como apiKey
-                config['secret'] = private_key
-                
-                # Se houver subconta, configurar como vault
-                if subaccount:
-                    config['options']['vaultAddress'] = subaccount
-                    _log_global("DEX", f"🔐 Wallet: {wallet_address[:10]}... | 🏦 Vault (subconta): {subaccount[:10]}...", "INFO")
-                else:
-                    _log_global("DEX", f"🔐 Credenciais configuradas: {wallet_address[:10]}...", "INFO")
+            # IMPORTANTE: Adicionar vaultAddress se for operar em subconta
+            if vault_address:
+                config['options']['vaultAddress'] = vault_address
+                _log_global("DEX", f"🔐 Wallet (mãe): {wallet_address[:10]}... | 🏦 Vault (subconta): {vault_address[:10]}...", "INFO")
+                _log_global("DEX", "   ⚠️  ATENÇÃO: Operações serão na SUBCONTA (vault), não na conta principal", "WARN")
+            else:
+                _log_global("DEX", f"🔐 Wallet (mãe): {wallet_address[:10]}... | ℹ️  Sem subconta (operações na conta principal)", "INFO")
 
+            # Inicializar exchange
             self.exchange = ccxt.hyperliquid(config)
+            _log_global("DEX", "✅ Hyperliquid exchange inicializado com sucesso", "INFO")
             
-            # Não precisar configurar mais nada, já está tudo no config acima
+            # Verificar saldo imediatamente para diagnóstico
+            try:
+                balance = self.exchange.fetch_balance()
+                usdc_balance = balance.get('USDC', {})
+                usdc_free = float(usdc_balance.get('free', 0))
+                usdc_used = float(usdc_balance.get('used', 0))
+                usdc_total = float(usdc_balance.get('total', 0))
+                
+                _log_global("DEX", "💰 SALDO ATUAL DA CONTA:", "INFO")
+                _log_global("DEX", f"   💵 USDC Livre: ${usdc_free:.2f}", "INFO")
+                _log_global("DEX", f"   🔒 USDC Usado: ${usdc_used:.2f}", "INFO")
+                _log_global("DEX", f"   📊 USDC Total: ${usdc_total:.2f}", "INFO")
+                
+                if usdc_free < 3.0:
+                    _log_global("DEX", f"   ⚠️  AVISO: Saldo livre muito baixo (${usdc_free:.2f} < $3.00)", "WARN")
+                    if vault_address:
+                        _log_global("DEX", f"   💡 DICA: Transfira USDC da conta mãe para a subconta {vault_address[:10]}...", "WARN")
+            except Exception as e:
+                _log_global("DEX", f"   ⚠️  Não foi possível verificar saldo: {e}", "WARN")
 
         except Exception as e:
-            _log_global("DEX", f"Erro configurando Hyperliquid: {e}", "ERROR")
+            _log_global("DEX", f"❌ Erro configurando Hyperliquid: {e}", "ERROR")
             # Fallback para modo demo sem exchange real
             self.exchange = None
     
