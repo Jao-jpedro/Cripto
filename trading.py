@@ -806,6 +806,19 @@ class SimpleRatioStrategy:
         try:
             import time as _time
             self._log(f"[ENTRADA] Sinal detectado para {side.upper()} em {self.trading_symbol}", level="INFO")
+            
+            # Verificar saldo disponível antes de tentar
+            try:
+                balance = self._subconta_dex.fetch_balance()
+                usdc_free = float(balance.get('USDC', {}).get('free', 0))
+                self._log(f"[ENTRADA] Saldo disponível: ${usdc_free:.2f} USDC", level="DEBUG")
+                
+                if usdc_free < usd_to_spend:
+                    self._log(f"[ENTRADA] Saldo insuficiente: precisa ${usd_to_spend:.2f} mas tem apenas ${usdc_free:.2f}", level="ERROR")
+                    return
+            except Exception as e:
+                self._log(f"[ENTRADA] Aviso: não foi possível verificar saldo: {e}", level="WARN")
+            
             # Configurar leverage
             self._subconta_dex.set_leverage(self.cfg.LEVERAGE, self.trading_symbol, {"marginMode": "isolated"})
 
@@ -816,15 +829,27 @@ class SimpleRatioStrategy:
                 self._log(f"[ENTRADA] Preço inválido para entrada: {current_price}", level="ERROR")
                 return
 
-            amount = usd_to_spend * self.cfg.LEVERAGE / current_price
-            self._log(f"[ENTRADA] Quantidade calculada: {amount}", level="DEBUG")
+            # Calcular quantidade e arredondar para precisão da exchange
+            amount_raw = usd_to_spend * self.cfg.LEVERAGE / current_price
+            amount = self._round_amount(amount_raw)
+            self._log(f"[ENTRADA] Quantidade calculada: {amount_raw:.8f} → arredondada: {amount:.8f} (${usd_to_spend:.2f} × {self.cfg.LEVERAGE}x ÷ ${current_price:.6f})", level="DEBUG")
 
             # Criar ordem market
             try:
+                # Log detalhado antes de enviar
+                self._log(f"[ENTRADA] Enviando ordem: symbol={self.trading_symbol}, side={side}, amount={amount:.6f}, price={current_price:.6f}", level="DEBUG")
                 order = self._subconta_dex.create_order(self.trading_symbol, "market", side, amount, current_price)
                 self._log(f"[ENTRADA] Ordem enviada para Hyperliquid: {order}", level="INFO")
             except Exception as e:
+                error_str = str(e)
                 self._log(f"[ENTRADA] Falha ao enviar ordem para Hyperliquid: {e}", level="ERROR")
+                # Decodificar erros específicos da Hyperliquid
+                if "(0, 32)" in error_str:
+                    self._log(f"[ENTRADA] Erro Hyperliquid (0, 32): Quantidade inválida ou saldo insuficiente. Amount={amount:.6f}, Price={current_price:.6f}", level="ERROR")
+                elif "(0, 33)" in error_str:
+                    self._log(f"[ENTRADA] Erro Hyperliquid (0, 33): Mercado não disponível ou pausado", level="ERROR")
+                elif "(0, 34)" in error_str:
+                    self._log(f"[ENTRADA] Erro Hyperliquid (0, 34): Preço fora dos limites permitidos", level="ERROR")
                 raise
 
             # Registrar tempo de entrada
@@ -848,7 +873,9 @@ class SimpleRatioStrategy:
 
         except Exception as e:
             error_msg = str(e).lower()
+            error_str = str(e)
             self._log(f"[ENTRADA] Erro ao tentar abrir posição: {e}", level="ERROR")
+            
             # Log detalhado do motivo do fallback
             if not self._subconta_dex.exchange:
                 self._log(f"[ENTRADA] Fallback para modo demo: Exchange não inicializada.", level="WARN")
@@ -856,6 +883,12 @@ class SimpleRatioStrategy:
                 self._log(f"[ENTRADA] Fallback para modo demo: Credenciais ausentes ou inválidas.", level="WARN")
             elif 'does not have market symbol' in error_msg or 'market' in error_msg:
                 self._log(f"[ENTRADA] Fallback para modo demo: Mercado {self.trading_symbol} não disponível na Hyperliquid.", level="WARN")
+            elif "(0, 32)" in error_str:
+                self._log(f"[ENTRADA] Fallback para modo demo: Erro Hyperliquid (0, 32) - Possíveis causas:", level="WARN")
+                self._log(f"  • Saldo insuficiente na subconta", level="WARN")
+                self._log(f"  • Quantidade menor que o mínimo permitido", level="WARN")
+                self._log(f"  • Precisão da quantidade incorreta", level="WARN")
+                self._log(f"  • Verifique se a subconta tem USDC suficiente", level="WARN")
             else:
                 self._log(f"[ENTRADA] Fallback para modo demo: Erro inesperado: {e}", level="WARN")
             
@@ -869,10 +902,14 @@ class SimpleRatioStrategy:
                 return
                 
             side = self._norm_side(pos.get("side"))
-            amount = abs(float(pos.get("contracts", 0)))
+            amount_raw = abs(float(pos.get("contracts", 0)))
             
-            if amount <= 0:
+            if amount_raw <= 0:
                 return
+            
+            # Arredondar quantidade para precisão da exchange
+            amount = self._round_amount(amount_raw)
+            self._log(f"[CLOSE] Quantidade a fechar: {amount_raw:.8f} → arredondada: {amount:.8f}", level="DEBUG")
                 
             # Determinar lado de fechamento
             close_side = "sell" if side == "buy" else "buy"
@@ -970,6 +1007,14 @@ class SimpleRatioStrategy:
         except Exception as e:
             self._log(f"Erro obtendo preço atual: {e}", level="WARN")
             return 0.0
+    
+    def _round_amount(self, amount: float) -> float:
+        """Arredonda quantidade para precisão correta da exchange"""
+        try:
+            return float(self._subconta_dex.amount_to_precision(self.trading_symbol, amount))
+        except Exception as e:
+            self._log(f"Aviso: não foi possível arredondar amount, usando valor bruto: {e}", level="DEBUG")
+            return float(amount)
 
     def _posicao_aberta(self, force_fresh: bool = False) -> Optional[Dict[str, Any]]:
         """Verifica se há posição aberta"""
