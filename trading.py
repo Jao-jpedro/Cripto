@@ -23,6 +23,31 @@ UTC = timezone.utc
 import ccxt
 import requests
 
+# ===== HYPERLIQUID API =====
+_HL_INFO_URL = "https://api.hyperliquid.xyz/info"
+_HTTP_TIMEOUT = 10  # segundos
+_SESSION = requests.Session()
+
+def _http_post_json(url: str, payload: dict, timeout: int = _HTTP_TIMEOUT):
+    """Helper para fazer requisições POST JSON"""
+    try:
+        r = _SESSION.post(url, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        _log_global("HTTP", f"Requisição falhou: {type(e).__name__}: {e}", level="WARN")
+        return None
+
+def _hl_get_account_value(wallet: str) -> float:
+    """Busca o saldo de uma conta/vault específica via API Hyperliquid"""
+    if not wallet:
+        return 0.0
+    data = _http_post_json(_HL_INFO_URL, {"type": "clearinghouseState", "user": wallet})
+    try:
+        return float(data["marginSummary"]["accountValue"]) if data else 0.0
+    except Exception:
+        return 0.0
+
 # ===== LOGGING GLOBAL =====
 # Configuração global de log file
 _LOG_FILE = None
@@ -516,7 +541,6 @@ class RealDataDex:
             if vault_address:
                 config['options']['vaultAddress'] = vault_address
                 _log_global("DEX", f"🔐 Wallet (mãe): {wallet_address[:10]}... | 🏦 Vault (subconta): {vault_address[:10]}...", "INFO")
-                _log_global("DEX", "   ⚠️  ATENÇÃO: Operações serão na SUBCONTA (vault), não na conta principal", "WARN")
             else:
                 _log_global("DEX", f"🔐 Wallet (mãe): {wallet_address[:10]}... | ℹ️  Sem subconta (operações na conta principal)", "INFO")
 
@@ -526,16 +550,43 @@ class RealDataDex:
             
             # Verificar saldo imediatamente para diagnóstico
             try:
-                balance = self.exchange.fetch_balance()
-                usdc_balance = balance.get('USDC', {})
-                usdc_free = float(usdc_balance.get('free', 0))
-                usdc_used = float(usdc_balance.get('used', 0))
-                usdc_total = float(usdc_balance.get('total', 0))
-                
-                _log_global("DEX", "💰 SALDO ATUAL DA CONTA:", "INFO")
-                _log_global("DEX", f"   💵 USDC Livre: ${usdc_free:.2f}", "INFO")
-                _log_global("DEX", f"   🔒 USDC Usado: ${usdc_used:.2f}", "INFO")
-                _log_global("DEX", f"   📊 USDC Total: ${usdc_total:.2f}", "INFO")
+                # Se tem vault_address, buscar saldo da SUBCONTA via API Hyperliquid
+                if vault_address:
+                    _log_global("DEX", "🔍 Verificando saldo da SUBCONTA (vault)...", "INFO")
+                    vault_value = _hl_get_account_value(vault_address)
+                    
+                    if vault_value > 0:
+                        # Saldo da vault obtido com sucesso
+                        usdc_total = vault_value
+                        usdc_free = vault_value  # Todo saldo da vault está disponível
+                        usdc_used = 0.0
+                        _log_global("DEX", "💰 SALDO DA SUBCONTA (VAULT):", "INFO")
+                        _log_global("DEX", f"   💵 USDC Livre: ${usdc_free:.2f}", "INFO")
+                        _log_global("DEX", f"   📊 USDC Total: ${usdc_total:.2f}", "INFO")
+                    else:
+                        # Fallback: tentar fetch_balance (pode retornar saldo da conta principal)
+                        _log_global("DEX", "⚠️  API da vault não retornou saldo, usando fallback...", "WARN")
+                        balance = self.exchange.fetch_balance()
+                        usdc_balance = balance.get('USDC', {})
+                        usdc_free = float(usdc_balance.get('free', 0))
+                        usdc_used = float(usdc_balance.get('used', 0))
+                        usdc_total = float(usdc_balance.get('total', 0))
+                        _log_global("DEX", "💰 SALDO (fallback - pode ser conta principal):", "INFO")
+                        _log_global("DEX", f"   � USDC Livre: ${usdc_free:.2f}", "INFO")
+                        _log_global("DEX", f"   🔒 USDC Usado: ${usdc_used:.2f}", "INFO")
+                        _log_global("DEX", f"   📊 USDC Total: ${usdc_total:.2f}", "INFO")
+                else:
+                    # Sem vault - usar fetch_balance normal (conta principal)
+                    _log_global("DEX", "🔍 Verificando saldo da CONTA PRINCIPAL...", "INFO")
+                    balance = self.exchange.fetch_balance()
+                    usdc_balance = balance.get('USDC', {})
+                    usdc_free = float(usdc_balance.get('free', 0))
+                    usdc_used = float(usdc_balance.get('used', 0))
+                    usdc_total = float(usdc_balance.get('total', 0))
+                    _log_global("DEX", "💰 SALDO DA CONTA PRINCIPAL:", "INFO")
+                    _log_global("DEX", f"   💵 USDC Livre: ${usdc_free:.2f}", "INFO")
+                    _log_global("DEX", f"   🔒 USDC Usado: ${usdc_used:.2f}", "INFO")
+                    _log_global("DEX", f"   📊 USDC Total: ${usdc_total:.2f}", "INFO")
                 
                 if usdc_free < 3.0:
                     _log_global("DEX", f"   ⚠️  AVISO: Saldo livre muito baixo (${usdc_free:.2f} < $3.00)", "WARN")
@@ -557,20 +608,50 @@ class RealDataDex:
         return self.exchange.fetch_ticker(symbol)
     
     def fetch_balance(self):
-        """Busca saldo da conta"""
+        """Busca saldo da conta ou subconta (vault)"""
         if not self.exchange:
             # Retorna saldo fictício para modo demo
             return {'USDC': {'free': 1000.0, 'used': 0.0, 'total': 1000.0}}
-        return self.exchange.fetch_balance()
+        
+        # Verificar se está usando subconta (vault)
+        vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")
+        
+        if vault_address:
+            # Buscar saldo da SUBCONTA via API Hyperliquid
+            vault_value = _hl_get_account_value(vault_address)
+            if vault_value > 0:
+                return {
+                    'USDC': {
+                        'free': vault_value,
+                        'used': 0.0,
+                        'total': vault_value
+                    }
+                }
+            else:
+                # Fallback para fetch_balance padrão
+                _log_global("DEX", "⚠️  API da vault não retornou saldo, usando fallback", "WARN")
+                return self.exchange.fetch_balance()
+        else:
+            # Sem vault - buscar saldo da conta principal
+            return self.exchange.fetch_balance()
     
     def fetch_positions(self, symbols: List[str] = None):
-        """Busca posições abertas"""
+        """Busca posições abertas (sempre da subconta se configurada)"""
         if not self.exchange:
             # Retorna lista vazia para modo demo
             return []
-        # Para Hyperliquid, usar parâmetros específicos se disponível
+        
+        # Para Hyperliquid com vault, as posições são automaticamente da vault
+        # quando vaultAddress está configurado no exchange
+        vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")
         wallet_address = os.getenv("WALLET_ADDRESS")
-        if wallet_address:
+        
+        if vault_address:
+            # Usar vault address para buscar posições da SUBCONTA
+            params = {'user': vault_address}
+            return self.exchange.fetch_positions(symbols, params)
+        elif wallet_address:
+            # Sem vault - usar conta principal
             params = {'user': wallet_address}
             return self.exchange.fetch_positions(symbols, params)
         else:
