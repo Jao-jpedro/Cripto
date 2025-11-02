@@ -528,6 +528,13 @@ class RealDataDex:
             return {'symbol': symbol, 'last': 0.004500}
         return self.exchange.fetch_ticker(symbol)
     
+    def fetch_balance(self):
+        """Busca saldo da conta"""
+        if not self.exchange:
+            # Retorna saldo fictício para modo demo
+            return {'USDC': {'free': 1000.0, 'used': 0.0, 'total': 1000.0}}
+        return self.exchange.fetch_balance()
+    
     def fetch_positions(self, symbols: List[str] = None):
         """Busca posições abertas"""
         if not self.exchange:
@@ -567,7 +574,13 @@ class RealDataDex:
             _log_global("DEX", f"💤 DEMO: Set leverage {leverage}x for {symbol}", "DEBUG")
             return
         return self.exchange.set_leverage(leverage, symbol, params or {})
-        return self.exchange.set_leverage(leverage, symbol, params or {})
+    
+    def amount_to_precision(self, symbol: str, amount: float):
+        """Arredonda quantidade para precisão correta do mercado"""
+        if not self.exchange:
+            # Modo demo: retorna quantidade com 4 casas decimais
+            return round(amount, 4)
+        return self.exchange.amount_to_precision(symbol, amount)
 
 # ===== LOGGER DE TRADES =====
 class TradeLogger:
@@ -815,6 +828,7 @@ class SimpleRatioStrategy:
                 
                 if usdc_free < usd_to_spend:
                     self._log(f"[ENTRADA] Saldo insuficiente: precisa ${usd_to_spend:.2f} mas tem apenas ${usdc_free:.2f}", level="ERROR")
+                    self._log(f"[ENTRADA] DICA: Transfira USDC da conta principal para a subconta (Vault: {self.wallet_config.vault_address})", level="WARN")
                     return
             except Exception as e:
                 self._log(f"[ENTRADA] Aviso: não foi possível verificar saldo: {e}", level="WARN")
@@ -833,6 +847,13 @@ class SimpleRatioStrategy:
             amount_raw = usd_to_spend * self.cfg.LEVERAGE / current_price
             amount = self._round_amount(amount_raw)
             self._log(f"[ENTRADA] Quantidade calculada: {amount_raw:.8f} → arredondada: {amount:.8f} (${usd_to_spend:.2f} × {self.cfg.LEVERAGE}x ÷ ${current_price:.6f})", level="DEBUG")
+            
+            # Verificar quantidade mínima
+            notional_value = amount * current_price
+            self._log(f"[ENTRADA] Valor nocional da ordem: ${notional_value:.2f} (amount={amount:.8f} × price={current_price:.6f})", level="DEBUG")
+            
+            if notional_value < 10.0:  # Hyperliquid geralmente exige mínimo de $10
+                self._log(f"[ENTRADA] AVISO: Valor nocional muito baixo (${notional_value:.2f} < $10.00) - pode ser rejeitado", level="WARN")
 
             # Criar ordem market
             try:
