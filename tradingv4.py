@@ -2181,7 +2181,7 @@ class GradientConfig:
     POST_COOLDOWN_CONFIRM: int = 0        # confirmações pós-cooldown desativadas
     COOLDOWN_MINUTOS: int   = 120          # tempo mínimo entre entradas após saída
     ANTI_SPAM_SECS: int     = 30           # Anti-spam mais conservador
-    MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
+    MIN_HOLD_BARS: int      = 5           # mínimo 5 velas antes de permitir saída (evita flip-flop)
 
     # Stops/TP
     STOP_ATR_MULT: float    = 0.0         # desativado (uso por % da margem)
@@ -4052,6 +4052,18 @@ class EMAGradientStrategy:
         if not self._anti_spam_ok("close"):
             self._log("Fechamento bloqueado pelo anti-spam.", level="DEBUG"); return
 
+        # Verificar MIN_HOLD_BARS - não fechar se ainda não passou o tempo mínimo
+        if self._entry_bar_idx is not None and isinstance(df_for_log, pd.DataFrame):
+            current_bar_idx = len(df_for_log) - 1
+            bars_since_entry = current_bar_idx - self._entry_bar_idx
+            min_hold = int(self.cfg.MIN_HOLD_BARS or 0)
+            if min_hold > 0 and bars_since_entry < min_hold:
+                self._log(
+                    f"Fechamento bloqueado: posição aberta há {bars_since_entry} barra(s), mínimo {min_hold} barras necessário.",
+                    level="INFO"
+                )
+                return
+
         lado_atual = self._norm_side(pos.get("side") or pos.get("positionSide"))
         qty        = float(pos.get("contracts") or 0.0)  # COPIADO DO TRADINGANTIGO.PY
         price_now  = self._preco_atual()
@@ -4082,6 +4094,10 @@ class EMAGradientStrategy:
             except Exception:
                 pass
             self._trail_max_gain_pct = None
+            
+            # Limpar estado de entrada
+            self._entry_bar_idx = None
+            self._entry_bar_time = None
 
             # *** TRAILING STOP: Limpar High Water Mark ***
             _clear_high_water_mark(self.symbol)

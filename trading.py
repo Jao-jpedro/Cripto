@@ -794,6 +794,11 @@ class SimpleRatioStrategy:
         self._orphan_position_detected: bool = False    # Flag para posições órfãs (sem entry_time)
         self._orphan_last_ratio: Optional[float] = None # Último ratio quando órfã foi detectada
         
+        # Cooldown para evitar flip-flop (entradas muito rápidas após saídas)
+        self._cooldown_until: Optional[datetime] = None
+        self._last_open_at: Optional[datetime] = None
+        self._last_close_at: Optional[datetime] = None
+        
         # Debug
         self.debug_force_ratio: Optional[float] = None  # Para testes: força um ratio específico
         
@@ -1015,7 +1020,7 @@ class SimpleRatioStrategy:
                         self._log(f"[EXIT_CHECK] LONG: ratio cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="DEBUG")
                         if allow_exit:
                             self._log(f"🚪 SAÍDA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
-                            self._close_position(df)
+                            self._close_position(df)  # Fecha LONG e abre SHORT automaticamente
                         else:
                             tempo_msg = f"{time_in_position/60:.1f}min < 5.0min" if self._position_entry_time else "aguardando novo cruzamento"
                             self._log(f"⏸️  SAÍDA LONG IGNORADA: {tempo_msg}", level="INFO")
@@ -1024,7 +1029,7 @@ class SimpleRatioStrategy:
                         self._log(f"[EXIT_CHECK] SHORT: ratio cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="DEBUG")
                         if allow_exit:
                             self._log(f"🚪 SAÍDA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
-                            self._close_position(df)
+                            self._close_position(df)  # Fecha SHORT e abre LONG automaticamente
                         else:
                             tempo_msg = f"{time_in_position/60:.1f}min < 5.0min" if self._position_entry_time else "aguardando novo cruzamento"
                             self._log(f"⏸️  SAÍDA SHORT IGNORADA: {tempo_msg}", level="INFO")
@@ -1039,8 +1044,8 @@ class SimpleRatioStrategy:
                 time_limit_4h = 4 * 60 * 60  # 4 horas em segundos
                 
                 if time_in_position >= time_limit_4h:
-                    self._log(f"⏰ SAÍDA POR TEMPO: {time_in_position/3600:.1f}h - fechando posição", level="WARN")
-                    self._close_position(df)
+                    self._log(f"⏰ SAÍDA POR TEMPO: {time_in_position/3600:.1f}h - fechando posição SEM inverter", level="WARN")
+                    self._close_position(df, open_reverse=False)  # Não abrir invertida no timeout
                     return
                     
         except Exception as e:
@@ -1179,8 +1184,14 @@ class SimpleRatioStrategy:
             else:
                 self._log(f"[ENTRADA] Fallback para modo demo: Erro inesperado: {e}", level="WARN")
             
-    def _close_position(self, df: pd.DataFrame):
-        """Fecha posição atual"""
+    def _close_position(self, df: pd.DataFrame, open_reverse: bool = True):
+        """
+        Fecha posição atual e opcionalmente abre posição invertida
+        
+        Args:
+            df: DataFrame com dados de mercado
+            open_reverse: Se True, abre posição invertida após fechar
+        """
         try:
             import time as _time
             
@@ -1217,6 +1228,17 @@ class SimpleRatioStrategy:
             # Notificar
             self._notify_trade("close", side, current_price, amount, "Fechamento", include_hl=False)
             self._log(f"🚪 POSIÇÃO FECHADA: {side.upper()} {amount:.2f} @ {current_price:.6f}", level="INFO")
+            
+            # Abrir posição invertida automaticamente
+            if open_reverse:
+                self._log(f"🔄 Abrindo posição INVERTIDA automaticamente...", level="INFO")
+                time.sleep(1)  # Pequeno delay para garantir que a posição foi fechada
+                
+                # Determinar o lado invertido
+                reverse_side = "sell" if side == "buy" else "buy"
+                
+                # Abrir nova posição no lado oposto
+                self._open_position(df, reverse_side)
             
         except Exception as e:
             self._log(f"Erro fechando posição: {e}", level="ERROR")
