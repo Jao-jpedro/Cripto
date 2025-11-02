@@ -1030,7 +1030,8 @@ class SimpleRatioStrategy:
             self._entry_price = current_price  # Rastrear preço de entrada para P&L
 
             # Criar stop loss - seguindo padrão do tradingv4.py
-            sl_price = self._calculate_stop_price(current_price, side)
+            # Passa leverage para calcular stop correto (20% do capital = 2% do preço com 10x)
+            sl_price = self._calculate_stop_price(current_price, side, leverage)
             if sl_price:
                 sl_side = "sell" if side == "buy" else "buy"
                 try:
@@ -1122,16 +1123,37 @@ class SimpleRatioStrategy:
         except Exception as e:
             self._log(f"Erro fechando posição: {e}", level="ERROR")
             
-    def _calculate_stop_price(self, entry_price: float, side: str) -> Optional[float]:
-        """Calcula preço do stop loss baseado em 20% de perda"""
+    def _calculate_stop_price(self, entry_price: float, side: str, leverage: int = None) -> Optional[float]:
+        """
+        Calcula preço do stop loss baseado em 20% de perda do CAPITAL INVESTIDO.
+        
+        Com leverage, a variação de preço necessária é menor:
+        - Leverage 10x: 20% do capital = 2% de variação no preço
+        - Leverage 5x: 20% do capital = 4% de variação no preço
+        
+        Fórmula: variação_preço = STOP_LOSS_PCT / leverage
+        """
         try:
+            # Usar leverage configurado para o símbolo
+            if leverage is None:
+                leverage = self.cfg.get_leverage(self.symbol)
+            
+            # Calcular variação de preço ajustada pelo leverage
+            # 20% de perda do capital com 10x leverage = 2% de variação no preço
+            price_variation_pct = self.cfg.STOP_LOSS_PCT / leverage
+            
             if side == "buy":
-                # LONG: stop 20% abaixo
-                return entry_price * (1 - self.cfg.STOP_LOSS_PCT)
+                # LONG: stop abaixo (preço cai)
+                stop_price = entry_price * (1 - price_variation_pct)
+                self._log(f"[STOP_CALC] LONG: entry={entry_price:.6f}, leverage={leverage}x, var={price_variation_pct:.1%}, stop={stop_price:.6f}", level="DEBUG")
+                return stop_price
             else:
-                # SHORT: stop 20% acima
-                return entry_price * (1 + self.cfg.STOP_LOSS_PCT)
-        except:
+                # SHORT: stop acima (preço sobe)
+                stop_price = entry_price * (1 + price_variation_pct)
+                self._log(f"[STOP_CALC] SHORT: entry={entry_price:.6f}, leverage={leverage}x, var={price_variation_pct:.1%}, stop={stop_price:.6f}", level="DEBUG")
+                return stop_price
+        except Exception as e:
+            self._log(f"Erro calculando stop price: {e}", level="ERROR")
             return None
 
     def _norm_side(self, raw: Optional[str]) -> Optional[str]:
