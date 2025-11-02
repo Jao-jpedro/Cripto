@@ -884,16 +884,30 @@ class SimpleRatioStrategy:
                     self._log(f"🚀 ENTRADA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
                     self._enter_position("sell", self.cfg.TRADE_SIZE_USD, df)
             else:
-                # Com posição aberta
+                # Com posição aberta - verificar tempo mínimo antes de permitir saída por cruzamento
+                import time as _time
+                time_in_position = 0
+                if self._position_entry_time is not None:
+                    time_in_position = _time.time() - self._position_entry_time
+                
+                # Tempo mínimo de 5 minutos (300 segundos) antes de permitir saída por cruzamento
+                min_time_before_exit = 300  # 5 minutos
+                
                 side = self._norm_side(pos.get("side"))
                 if side == "buy":
                     if prev_ratio >= 1.0 and curr_ratio <= 0.99:
-                        self._log(f"🚪 SAÍDA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
-                        self._close_position(df)
+                        if time_in_position >= min_time_before_exit:
+                            self._log(f"🚪 SAÍDA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
+                            self._close_position(df)
+                        else:
+                            self._log(f"⏸️  SAÍDA LONG IGNORADA: muito cedo ({time_in_position/60:.1f}min < {min_time_before_exit/60:.1f}min)", level="DEBUG")
                 elif side == "sell":
                     if prev_ratio <= 0.99 and curr_ratio >= 1.0:
-                        self._log(f"🚪 SAÍDA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
-                        self._close_position(df)
+                        if time_in_position >= min_time_before_exit:
+                            self._log(f"🚪 SAÍDA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
+                            self._close_position(df)
+                        else:
+                            self._log(f"⏸️  SAÍDA SHORT IGNORADA: muito cedo ({time_in_position/60:.1f}min < {min_time_before_exit/60:.1f}min)", level="DEBUG")
             # Bloco removido: toda a lógica de entrada/saída já está implementada acima usando apenas o ratio de 3 candles
             # Garantir que não há uso de variáveis fora do escopo
                         
