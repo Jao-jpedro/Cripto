@@ -268,7 +268,7 @@ class TradingMonitor:
     def __init__(self):
         self.indicators = TechnicalIndicators()
         self.last_snapshot_time = 0
-        self.snapshot_interval = 30  # Snapshot a cada 30 segundos
+        self.snapshot_interval = 20  # Snapshot a cada 20 segundos
     
     def should_take_snapshot(self) -> bool:
         """Verifica se deve tirar um snapshot dos indicadores"""
@@ -791,6 +791,8 @@ class SimpleRatioStrategy:
         self._entry_price: Optional[float] = None       # Preço de entrada para cálculo de P&L
         self._last_ratio_value: Optional[float] = None  # Último valor do ratio avg_buy/sell
         self._ratio_history: List[float] = []           # Histórico de ratios para detectar inversões
+        self._orphan_position_detected: bool = False    # Flag para posições órfãs (sem entry_time)
+        self._orphan_last_ratio: Optional[float] = None # Último ratio quando órfã foi detectada
         
         # Debug
         self.debug_force_ratio: Optional[float] = None  # Para testes: força um ratio específico
@@ -821,6 +823,48 @@ class SimpleRatioStrategy:
         prefix = f"[{self.symbol}]"
         _log_global("STRATEGY", f"{prefix} {message}", level)
 
+    def _try_recover_position_entry_time(self, pos_side: str) -> Optional[float]:
+        """
+        Tenta recuperar o timestamp de abertura da posição via API Hyperliquid.
+        Retorna timestamp em segundos ou None se não conseguir.
+        """
+        try:
+            vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")
+            if not vault_address:
+                return None
+            
+            # Buscar últimos fills da wallet via API Hyperliquid
+            fills_data = _http_post_json(_HL_INFO_URL, {"type": "userFills", "user": vault_address})
+            
+            if not fills_data or not isinstance(fills_data, list):
+                return None
+            
+            # Procurar o fill mais recente que abriu a posição atual
+            # Fills vêm ordenados do mais recente para o mais antigo
+            for fill in fills_data[:20]:  # Verificar últimos 20 fills
+                try:
+                    coin = fill.get("coin", "")
+                    side = fill.get("side", "").lower()
+                    time_ms = fill.get("time", 0)
+                    
+                    # Verificar se é o ativo correto (PUMP ou AVNT)
+                    if coin in ["PUMP", "AVNT"]:
+                        # Verificar se é o lado correto (buy ou sell)
+                        if side == pos_side.lower():
+                            # Converter milliseconds para seconds
+                            entry_time = float(time_ms) / 1000.0
+                            self._log(f"[RECOVER] Encontrado entry_time via API: {datetime.fromtimestamp(entry_time).strftime('%H:%M:%S')}", level="INFO")
+                            return entry_time
+                except Exception as e:
+                    continue
+            
+            self._log(f"[RECOVER] Não foi possível encontrar entry_time nos últimos fills", level="WARN")
+            return None
+            
+        except Exception as e:
+            self._log(f"[RECOVER] Erro ao tentar recuperar entry_time: {e}", level="WARN")
+            return None
+
     def step(self, df: pd.DataFrame):
         """Função principal da estratégia simplificada"""
         try:
@@ -831,11 +875,33 @@ class SimpleRatioStrategy:
             pos = self._posicao_aberta()
             if pos:
                 import time as _time
+                pos_side = pos.get('side')
+                
+                # Se detectar posição órfã (entry_time=None), tentar recuperar da API
+                if self._position_entry_time is None and not self._orphan_position_detected:
+                    self._log(f"[ORPHAN] Posição órfã detectada: {pos_side} {abs(float(pos.get('contracts', 0))):.2f} - tentando recuperar entry_time via API...", level="WARN")
+                    
+                    # Tentar recuperar entry_time da API
+                    recovered_time = self._try_recover_position_entry_time(pos_side)
+                    
+                    if recovered_time:
+                        # Sucesso! Agora temos o entry_time real
+                        self._position_entry_time = recovered_time
+                        self._log(f"[ORPHAN] ✅ Entry_time recuperado com sucesso! Posição aberta há {_time.time() - recovered_time:.2f}s", level="INFO")
+                    else:
+                        # Não conseguiu recuperar - marcar como órfã e aguardar próximo cruzamento
+                        self._orphan_position_detected = True
+                        # Salvar o ratio atual para detectar o PRÓXIMO cruzamento
+                        ratio_3 = self._ratio_3_history[-1] if len(self._ratio_3_history) > 0 else None
+                        self._orphan_last_ratio = ratio_3
+                        self._log(f"[ORPHAN] ⚠️ Não foi possível recuperar entry_time. Posição marcada como órfã (ratio atual: {ratio_3:.4f}). Aguardando PRÓXIMO cruzamento...", level="WARN")
+                
+                # Log do tempo em posição
                 if self._position_entry_time is not None:
                     time_in_pos = _time.time() - self._position_entry_time
-                    self._log(f"[STEP_INIT] Posição ativa: {pos.get('side')} {abs(float(pos.get('contracts', 0))):.2f} (há {time_in_pos/60:.2f}min)", level="DEBUG")
-                else:
-                    self._log(f"[STEP_INIT] Posição ativa: {pos.get('side')} {abs(float(pos.get('contracts', 0))):.2f} (AVISO: entry_time é None!)", level="WARN")
+                    self._log(f"[STEP_INIT] Posição ativa: {pos_side} {abs(float(pos.get('contracts', 0))):.2f} (há {time_in_pos/60:.2f}min)", level="DEBUG")
+                elif self._orphan_position_detected:
+                    self._log(f"[STEP_INIT] Posição órfã: {pos_side} {abs(float(pos.get('contracts', 0))):.2f} (aguardando próximo cruzamento, último ratio: {self._orphan_last_ratio})", level="DEBUG")
             else:
                 self._log(f"[STEP_INIT] Sem posição aberta", level="DEBUG")
 
@@ -910,30 +976,58 @@ class SimpleRatioStrategy:
                 # Com posição aberta - verificar tempo mínimo antes de permitir saída por cruzamento
                 import time as _time
                 time_in_position = 0
+                allow_exit = False
+                
                 if self._position_entry_time is not None:
                     time_in_position = _time.time() - self._position_entry_time
                     self._log(f"[EXIT_CHECK] Posição aberta há {time_in_position/60:.2f} minutos", level="DEBUG")
+                    # Tempo mínimo de 5 minutos (300 segundos) antes de permitir saída por cruzamento
+                    allow_exit = (time_in_position >= 300)
+                elif self._orphan_position_detected:
+                    # Posição órfã - verificar se é um NOVO cruzamento (diferente do que estava quando detectamos)
+                    # Só fechar se o ratio atual cruzou a partir de um lado diferente do órfão
+                    if self._orphan_last_ratio is not None:
+                        # Se órfão estava >=1.0 e agora cruzou para <=0.99, OU
+                        # Se órfão estava <=0.99 e agora cruzou para >=1.0
+                        # Isso garante que é um NOVO cruzamento, não o mesmo que estava quando detectamos
+                        is_new_crossing = (
+                            (self._orphan_last_ratio >= 1.0 and curr_ratio <= 0.99) or
+                            (self._orphan_last_ratio <= 0.99 and curr_ratio >= 1.0)
+                        )
+                        if is_new_crossing:
+                            self._log(f"[ORPHAN] ✅ Novo cruzamento detectado para posição órfã (órfão em {self._orphan_last_ratio:.4f} → agora {curr_ratio:.4f}) - permitindo fechamento", level="INFO")
+                            allow_exit = True
+                        else:
+                            self._log(f"[ORPHAN] ⏸️  Ainda no mesmo lado do cruzamento original (órfão: {self._orphan_last_ratio:.4f}, atual: {curr_ratio:.4f}) - aguardando novo cruzamento", level="DEBUG")
+                            allow_exit = False
+                    else:
+                        # Caso edge: órfão sem ratio salvo - não fechar por segurança
+                        self._log(f"[ORPHAN] ⚠️ Órfão sem ratio de referência - não fechando por segurança", level="WARN")
+                        allow_exit = False
                 else:
-                    self._log(f"[EXIT_CHECK] AVISO: _position_entry_time é None, mas posição existe!", level="WARN")
-                
-                # Tempo mínimo de 5 minutos (300 segundos) antes de permitir saída por cruzamento
-                min_time_before_exit = 300  # 5 minutos
+                    # Posição órfã mas ainda não marcada - não deve acontecer se lógica acima funcionar
+                    self._log(f"[EXIT_CHECK] ⚠️ Estado inconsistente: entry_time=None mas orphan_detected=False", level="WARN")
+                    allow_exit = False
                 
                 side = self._norm_side(pos.get("side"))
                 if side == "buy":
                     if prev_ratio >= 1.0 and curr_ratio <= 0.99:
-                        if time_in_position >= min_time_before_exit:
+                        self._log(f"[EXIT_CHECK] LONG: ratio cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="DEBUG")
+                        if allow_exit:
                             self._log(f"🚪 SAÍDA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
                             self._close_position(df)
                         else:
-                            self._log(f"⏸️  SAÍDA LONG IGNORADA: muito cedo ({time_in_position/60:.1f}min < {min_time_before_exit/60:.1f}min)", level="INFO")
+                            tempo_msg = f"{time_in_position/60:.1f}min < 5.0min" if self._position_entry_time else "aguardando novo cruzamento"
+                            self._log(f"⏸️  SAÍDA LONG IGNORADA: {tempo_msg}", level="INFO")
                 elif side == "sell":
                     if prev_ratio <= 0.99 and curr_ratio >= 1.0:
-                        if time_in_position >= min_time_before_exit:
+                        self._log(f"[EXIT_CHECK] SHORT: ratio cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="DEBUG")
+                        if allow_exit:
                             self._log(f"🚪 SAÍDA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
                             self._close_position(df)
                         else:
-                            self._log(f"⏸️  SAÍDA SHORT IGNORADA: muito cedo ({time_in_position/60:.1f}min < {min_time_before_exit/60:.1f}min)", level="INFO")
+                            tempo_msg = f"{time_in_position/60:.1f}min < 5.0min" if self._position_entry_time else "aguardando novo cruzamento"
+                            self._log(f"⏸️  SAÍDA SHORT IGNORADA: {tempo_msg}", level="INFO")
             # Bloco removido: toda a lógica de entrada/saída já está implementada acima usando apenas o ratio de 3 candles
             # Garantir que não há uso de variáveis fora do escopo
                         
@@ -1115,6 +1209,10 @@ class SimpleRatioStrategy:
             self._position_entry_time = None
             self._last_pos_side = None
             self._entry_price = None  # Limpar preço de entrada
+            
+            # Resetar flags de órfão
+            self._orphan_position_detected = False
+            self._orphan_last_ratio = None
             
             # Notificar
             self._notify_trade("close", side, current_price, amount, "Fechamento", include_hl=False)
@@ -1305,7 +1403,7 @@ def main():
     print("📊 Assets: PUMPUSDT, AVNTUSDT (dados) → PUMP/USDC:USDC, AVNT/USDC:USDC (trading)")
     print("💰 Trade size: $3 USD, Leverage: 10x (PUMP) / 5x (AVNT), Stop: 20%")
     print("⚡ Estratégia: Entradas/saídas por inversão de ratio avg_buy/sell")
-    print("🔄 Execução contínua a cada 30 segundos")
+    print("🔄 Execução contínua a cada 20 segundos")
     
     # Verificar variáveis de ambiente
     wallet_address = os.getenv("WALLET_ADDRESS")
@@ -1378,16 +1476,16 @@ def main():
                     print(f"    ❌ Erro: {e}")
             
             print("✅ Ciclo completo!")
-            print(f"⏰ Aguardando 30 segundos para próximo ciclo...")
-            time.sleep(30)
+            print(f"⏰ Aguardando 20 segundos para próximo ciclo...")
+            time.sleep(20)
             
         except KeyboardInterrupt:
             print("\n🛑 Trading interrompido pelo usuário!")
             break
         except Exception as e:
             _log_global("MAIN", f"Erro no loop principal: {e}", "ERROR")
-            print(f"❌ Erro no ciclo, aguardando 30s antes de tentar novamente...")
-            time.sleep(30)
+            print(f"❌ Erro no ciclo, aguardando 20s antes de tentar novamente...")
+            time.sleep(20)
 
 if __name__ == "__main__":
     main()
