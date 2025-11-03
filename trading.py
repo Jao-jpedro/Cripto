@@ -988,30 +988,27 @@ class SimpleRatioStrategy:
                     self._log(f"[EXIT_CHECK] Posição aberta há {time_in_position/60:.2f} minutos", level="DEBUG")
                     # Tempo mínimo de 5 minutos (300 segundos) antes de permitir saída por cruzamento
                     allow_exit = (time_in_position >= 300)
-                elif self._orphan_position_detected:
+                elif self._orphan_position_detected and self._orphan_last_ratio is not None:
                     # Posição órfã - verificar se é um NOVO cruzamento (diferente do que estava quando detectamos)
                     # Só fechar se o ratio atual cruzou a partir de um lado diferente do órfão
-                    if self._orphan_last_ratio is not None:
-                        # Se órfão estava >=1.0 e agora cruzou para <=0.99, OU
-                        # Se órfão estava <=0.99 e agora cruzou para >=1.0
-                        # Isso garante que é um NOVO cruzamento, não o mesmo que estava quando detectamos
-                        is_new_crossing = (
-                            (self._orphan_last_ratio >= 1.0 and curr_ratio <= 0.99) or
-                            (self._orphan_last_ratio <= 0.99 and curr_ratio >= 1.0)
-                        )
-                        if is_new_crossing:
-                            self._log(f"[ORPHAN] ✅ Novo cruzamento detectado para posição órfã (órfão em {self._orphan_last_ratio:.4f} → agora {curr_ratio:.4f}) - permitindo fechamento", level="INFO")
-                            allow_exit = True
-                        else:
-                            self._log(f"[ORPHAN] ⏸️  Ainda no mesmo lado do cruzamento original (órfão: {self._orphan_last_ratio:.4f}, atual: {curr_ratio:.4f}) - aguardando novo cruzamento", level="DEBUG")
-                            allow_exit = False
+                    # Se órfão estava >=1.0 e agora cruzou para <=0.99, OU
+                    # Se órfão estava <=0.99 e agora cruzou para >=1.0
+                    # Isso garante que é um NOVO cruzamento, não o mesmo que estava quando detectamos
+                    is_new_crossing = (
+                        (self._orphan_last_ratio >= 1.0 and curr_ratio <= 0.99) or
+                        (self._orphan_last_ratio <= 0.99 and curr_ratio >= 1.0)
+                    )
+                    if is_new_crossing:
+                        self._log(f"[ORPHAN] ✅ Novo cruzamento detectado para posição órfã (órfão em {self._orphan_last_ratio:.4f} → agora {curr_ratio:.4f}) - permitindo fechamento", level="INFO")
+                        allow_exit = True
                     else:
-                        # Caso edge: órfão sem ratio salvo - não fechar por segurança
-                        self._log(f"[ORPHAN] ⚠️ Órfão sem ratio de referência - não fechando por segurança", level="WARN")
+                        self._log(f"[ORPHAN] ⏸️  Ainda no mesmo lado do cruzamento original (órfão: {self._orphan_last_ratio:.4f}, atual: {curr_ratio:.4f}) - aguardando novo cruzamento", level="DEBUG")
                         allow_exit = False
                 else:
-                    # Posição órfã mas ainda não marcada - não deve acontecer se lógica acima funcionar
-                    self._log(f"[EXIT_CHECK] ⚠️ Estado inconsistente: entry_time=None mas orphan_detected=False", level="WARN")
+                    # Posição sem entry_time mas também não detectada como órfã ainda
+                    # Isso pode acontecer no primeiro ciclo após abrir posição (race condition)
+                    # Vamos esperar o próximo ciclo para validar
+                    self._log(f"[EXIT_CHECK] ⚠️ Aguardando próximo ciclo para validar estado da posição", level="DEBUG")
                     allow_exit = False
                 
                 side = self._norm_side(pos.get("side"))
@@ -1237,8 +1234,8 @@ class SimpleRatioStrategy:
                 # Determinar o lado invertido
                 reverse_side = "sell" if side == "buy" else "buy"
                 
-                # Abrir nova posição no lado oposto
-                self._open_position(df, reverse_side)
+                # Abrir nova posição no lado oposto usando o mesmo valor USD
+                self._enter_position(reverse_side, self.cfg.TRADE_SIZE_USD, df)
             
         except Exception as e:
             self._log(f"Erro fechando posição: {e}", level="ERROR")
