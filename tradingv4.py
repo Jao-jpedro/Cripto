@@ -5111,8 +5111,7 @@ class EMAGradientStrategy:
         sl_side = "sell" if norm_side == "buy" else "buy"
         tp_side = sl_side
         
-        tp_display = f"{tp_price:.6f}" if manage_take else "disabled"
-        self._log(f"🛡️ Criando proteções em {len(orders_created)} carteiras | SL: {sl_price:.6f} | TP: {tp_display}", level="INFO")
+        self._log(f"🛡️ Criando proteções em {len(orders_created)} carteiras | SL: {sl_price:.6f} | TP: {tp_price:.6f if manage_take else 'disabled'}", level="INFO")
         
         # Criar stops para cada carteira
         for order_info in orders_created:
@@ -5954,92 +5953,6 @@ class EMAGradientStrategy:
             #     )
             #     self._fechar_posicao(df_for_log=df)
             #     return
-            
-            # Calcular métricas de volume para posição aberta
-            try:
-                g_last = float(df["ema_short_grad_pct"].iloc[-1]) if pd.notna(df["ema_short_grad_pct"].iloc[-1]) else float('nan')
-                current_breakout_k = abs(float(last.valor_fechamento) - float(last.ema_short)) / float(last.atr) if float(last.atr) > 0 else 0.0
-                
-                # Estimar volumes de compra e venda baseado na movimentação do preço
-                current_volume = float(last.volume) if hasattr(last, 'volume') else 0.0
-                if len(df) >= 2:
-                    prev_close = float(df["valor_fechamento"].iloc[-2])
-                    current_close = float(last.valor_fechamento)
-                    price_change = current_close - prev_close
-                    
-                    # Estimativa: se preço subiu, mais volume de compra; se desceu, mais volume de venda
-                    if price_change > 0:
-                        buy_volume_ratio = min(0.7, 0.5 + abs(price_change) / current_close * 10)
-                    elif price_change < 0:
-                        buy_volume_ratio = max(0.3, 0.5 - abs(price_change) / current_close * 10)
-                    else:
-                        buy_volume_ratio = 0.5
-                        
-                    current_buy_volume = current_volume * buy_volume_ratio
-                    current_sell_volume = current_volume * (1 - buy_volume_ratio)
-                else:
-                    current_buy_volume = current_volume * 0.5
-                    current_sell_volume = current_volume * 0.5
-                    
-                # Calcular médias dos últimos 30 candles para buy/sell
-                if len(df) >= 30:
-                    last_30_total_vol = df["volume"].tail(30) if "volume" in df.columns else []
-                    if len(last_30_total_vol) > 0:
-                        avg_total_vol_30 = float(last_30_total_vol.mean())
-                        price_trend = (current_close - float(df["valor_fechamento"].iloc[-30])) / float(df["valor_fechamento"].iloc[-30])
-                        if price_trend > 0:
-                            avg_buy_ratio = 0.55
-                        elif price_trend < 0:
-                            avg_buy_ratio = 0.45
-                        else:
-                            avg_buy_ratio = 0.5
-                            
-                        avg_buy_volume_30 = avg_total_vol_30 * avg_buy_ratio
-                        avg_sell_volume_30 = avg_total_vol_30 * (1 - avg_buy_ratio)
-                    else:
-                        avg_buy_volume_30 = 0.0
-                        avg_sell_volume_30 = 0.0
-                else:
-                    avg_buy_volume_30 = 0.0
-                    avg_sell_volume_30 = 0.0
-                    
-                # Calcular ratios
-                buy_ratio = current_buy_volume / avg_buy_volume_30 if avg_buy_volume_30 > 0 else 0.0
-                sell_ratio = current_sell_volume / avg_sell_volume_30 if avg_sell_volume_30 > 0 else 0.0
-                
-                # Calcular ratios de buy/sell
-                if current_sell_volume > 0:
-                    buy_sell_ratio = current_buy_volume / current_sell_volume
-                else:
-                    buy_sell_ratio = float('inf') if current_buy_volume > 0 else 0.0
-                
-                if avg_sell_volume_30 > 0:
-                    avg_buy_sell_ratio = avg_buy_volume_30 / avg_sell_volume_30
-                else:
-                    avg_buy_sell_ratio = float('inf') if avg_buy_volume_30 > 0 else 0.0
-                
-                # Calcular trades
-                current_trades = current_volume
-                avg_trades_30 = avg_total_vol_30 if len(df) >= 30 and 'volume' in df.columns else 0.0
-                trades_ratio = current_trades / avg_trades_30 if avg_trades_30 > 0 else 0.0
-                
-                self._log(
-                    "Position snapshot | close={:.6f} ema7={:.6f} ema21={:.6f} atr={:.6f} atr%={:.3f} "
-                    "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | current_k_atr={:.3f} | trades_now={:.0f} avg_30c={:.0f} ratio={:.2f}x | "
-                    "buy_vol={:.0f} buy_avg30={:.0f} buy_ratio={:.2f}x | sell_vol={:.0f} sell_avg30={:.0f} sell_ratio={:.2f}x | "
-                    "buy/sell={:.2f} avg_buy/sell={:.2f}".format(
-                        float(last.valor_fechamento), float(last.ema_short), float(last.ema_long), float(last.atr),
-                        float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, current_breakout_k,
-                        current_trades, avg_trades_30, trades_ratio,
-                        current_buy_volume, avg_buy_volume_30, buy_ratio,
-                        current_sell_volume, avg_sell_volume_30, sell_ratio,
-                        buy_sell_ratio, avg_buy_sell_ratio
-                    ),
-                    level="DEBUG",
-                )
-            except Exception as e:
-                self._log(f"Erro calculando métricas de volume: {e}", level="WARN")
-            
             self._log("Posição aberta: aguardando execução de TP/SL.", level="DEBUG")
             self._safe_log("decisao", df_for_log=df, tipo="info")
             self._last_pos_side = lado if lado in ("buy", "sell") else None
@@ -6054,103 +5967,11 @@ class EMAGradientStrategy:
                 diff = float(last.ema_short - last.ema_long)
                 # Calcular BREAKOUT_K_ATR atual do momento (distância close-ema7 / atr)
                 current_breakout_k = abs(float(last.valor_fechamento) - float(last.ema_short)) / float(last.atr) if float(last.atr) > 0 else 0.0
-                
-                # Calcular quantidade de trades atual e média dos últimos 30 candles
-                current_trades = float(last.volume) if hasattr(last, 'volume') else 0.0
-                try:
-                    # Pegar os últimos 30 candles para calcular média de trades
-                    last_30_volumes = df["volume_compra"].tail(30) if "volume_compra" in df.columns else df["volume"].tail(30) if "volume" in df.columns else []
-                    avg_trades_30 = float(last_30_volumes.mean()) if len(last_30_volumes) > 0 else 0.0
-                    # Calcular ratio atual/média
-                    trades_ratio = current_trades / avg_trades_30 if avg_trades_30 > 0 else 0.0
-                except Exception:
-                    avg_trades_30 = 0.0
-                    trades_ratio = 0.0
-                
-                # Estimar volumes de compra e venda baseado na movimentação do preço
-                try:
-                    current_volume = float(last.volume) if hasattr(last, 'volume') else 0.0
-                    if len(df) >= 2:
-                        prev_close = float(df["valor_fechamento"].iloc[-2])
-                        current_close = float(last.valor_fechamento)
-                        price_change = current_close - prev_close
-                        
-                        # Estimativa: se preço subiu, mais volume de compra; se desceu, mais volume de venda
-                        if price_change > 0:
-                            # Preço subindo - estimar 60-70% volume de compra
-                            buy_volume_ratio = min(0.7, 0.5 + abs(price_change) / current_close * 10)
-                        elif price_change < 0:
-                            # Preço descendo - estimar 30-40% volume de compra (60-70% venda)
-                            buy_volume_ratio = max(0.3, 0.5 - abs(price_change) / current_close * 10)
-                        else:
-                            # Preço estável - assumir 50/50
-                            buy_volume_ratio = 0.5
-                            
-                        current_buy_volume = current_volume * buy_volume_ratio
-                        current_sell_volume = current_volume * (1 - buy_volume_ratio)
-                    else:
-                        current_buy_volume = current_volume * 0.5
-                        current_sell_volume = current_volume * 0.5
-                        
-                    # Calcular médias dos últimos 30 candles para buy/sell
-                    if len(df) >= 30:
-                        last_30_total_vol = df["volume"].tail(30) if "volume" in df.columns else []
-                        if len(last_30_total_vol) > 0:
-                            avg_total_vol_30 = float(last_30_total_vol.mean())
-                            # Estimar proporção histórica de compra/venda baseada na tendência
-                            price_trend = (current_close - float(df["valor_fechamento"].iloc[-30])) / float(df["valor_fechamento"].iloc[-30])
-                            if price_trend > 0:
-                                avg_buy_ratio = 0.55  # Tendência de alta = mais compra
-                            elif price_trend < 0:
-                                avg_buy_ratio = 0.45  # Tendência de baixa = mais venda
-                            else:
-                                avg_buy_ratio = 0.5
-                                
-                            avg_buy_volume_30 = avg_total_vol_30 * avg_buy_ratio
-                            avg_sell_volume_30 = avg_total_vol_30 * (1 - avg_buy_ratio)
-                        else:
-                            avg_buy_volume_30 = 0.0
-                            avg_sell_volume_30 = 0.0
-                    else:
-                        avg_buy_volume_30 = 0.0
-                        avg_sell_volume_30 = 0.0
-                        
-                    # Calcular ratios
-                    buy_ratio = current_buy_volume / avg_buy_volume_30 if avg_buy_volume_30 > 0 else 0.0
-                    sell_ratio = current_sell_volume / avg_sell_volume_30 if avg_sell_volume_30 > 0 else 0.0
-                    
-                    # Calcular ratios de buy/sell
-                    if current_sell_volume > 0:
-                        buy_sell_ratio = current_buy_volume / current_sell_volume
-                    else:
-                        buy_sell_ratio = float('inf') if current_buy_volume > 0 else 0.0
-                    
-                    if avg_sell_volume_30 > 0:
-                        avg_buy_sell_ratio = avg_buy_volume_30 / avg_sell_volume_30
-                    else:
-                        avg_buy_sell_ratio = float('inf') if avg_buy_volume_30 > 0 else 0.0
-                    
-                except Exception:
-                    current_buy_volume = 0.0
-                    current_sell_volume = 0.0
-                    avg_buy_volume_30 = 0.0
-                    avg_sell_volume_30 = 0.0
-                    buy_ratio = 0.0
-                    sell_ratio = 0.0
-                    buy_sell_ratio = 0.0
-                    avg_buy_sell_ratio = 0.0
-                
                 self._log(
                     "Trigger snapshot | close={:.6f} ema7={:.6f} ema21={:.6f} atr={:.6f} atr%={:.3f} "
-                    "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | current_k_atr={:.3f} | trades_now={:.0f} avg_30c={:.0f} ratio={:.2f}x | "
-                    "buy_vol={:.0f} buy_avg30={:.0f} buy_ratio={:.2f}x | sell_vol={:.0f} sell_avg30={:.0f} sell_ratio={:.2f}x | "
-                    "buy/sell={:.2f} avg_buy/sell={:.2f}".format(
+                    "vol={:.2f} vol_ma={:.2f} grad%_ema7={:.4f} | current_k_atr={:.3f}".format(
                         float(last.valor_fechamento), float(last.ema_short), float(last.ema_long), float(last.atr),
-                        float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, current_breakout_k,
-                        current_trades, avg_trades_30, trades_ratio,
-                        current_buy_volume, avg_buy_volume_30, buy_ratio,
-                        current_sell_volume, avg_sell_volume_30, sell_ratio,
-                        buy_sell_ratio, avg_buy_sell_ratio
+                        float(last.atr_pct), float(last.volume), float(last.vol_ma), g_last, current_breakout_k
                     ),
                     level="DEBUG",
                 )
@@ -6205,23 +6026,33 @@ class EMAGradientStrategy:
                         rsi_val = float(df["rsi"].dropna().iloc[-1])
             except Exception:
                 rsi_val = float('nan')
+            force_long = False
+            force_short = False
+            if not math.isnan(rsi_val):
+                if rsi_val < 20.0:
+                    force_short = True  # INVERSO: RSI oversold → Force SHORT
+                    self._log(f"⚠️ SISTEMA INVERSO - RSI Force: RSI14={rsi_val:.2f} < 20 → Force SHORT", level="INFO")
+                elif rsi_val > 80.0:
+                    force_long = True   # INVERSO: RSI overbought → Force LONG
+                    self._log(f"⚠️ SISTEMA INVERSO - RSI Force: RSI14={rsi_val:.2f} > 80 → Force LONG", level="INFO")
 
-            # no-trade zone
+            # no-trade zone (desconsiderada se RSI exigir entrada)
             eps_nt = self.cfg.NO_TRADE_EPS_K_ATR * float(last.atr)
             diff_nt = abs(float(last.ema_short - last.ema_long))
             atr_ok = (self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX)
-            if (diff_nt < eps_nt) or (not atr_ok):
-                reasons_nt = []
-                if diff_nt < eps_nt:
-                    reasons_nt.append(f"|ema7-ema21|({diff_nt:.6f})<eps({eps_nt:.6f})")
-                if last.atr_pct < self.cfg.ATR_PCT_MIN:
-                    reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN}")
-                if last.atr_pct > self.cfg.ATR_PCT_MAX:
-                    reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
-                self._log("No-Trade Zone ativa: " + "; ".join(reasons_nt), level="INFO")
-                self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
-                self._last_pos_side = None
-                return
+            if not (force_long or force_short):
+                if (diff_nt < eps_nt) or (not atr_ok):
+                    reasons_nt = []
+                    if diff_nt < eps_nt:
+                        reasons_nt.append(f"|ema7-ema21|({diff_nt:.6f})<eps({eps_nt:.6f})")
+                    if last.atr_pct < self.cfg.ATR_PCT_MIN:
+                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})<{self.cfg.ATR_PCT_MIN}")
+                    if last.atr_pct > self.cfg.ATR_PCT_MAX:
+                        reasons_nt.append(f"ATR%({last.atr_pct:.3f})>{self.cfg.ATR_PCT_MAX}")
+                    self._log("No-Trade Zone ativa: " + "; ".join(reasons_nt), level="INFO")
+                    self._safe_log("no_trade_zone", df_for_log=df, tipo="info")
+                    self._last_pos_side = None
+                    return
 
             # intenção pós-cooldown: exigir confirmação adicional
             if self._pending_after_cd is not None:
@@ -6233,7 +6064,7 @@ class EMAGradientStrategy:
                         (last.valor_fechamento > last.ema_short + self.cfg.BREAKOUT_K_ATR * last.atr) and
                         (last.volume > last.vol_ma)
                     )
-                    can_long = base_long
+                    can_long = base_long or force_long
 
                     if can_long:
                         self._log("⚠️ SISTEMA INVERSO: Confirmação pós-cooldown LONG → Executando SHORT", level="INFO")
@@ -6249,7 +6080,7 @@ class EMAGradientStrategy:
                         (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
                         (last.volume > last.vol_ma)
                     )
-                    can_short = base_short
+                    can_short = base_short or force_short
                     if can_short:
                         self._log("⚠️ SISTEMA INVERSO: Confirmação pós-cooldown SHORT → Executando LONG", level="INFO")
                         self._abrir_posicao_dual_wallet("buy", usd_to_spend, df_for_log=df, atr_last=float(last.atr))
@@ -6275,8 +6106,8 @@ class EMAGradientStrategy:
                 (last.valor_fechamento < last.ema_short - self.cfg.BREAKOUT_K_ATR * last.atr) and
                 (last.volume > last.vol_ma)
             )
-            can_long = base_long
-            can_short = base_short
+            can_long = base_long or force_long
+            can_short = base_short or force_short
             if can_long:
                 self._log("⚠️ SISTEMA INVERSO: Entrada LONG detectada → Executando SHORT", level="INFO")
                 self._abrir_posicao_dual_wallet("sell", usd_to_spend, df_for_log=df, atr_last=float(last.atr))

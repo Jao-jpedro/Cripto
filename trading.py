@@ -771,6 +771,13 @@ class SimpleRatioConfig:
     ATR_TP_MULTIPLIER: float = 2.5        # Multiplicador do ATR para Take Profit (2.5x ATR)
     ATR_PERIOD: int = 14                  # Período do ATR
     
+    # Inversão Automática Inteligente
+    ENABLE_AUTO_REVERSE: bool = True      # Ativar inversão automática ao fechar
+    # Condições para permitir inversão (todas devem ser satisfeitas):
+    REVERSE_MIN_EMA_DISTANCE: float = 0.02  # EMA7 deve estar >2% distante da EMA21
+    REVERSE_MIN_RATIO_STRENGTH: float = 1.20  # LONG: ratio >1.20 | SHORT: ratio <0.80
+    REVERSE_MIN_VOLUME_RATIO: float = 1.2   # Volume atual deve ser >1.2x da média
+    
     # Ratio tracking (para detectar inversões)
     RATIO_HISTORY_SIZE: int = 5           # Últimos N ratios para detectar inversão
     
@@ -1322,16 +1329,81 @@ class SimpleRatioStrategy:
             self._notify_trade("close", side, current_price, amount, "Fechamento", include_hl=False)
             self._log(f"🚪 POSIÇÃO FECHADA: {side.upper()} {amount:.2f} @ {current_price:.6f}", level="INFO")
             
-            # Abrir posição invertida automaticamente
-            if open_reverse:
-                self._log(f"🔄 Abrindo posição INVERTIDA automaticamente...", level="INFO")
-                time.sleep(1)  # Pequeno delay para garantir que a posição foi fechada
+            # INVERSÃO AUTOMÁTICA CONDICIONAL (Opção B)
+            if open_reverse and self.cfg.ENABLE_AUTO_REVERSE:
+                self._log(f"🔍 Avaliando se deve inverter posição...", level="DEBUG")
                 
-                # Determinar o lado invertido
-                reverse_side = "sell" if side == "buy" else "buy"
+                # Verificar se as condições para inversão são satisfeitas
+                should_reverse = False
+                reverse_reasons = []
+                block_reasons = []
                 
-                # Abrir nova posição no lado oposto usando o mesmo valor USD
-                self._enter_position(reverse_side, self.cfg.TRADE_SIZE_USD, df)
+                try:
+                    # Condição 1: Tendência clara (EMA7 distante da EMA21)
+                    if len(df) >= max(self.cfg.EMA_FAST_PERIOD, self.cfg.EMA_SLOW_PERIOD):
+                        ema_fast = df['valor_fechamento'].ewm(span=self.cfg.EMA_FAST_PERIOD, adjust=False).mean().iloc[-1]
+                        ema_slow = df['valor_fechamento'].ewm(span=self.cfg.EMA_SLOW_PERIOD, adjust=False).mean().iloc[-1]
+                        ema_distance_pct = abs((ema_fast - ema_slow) / ema_slow)
+                        
+                        if ema_distance_pct >= self.cfg.REVERSE_MIN_EMA_DISTANCE:
+                            reverse_reasons.append(f"Tendência clara: EMA distância {ema_distance_pct*100:.2f}% >= {self.cfg.REVERSE_MIN_EMA_DISTANCE*100:.2f}%")
+                        else:
+                            block_reasons.append(f"Tendência fraca: EMA distância {ema_distance_pct*100:.2f}% < {self.cfg.REVERSE_MIN_EMA_DISTANCE*100:.2f}%")
+                    
+                    # Condição 2: Sinal forte de ratio
+                    if hasattr(self, '_ratio_3_history') and len(self._ratio_3_history) > 0:
+                        current_ratio = self._ratio_3_history[-1]
+                        
+                        # Para inverter de LONG→SHORT: ratio deve estar muito baixo (<0.80)
+                        # Para inverter de SHORT→LONG: ratio deve estar muito alto (>1.20)
+                        if side == "buy":  # Fechou LONG, avaliar SHORT
+                            if current_ratio <= (2.0 - self.cfg.REVERSE_MIN_RATIO_STRENGTH):  # <0.80
+                                reverse_reasons.append(f"Ratio forte SHORT: {current_ratio:.3f} <= {2.0 - self.cfg.REVERSE_MIN_RATIO_STRENGTH:.3f}")
+                            else:
+                                block_reasons.append(f"Ratio fraco SHORT: {current_ratio:.3f} > {2.0 - self.cfg.REVERSE_MIN_RATIO_STRENGTH:.3f}")
+                        else:  # Fechou SHORT, avaliar LONG
+                            if current_ratio >= self.cfg.REVERSE_MIN_RATIO_STRENGTH:  # >1.20
+                                reverse_reasons.append(f"Ratio forte LONG: {current_ratio:.3f} >= {self.cfg.REVERSE_MIN_RATIO_STRENGTH:.3f}")
+                            else:
+                                block_reasons.append(f"Ratio fraco LONG: {current_ratio:.3f} < {self.cfg.REVERSE_MIN_RATIO_STRENGTH:.3f}")
+                    
+                    # Condição 3: Volume acima da média
+                    if 'volume' in df.columns and len(df) >= 20:
+                        current_volume = df['volume'].iloc[-1]
+                        avg_volume = df['volume'].tail(20).mean()
+                        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
+                        
+                        if volume_ratio >= self.cfg.REVERSE_MIN_VOLUME_RATIO:
+                            reverse_reasons.append(f"Volume forte: {volume_ratio:.2f}x >= {self.cfg.REVERSE_MIN_VOLUME_RATIO:.2f}x média")
+                        else:
+                            block_reasons.append(f"Volume fraco: {volume_ratio:.2f}x < {self.cfg.REVERSE_MIN_VOLUME_RATIO:.2f}x média")
+                    
+                    # Decidir se deve inverter (TODAS as condições devem ser satisfeitas)
+                    should_reverse = len(reverse_reasons) >= 3 and len(block_reasons) == 0
+                    
+                except Exception as e:
+                    self._log(f"[REVERSE] Erro avaliando condições: {e}", level="WARN")
+                    should_reverse = False
+                
+                # Executar inversão se aprovado
+                if should_reverse:
+                    self._log(f"✅ INVERSÃO APROVADA:", level="INFO")
+                    for reason in reverse_reasons:
+                        self._log(f"   ✓ {reason}", level="INFO")
+                    
+                    time.sleep(1)  # Pequeno delay para garantir que a posição foi fechada
+                    
+                    # Determinar o lado invertido
+                    reverse_side = "sell" if side == "buy" else "buy"
+                    
+                    # Abrir nova posição no lado oposto
+                    self._log(f"🔄 Abrindo posição INVERTIDA: {reverse_side.upper()}", level="INFO")
+                    self._enter_position(reverse_side, self.cfg.TRADE_SIZE_USD, df)
+                else:
+                    self._log(f"⛔ INVERSÃO BLOQUEADA:", level="INFO")
+                    for reason in block_reasons:
+                        self._log(f"   ✗ {reason}", level="INFO")
+                    self._log(f"   → Aguardando novo sinal de entrada normal", level="INFO")
             
         except Exception as e:
             self._log(f"Erro fechando posição: {e}", level="ERROR")
