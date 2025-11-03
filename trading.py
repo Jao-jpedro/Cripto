@@ -766,10 +766,20 @@ class SimpleRatioConfig:
     EMA_FAST_PERIOD: int = 7              # EMA rápida (7 períodos)
     EMA_SLOW_PERIOD: int = 21             # EMA lenta (21 períodos)
     
-    # Melhoria 3: Take Profit Dinâmico com ATR
+    # Melhoria 3: Take Profit Dinâmico com ATR Híbrido Inteligente
     ENABLE_ATR_TAKE_PROFIT: bool = True   # Ativar Take Profit baseado em ATR
-    ATR_TP_MULTIPLIER: float = 2.5        # Multiplicador do ATR para Take Profit (2.5x ATR)
     ATR_PERIOD: int = 14                  # Período do ATR
+    
+    # Sistema Híbrido: Multiplicador adaptativo baseado em EMA + Volume + Ratio
+    ENABLE_SMART_TP: bool = True          # Ativar Take Profit Inteligente (pontuação 0-3)
+    TP_CONSERVATIVE: float = 1.8          # Multiplicador conservador (pontuação 0-1)
+    TP_BALANCED: float = 2.5              # Multiplicador balanceado (pontuação 1-2)
+    TP_AGGRESSIVE: float = 3.5            # Multiplicador agressivo (pontuação 2-3)
+    
+    # Thresholds para pontuação do TP inteligente:
+    TP_EMA_DISTANCE_THRESHOLD: float = 0.02    # +1 ponto se EMA distance >= 2%
+    TP_VOLUME_RATIO_THRESHOLD: float = 1.3     # +1 ponto se volume >= 1.3x média
+    TP_RATIO_STRENGTH_THRESHOLD: float = 1.15  # +1 ponto se ratio >= 1.15 (LONG) ou <= 0.85 (SHORT)
     
     # Inversão Automática Inteligente
     ENABLE_AUTO_REVERSE: bool = True      # Ativar inversão automática ao fechar
@@ -1204,7 +1214,7 @@ class SimpleRatioStrategy:
                     self._log(f"⚠️  Erro criando stop loss: {e}", level="WARN")
                     self._log(f"   Continuando sem stop loss - posição vulnerável!", level="WARN")
 
-            # MELHORIA 3: Criar Take Profit dinâmico com ATR
+            # MELHORIA 3: Criar Take Profit dinâmico com ATR Híbrido Inteligente
             if self.cfg.ENABLE_ATR_TAKE_PROFIT and len(df) >= self.cfg.ATR_PERIOD:
                 try:
                     # Calcular ATR (Average True Range)
@@ -1221,8 +1231,54 @@ class SimpleRatioStrategy:
                     # ATR = média móvel do True Range
                     atr = tr.rolling(window=self.cfg.ATR_PERIOD).mean().iloc[-1]
                     
+                    # SISTEMA HÍBRIDO INTELIGENTE: Calcular multiplicador adaptativo
+                    tp_multiplier = self.cfg.TP_BALANCED  # Padrão: 2.5x
+                    tp_score = 0
+                    score_reasons = []
+                    
+                    if self.cfg.ENABLE_SMART_TP:
+                        # Fator 1: Distância EMA (tendência clara?)
+                        if len(df) >= max(self.cfg.EMA_FAST_PERIOD, self.cfg.EMA_SLOW_PERIOD):
+                            ema_fast = df['valor_fechamento'].ewm(span=self.cfg.EMA_FAST_PERIOD, adjust=False).mean().iloc[-1]
+                            ema_slow = df['valor_fechamento'].ewm(span=self.cfg.EMA_SLOW_PERIOD, adjust=False).mean().iloc[-1]
+                            ema_distance_pct = abs((ema_fast - ema_slow) / ema_slow)
+                            
+                            if ema_distance_pct >= self.cfg.TP_EMA_DISTANCE_THRESHOLD:
+                                tp_score += 1
+                                score_reasons.append(f"EMA distance {ema_distance_pct*100:.2f}%")
+                        
+                        # Fator 2: Volume (movimento forte?)
+                        if len(df) >= 20:
+                            current_volume = df['volume'].iloc[-1]
+                            avg_volume_20 = df['volume'].rolling(window=20).mean().iloc[-1]
+                            volume_ratio = current_volume / avg_volume_20 if avg_volume_20 > 0 else 0
+                            
+                            if volume_ratio >= self.cfg.TP_VOLUME_RATIO_THRESHOLD:
+                                tp_score += 1
+                                score_reasons.append(f"Volume {volume_ratio:.2f}x")
+                        
+                        # Fator 3: Força do Ratio (sinal forte?)
+                        if len(self._ratio_3_history) >= 1:
+                            current_ratio = self._ratio_3_history[-1]
+                            if side == "buy" and current_ratio >= self.cfg.TP_RATIO_STRENGTH_THRESHOLD:
+                                tp_score += 1
+                                score_reasons.append(f"Ratio LONG {current_ratio:.3f}")
+                            elif side == "sell" and current_ratio <= (2.0 - self.cfg.TP_RATIO_STRENGTH_THRESHOLD):
+                                tp_score += 1
+                                score_reasons.append(f"Ratio SHORT {current_ratio:.3f}")
+                        
+                        # Determinar multiplicador baseado na pontuação
+                        if tp_score <= 1:
+                            tp_multiplier = self.cfg.TP_CONSERVATIVE  # 1.8x - Conservador
+                        elif tp_score == 2:
+                            tp_multiplier = self.cfg.TP_BALANCED      # 2.5x - Balanceado
+                        else:  # tp_score == 3
+                            tp_multiplier = self.cfg.TP_AGGRESSIVE    # 3.5x - Agressivo
+                        
+                        self._log(f"🧠 TP Inteligente: Score={tp_score}/3 ({', '.join(score_reasons) if score_reasons else 'nenhum fator'}) → Mult={tp_multiplier}x", level="INFO")
+                    
                     # Calcular preço do Take Profit
-                    tp_distance = atr * self.cfg.ATR_TP_MULTIPLIER
+                    tp_distance = atr * tp_multiplier
                     if side == "buy":
                         tp_price = current_price + tp_distance
                     else:  # sell
@@ -1230,7 +1286,7 @@ class SimpleRatioStrategy:
                     
                     tp_side = "sell" if side == "buy" else "buy"
                     
-                    self._log(f"[TAKE_PROFIT] ATR={atr:.6f}, Multiplicador={self.cfg.ATR_TP_MULTIPLIER}, "
+                    self._log(f"[TAKE_PROFIT] ATR={atr:.6f}, Multiplicador={tp_multiplier:.1f}x, "
                              f"Distância={tp_distance:.6f}, TP={tp_price:.6f}", level="DEBUG")
                     
                     # Criar ordem limit de Take Profit
@@ -1244,7 +1300,7 @@ class SimpleRatioStrategy:
                     )
                     
                     self._take_profit_order_id = tp_order.get('id') if isinstance(tp_order, dict) else None
-                    self._log(f"💰 Take Profit criado: {tp_side} @ {tp_price:.6f} ({self.cfg.ATR_TP_MULTIPLIER}x ATR) | Ordem: {tp_order}", level="INFO")
+                    self._log(f"💰 Take Profit criado: {tp_side} @ {tp_price:.6f} ({tp_multiplier:.1f}x ATR) | Ordem: {tp_order}", level="INFO")
                     
                 except Exception as e:
                     self._log(f"⚠️  Erro criando Take Profit: {e}", level="WARN")
