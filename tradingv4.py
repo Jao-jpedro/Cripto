@@ -142,7 +142,7 @@ _warnings.filterwarnings(
     "ignore",
     message=r".*urllib3 v2 only supports OpenSSL 1.1.1\+.*",
     category=Warning,
-    module=r"urllib3.*"
+    module=r"urllib3.*",
 )
 
 import requests
@@ -589,6 +589,7 @@ class TradingMonitorIntegrado:
                     conn.close()
                     return df
             
+            # Tentar buscar da tabela events (formato do learner)
             query_events = """
             SELECT 
                 id,
@@ -606,7 +607,7 @@ class TradingMonitorIntegrado:
             conn.close()
             
             if not df_events.empty:
-                print(f"📊 {len(df_events)} eventos encontrados no banco", flush=True)
+                print(f"📊 {len(df_events)} eventos encontrados no banco (formato learner)", flush=True)
                 # Converter eventos para formato de trades (simplificado)
                 return df_events
             
@@ -952,10 +953,1425 @@ def monitor_print_detailed():
     report = monitor_detailed_report()
     print(f"\n{report}", flush=True)
 
+# =============================================================================
+# LEARNER SYSTEM - SQLite + Discord Reporting + Feature Collection
+# =============================================================================
 
-# =============================================================================
-# REMOVED: LEARNER SYSTEM - TradingLearner class and functions removed
-# =============================================================================
+class TradingLearner:
+    """
+    Sistema de aprendizado que coleta métricas na entrada, calcula P(stop) 
+    e reporta perfis problemáticos ao Discord
+    """
+    
+    def __init__(self, db_path: str = None):
+        # Configurações via environment
+        if db_path:
+            self.db_path = db_path
+        else:
+            self.db_path = os.getenv("LEARN_DB_PATH", "/var/data/hl_learn.db")
+        # Usar o mesmo webhook das notificações de entrada/saída
+        self.discord_webhook = os.getenv("DISCORD_WEBHOOK", 
+            "https://discord.com/api/webhooks/1411808916316098571/m_qTenLaTMvyf2e1xNklxFP2PVIvrVD328TFyofY1ciCUlFdWetiC-y4OIGLV23sW9vM")
+        self.observe_only = os.getenv("OBSERVE_ONLY", "true").lower() == "true"
+        
+        # Thresholds - ajustados para facilitar detecção
+        self.min_n = int(os.getenv("MIN_N", "5"))  # Reduzido para facilitar teste
+        self.p_thresh_block = float(os.getenv("P_THRESH_BLOCK", "0.90"))
+        self.min_n_watch = int(os.getenv("MIN_N_WATCH", "3"))  # Reduzido para facilitar relatórios
+        self.p_thresh_watch = float(os.getenv("P_THRESH_WATCH", "0.85"))  # 85% - configurações realmente perigosas
+        self.max_watch_rows = int(os.getenv("MAX_WATCH_ROWS", "15"))
+        
+        # Reporting - configuração otimizada para envio frequente
+        self.report_interval_trades = os.getenv("REPORT_INTERVAL_TRADES")
+        if self.report_interval_trades:
+            self.report_interval_trades = int(self.report_interval_trades)
+        else:
+            # Default: enviar relatório a cada 5 trades para teste
+            self.report_interval_trades = 5
+            
+        self.report_cron_daily = os.getenv("REPORT_CRON_DAILY")  # "23:30"
+        
+        # Timezone BRT
+        self.brt_tz = pytz.timezone('America/Sao_Paulo')
+        
+        # Contadores
+        self.trade_counter = 0
+        self.last_report_trade = 0
+        self.lock = threading.Lock()
+        
+        # Setup database
+        self._setup_database()
+        
+    def _setup_database(self):
+        """Inicializa banco SQLite com WAL mode e schema"""
+        try:
+            # Criar diretório se não existir
+            db_dir = Path(self.db_path).parent
+            db_dir.mkdir(parents=True, exist_ok=True)
+            
+            self.conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False,
+                timeout=10.0
+            )
+            
+            # Configurar WAL mode e otimizações
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA cache_size=-16000")  # 16MB cache
+            self.conn.execute("PRAGMA foreign_keys=ON")
+            
+            # Criar tabelas
+            self._create_tables()
+            
+            _log_global("LEARNER", f"Database initialized at {self.db_path}", "INFO")
+            
+        except Exception as e:
+            # Fallback para /tmp com warning
+            _log_global("LEARNER", f"Failed to create DB at {self.db_path}: {e}", "WARN")
+            fallback_path = "/tmp/hl_learn_fallback.db"
+            _log_global("LEARNER", f"Using fallback path: {fallback_path}", "WARN")
+            
+            self.conn = sqlite3.connect(fallback_path, check_same_thread=False)
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self._create_tables()
+            
+    def _create_tables(self):
+        """Cria schema do banco"""
+        # Tabela de metadados
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                schema_version INTEGER PRIMARY KEY,
+                updated REAL NOT NULL
+            )
+        """)
+        
+        # Tabela de estatísticas por perfil
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS stats (
+                key TEXT PRIMARY KEY,
+                features_json TEXT NOT NULL,
+                n INTEGER NOT NULL DEFAULT 0,
+                stopped INTEGER NOT NULL DEFAULT 0,
+                updated REAL NOT NULL
+            )
+        """)
+        
+        # Tabela de eventos individuais
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id TEXT PRIMARY KEY,
+                ts REAL NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                price REAL,
+                features_raw_json TEXT,
+                label TEXT NOT NULL
+            )
+        """)
+        
+        # Tabela de lock de relatórios
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS reports_lock (
+                period_key TEXT PRIMARY KEY,
+                created REAL NOT NULL
+            )
+        """)
+        
+        # Índices
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_symbol ON events(symbol)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_stats_updated ON stats(updated)")
+        
+        # Inserir versão do schema
+        self.conn.execute("""
+            INSERT OR IGNORE INTO meta (schema_version, updated) 
+            VALUES (1, ?)
+        """, (time_module.time(),))
+        
+        self.conn.commit()
+        
+    def _retry_db_operation(self, operation, *args, max_retries=3):
+        """Executa operação de BD com retry em caso de SQLITE_BUSY"""
+        for attempt in range(max_retries):
+            try:
+                return operation(*args)
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    wait_time = 0.1 * (2 ** attempt)  # Exponential backoff
+                    time_module.sleep(wait_time)
+                    continue
+                raise
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    _log_global("LEARNER", f"DB operation failed after {max_retries} attempts: {e}", "ERROR")
+                raise
+                
+    def get_current_brt_time(self):
+        """Retorna datetime atual em BRT"""
+        return datetime.now(self.brt_tz)
+        
+    def extract_features_raw(self, symbol: str, side: str, df: pd.DataFrame, price: float) -> dict:
+        """Extrai features brutas COMPLETAS no momento da entrada - TODOS os indicadores"""
+        if df.empty or len(df) < 252:
+            return {}
+            
+        try:
+            current_time = self.get_current_brt_time()
+            last_row = df.iloc[-1]
+            
+            # =================== SEÇÃO A: PREÇO & VOLATILIDADE ===================
+            atr_series = df.get('atr', pd.Series())
+            atr_pct = (atr_series.iloc[-1] / price * 100) if not atr_series.empty else None
+            
+            atr_252_percentile = None
+            atr_50_percentile = None
+            atr_20_percentile = None
+            if not atr_series.empty and len(atr_series) >= 252:
+                atr_252_percentile = (atr_series.iloc[-252:] <= atr_series.iloc[-1]).mean() * 100
+            if not atr_series.empty and len(atr_series) >= 50:
+                atr_50_percentile = (atr_series.iloc[-50:] <= atr_series.iloc[-1]).mean() * 100
+            if not atr_series.empty and len(atr_series) >= 20:
+                atr_20_percentile = (atr_series.iloc[-20:] <= atr_series.iloc[-1]).mean() * 100
+                
+            # Volatilidade histórica (diferentes períodos)
+            returns = df['valor_fechamento'].pct_change().fillna(0)
+            vol_hist_20 = returns.rolling(20).std() * 100 if len(returns) >= 20 else None
+            vol_hist_50 = returns.rolling(50).std() * 100 if len(returns) >= 50 else None
+            vol_hist_100 = returns.rolling(100).std() * 100 if len(returns) >= 100 else None
+                
+            # =================== SEÇÃO B: TENDÊNCIA & MOMENTUM ===================
+            ema7 = df.get('ema7', pd.Series())
+            ema21 = df.get('ema21', pd.Series())
+            ema50 = df.get('ema50', pd.Series()) if 'ema50' in df.columns else df['valor_fechamento'].ewm(span=50).mean()
+            ema100 = df.get('ema100', pd.Series()) if 'ema100' in df.columns else df['valor_fechamento'].ewm(span=100).mean()
+            ema200 = df.get('ema200', pd.Series()) if 'ema200' in df.columns else df['valor_fechamento'].ewm(span=200).mean()
+            
+            # Slopes de múltiplas EMAs
+            slope_ema7 = None
+            slope_ema21 = None
+            slope_ema50 = None
+            slope_ema100 = None
+            slope_ema200 = None
+            
+            if not ema7.empty and len(ema7) >= 7:
+                slope_ema7 = (ema7.iloc[-1] - ema7.iloc[-7]) / ema7.iloc[-7] * 100
+            if not ema21.empty and len(ema21) >= 21:
+                slope_ema21 = (ema21.iloc[-1] - ema21.iloc[-21]) / ema21.iloc[-21] * 100
+            if not ema50.empty and len(ema50) >= 50:
+                slope_ema50 = (ema50.iloc[-1] - ema50.iloc[-50]) / ema50.iloc[-50] * 100
+            if not ema100.empty and len(ema100) >= 100:
+                slope_ema100 = (ema100.iloc[-1] - ema100.iloc[-100]) / ema100.iloc[-100] * 100
+            if not ema200.empty and len(ema200) >= 200:
+                slope_ema200 = (ema200.iloc[-1] - ema200.iloc[-200]) / ema200.iloc[-200] * 100
+                
+            # Distâncias das EMAs (em %)
+            dist_ema7_pct = ((price - ema7.iloc[-1]) / ema7.iloc[-1] * 100) if not ema7.empty else None
+            dist_ema21_pct = ((price - ema21.iloc[-1]) / ema21.iloc[-1] * 100) if not ema21.empty else None
+            dist_ema50_pct = ((price - ema50.iloc[-1]) / ema50.iloc[-1] * 100) if not ema50.empty else None
+            dist_ema100_pct = ((price - ema100.iloc[-1]) / ema100.iloc[-1] * 100) if not ema100.empty else None
+            dist_ema200_pct = ((price - ema200.iloc[-1]) / ema200.iloc[-1] * 100) if not ema200.empty else None
+            
+            # RSI e outros oscilladores
+            rsi = df.get('rsi', pd.Series()).iloc[-1] if 'rsi' in df.columns else None
+            rsi_14_slope = None
+            if 'rsi' in df.columns and len(df['rsi']) >= 14:
+                rsi_14_slope = (df['rsi'].iloc[-1] - df['rsi'].iloc[-14])
+                
+            # MACD se disponível
+            macd = df.get('macd', pd.Series()).iloc[-1] if 'macd' in df.columns else None
+            macd_signal = df.get('macd_signal', pd.Series()).iloc[-1] if 'macd_signal' in df.columns else None
+            macd_histogram = df.get('macd_histogram', pd.Series()).iloc[-1] if 'macd_histogram' in df.columns else None
+            
+            # Bollinger Bands
+            bb_upper = df.get('bb_upper', pd.Series()).iloc[-1] if 'bb_upper' in df.columns else None
+            bb_lower = df.get('bb_lower', pd.Series()).iloc[-1] if 'bb_lower' in df.columns else None
+            bb_middle = df.get('bb_middle', pd.Series()).iloc[-1] if 'bb_middle' in df.columns else None
+            bb_percent_b = df.get('bb_percent_b', pd.Series()).iloc[-1] if 'bb_percent_b' in df.columns else None
+            bb_width = df.get('bb_width', pd.Series()).iloc[-1] if 'bb_width' in df.columns else None
+            bb_squeeze = df.get('bb_squeeze', pd.Series()).iloc[-1] if 'bb_squeeze' in df.columns else None
+                
+            # =================== SEÇÃO C: VOLUME & LIQUIDEZ ===================
+            volume = df.get('volume', pd.Series())
+            vol_ratio_5 = None
+            vol_ratio_20 = None
+            vol_ratio_50 = None
+            vol_percentile_252 = None
+            vol_percentile_50 = None
+            vol_percentile_20 = None
+            
+            if not volume.empty and len(volume) >= 2:
+                # Múltiplas médias de volume
+                if len(volume) >= 5:
+                    vol_ma_5 = volume.rolling(5).mean()
+                    if not vol_ma_5.empty:
+                        vol_ratio_5 = volume.iloc[-1] / vol_ma_5.iloc[-1]
+                        
+                if len(volume) >= 20:
+                    vol_ma_20 = volume.rolling(20).mean()
+                    if not vol_ma_20.empty:
+                        vol_ratio_20 = volume.iloc[-1] / vol_ma_20.iloc[-1]
+                        
+                if len(volume) >= 50:
+                    vol_ma_50 = volume.rolling(50).mean()
+                    if not vol_ma_50.empty:
+                        vol_ratio_50 = volume.iloc[-1] / vol_ma_50.iloc[-1]
+                    
+                # Percentis de volume
+                if len(volume) >= 252:
+                    vol_percentile_252 = (volume.iloc[-252:] <= volume.iloc[-1]).mean() * 100
+                if len(volume) >= 50:
+                    vol_percentile_50 = (volume.iloc[-50:] <= volume.iloc[-1]).mean() * 100
+                if len(volume) >= 20:
+                    vol_percentile_20 = (volume.iloc[-20:] <= volume.iloc[-1]).mean() * 100
+                    
+            # =================== SEÇÃO D: CANDLE & MICROESTRUTURA ===================
+            candle_body_pct = None
+            candle_upper_shadow_pct = None
+            candle_lower_shadow_pct = None
+            candle_range_atr = None
+            
+            if all(col in df.columns for col in ['open', 'close', 'high', 'low']):
+                high_low = last_row['high'] - last_row['low']
+                body = abs(last_row['close'] - last_row['open'])
+                upper_shadow = last_row['high'] - max(last_row['open'], last_row['close'])
+                lower_shadow = min(last_row['open'], last_row['close']) - last_row['low']
+                
+                if high_low > 0:
+                    candle_body_pct = (body / high_low) * 100
+                    candle_upper_shadow_pct = (upper_shadow / high_low) * 100
+                    candle_lower_shadow_pct = (lower_shadow / high_low) * 100
+                    
+                if not atr_series.empty:
+                    current_atr = atr_series.iloc[-1]
+                    candle_range_atr = high_low / current_atr if current_atr > 0 else None
+                    
+            # Padrões de velas recentes (última vs penúltima)
+            bullish_candle = last_row['close'] > last_row['open'] if all(col in df.columns for col in ['open', 'close']) else None
+            prev_bullish = None
+            candle_size_ratio = None
+            
+            if len(df) >= 2 and all(col in df.columns for col in ['open', 'close', 'high', 'low']):
+                prev_row = df.iloc[-2]
+                prev_bullish = prev_row['close'] > prev_row['open']
+                
+                current_range = last_row['high'] - last_row['low']
+                prev_range = prev_row['high'] - prev_row['low']
+                candle_size_ratio = current_range / prev_range if prev_range > 0 else None
+                    
+            # =================== SEÇÃO E: NÍVEIS & ESTRUTURA ===================
+            # Múltiplos períodos de high/low
+            high_10 = df['high'].rolling(10).max() if len(df) >= 10 else None
+            low_10 = df['low'].rolling(10).min() if len(df) >= 10 else None
+            high_20 = df['high'].rolling(20).max() if len(df) >= 20 else None
+            low_20 = df['low'].rolling(20).min() if len(df) >= 20 else None
+            high_50 = df['high'].rolling(50).max() if len(df) >= 50 else None
+            low_50 = df['low'].rolling(50).min() if len(df) >= 50 else None
+            high_100 = df['high'].rolling(100).max() if len(df) >= 100 else None
+            low_100 = df['low'].rolling(100).min() if len(df) >= 100 else None
+            
+            # Distâncias em ATRs
+            dist_hhv10_atr = None
+            dist_llv10_atr = None
+            dist_hhv20_atr = None
+            dist_llv20_atr = None
+            dist_hhv50_atr = None
+            dist_llv50_atr = None
+            dist_hhv100_atr = None
+            dist_llv100_atr = None
+            
+            if not atr_series.empty:
+                current_atr = atr_series.iloc[-1]
+                if current_atr > 0:
+                    if high_10 is not None and not high_10.empty:
+                        dist_hhv10_atr = (high_10.iloc[-1] - price) / current_atr
+                    if low_10 is not None and not low_10.empty:
+                        dist_llv10_atr = (price - low_10.iloc[-1]) / current_atr
+                    if high_20 is not None and not high_20.empty:
+                        dist_hhv20_atr = (high_20.iloc[-1] - price) / current_atr
+                    if low_20 is not None and not low_20.empty:
+                        dist_llv20_atr = (price - low_20.iloc[-1]) / current_atr
+                    if high_50 is not None and not high_50.empty:
+                        dist_hhv50_atr = (high_50.iloc[-1] - price) / current_atr
+                    if low_50 is not None and not low_50.empty:
+                        dist_llv50_atr = (price - low_50.iloc[-1]) / current_atr
+                    if high_100 is not None and not high_100.empty:
+                        dist_hhv100_atr = (high_100.iloc[-1] - price) / current_atr
+                    if low_100 is not None and not low_100.empty:
+                        dist_llv100_atr = (price - low_100.iloc[-1]) / current_atr
+                        
+            # =================== SEÇÃO F: REGIME & CALENDÁRIO ===================
+            hour_brt = current_time.hour
+            day_of_week = current_time.weekday()  # 0=segunda, 6=domingo
+            day_of_month = current_time.day
+            month = current_time.month
+            
+            session_flag = self._determine_session(hour_brt)
+            vol_regime = self._determine_vol_regime(atr_pct) if atr_pct else "UNKNOWN"
+            
+            # =================== SEÇÃO G: MOMENTUM MULTI-TIMEFRAME ===================
+            # Momentum em diferentes períodos
+            mom_3 = ((price - df['valor_fechamento'].iloc[-4]) / df['valor_fechamento'].iloc[-4] * 100) if len(df) >= 4 else None
+            mom_5 = ((price - df['valor_fechamento'].iloc[-6]) / df['valor_fechamento'].iloc[-6] * 100) if len(df) >= 6 else None
+            mom_10 = ((price - df['valor_fechamento'].iloc[-11]) / df['valor_fechamento'].iloc[-11] * 100) if len(df) >= 11 else None
+            mom_20 = ((price - df['valor_fechamento'].iloc[-21]) / df['valor_fechamento'].iloc[-21] * 100) if len(df) >= 21 else None
+            mom_50 = ((price - df['valor_fechamento'].iloc[-51]) / df['valor_fechamento'].iloc[-51] * 100) if len(df) >= 51 else None
+            
+            # Risco & Execução 
+            leverage_eff = float(os.getenv("LEVERAGE", "5"))
+            
+            # =================== CONSOLIDAR TODAS AS FEATURES ===================
+            features = {
+                'symbol': symbol,
+                'side': side,
+                'entry_price': price,
+                'timestamp': current_time.isoformat(),
+                
+                # A) Volatilidade
+                'atr_pct': atr_pct,
+                'atr_252_percentile': atr_252_percentile,
+                'atr_50_percentile': atr_50_percentile,
+                'atr_20_percentile': atr_20_percentile,
+                'vol_hist_20': vol_hist_20,
+                'vol_hist_50': vol_hist_50,
+                'vol_hist_100': vol_hist_100,
+                
+                # B) Tendência & Momentum
+                'slope_ema7': slope_ema7,
+                'slope_ema21': slope_ema21,
+                'slope_ema50': slope_ema50,
+                'slope_ema100': slope_ema100,
+                'slope_ema200': slope_ema200,
+                'dist_ema7_pct': dist_ema7_pct,
+                'dist_ema21_pct': dist_ema21_pct,
+                'dist_ema50_pct': dist_ema50_pct,
+                'dist_ema100_pct': dist_ema100_pct,
+                'dist_ema200_pct': dist_ema200_pct,
+                'rsi': rsi,
+                'rsi_14_slope': rsi_14_slope,
+                'macd': macd,
+                'macd_signal': macd_signal,
+                'macd_histogram': macd_histogram,
+                
+                # Bollinger Bands
+                'bb_upper': bb_upper,
+                'bb_lower': bb_lower,
+                'bb_middle': bb_middle,
+                'bb_percent_b': bb_percent_b,
+                'bb_width': bb_width,
+                'bb_squeeze': bb_squeeze,
+                
+                # Bollinger Bands
+                'bb_upper': bb_upper,
+                'bb_lower': bb_lower,
+                'bb_middle': bb_middle,
+                'bb_percent_b': bb_percent_b,
+                'bb_width': bb_width,
+                'bb_squeeze': bb_squeeze,
+                
+                # C) Volume
+                'vol_ratio_5': vol_ratio_5,
+                'vol_ratio_20': vol_ratio_20,
+                'vol_ratio_50': vol_ratio_50,
+                'vol_percentile_252': vol_percentile_252,
+                'vol_percentile_50': vol_percentile_50,
+                'vol_percentile_20': vol_percentile_20,
+                
+                # D) Microestrutura
+                'candle_body_pct': candle_body_pct,
+                'candle_upper_shadow_pct': candle_upper_shadow_pct,
+                'candle_lower_shadow_pct': candle_lower_shadow_pct,
+                'candle_range_atr': candle_range_atr,
+                'bullish_candle': bullish_candle,
+                'prev_bullish': prev_bullish,
+                'candle_size_ratio': candle_size_ratio,
+                
+                # E) Níveis
+                'dist_hhv10_atr': dist_hhv10_atr,
+                'dist_llv10_atr': dist_llv10_atr,
+                'dist_hhv20_atr': dist_hhv20_atr,
+                'dist_llv20_atr': dist_llv20_atr,
+                'dist_hhv50_atr': dist_hhv50_atr,
+                'dist_llv50_atr': dist_llv50_atr,
+                'dist_hhv100_atr': dist_hhv100_atr,
+                'dist_llv100_atr': dist_llv100_atr,
+                
+                # F) Regime temporal
+                'hour_brt': hour_brt,
+                'day_of_week': day_of_week,
+                'day_of_month': day_of_month,
+                'month': month,
+                'session_flag': session_flag,
+                'vol_regime': vol_regime,
+                
+                # G) Momentum multi-timeframe
+                'mom_3': mom_3,
+                'mom_5': mom_5,
+                'mom_10': mom_10,
+                'mom_20': mom_20,
+                'mom_50': mom_50,
+                
+                # H) Risco
+                'leverage_eff': leverage_eff
+            }
+            
+            # Remover apenas valores None para evitar problemas (manter False e 0)
+            features = {k: v for k, v in features.items() if v is not None}
+            
+            return features
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error extracting features: {e}", "WARN")
+            return {
+                "symbol": symbol,
+                "side": side,
+                "price": price,
+                "timestamp": self.get_current_brt_time().timestamp(),
+                "error": str(e)
+            }
+            
+    def _determine_session(self, hour_brt: int) -> str:
+        """Determina sessão de trading baseada no horário BRT"""
+        if 21 <= hour_brt or hour_brt < 2:  # 21:00-02:00 BRT
+            return "ASIA"
+        elif 2 <= hour_brt < 8:  # 02:00-08:00 BRT  
+            return "EU_OPEN"
+        elif 8 <= hour_brt < 10:  # 08:00-10:00 BRT
+            return "US_OPEN"
+        elif 10 <= hour_brt < 14:  # 10:00-14:00 BRT
+            return "US_LUNCH"
+        elif 14 <= hour_brt < 18:  # 14:00-18:00 BRT
+            return "US_CLOSE"
+        else:
+            return "OTHER"
+            
+    def _determine_vol_regime(self, atr_pct: float) -> str:
+        """Classifica volatilidade em tercis (LOW/MID/HIGH)"""
+        if atr_pct is None:
+            return "UNKNOWN"
+        # Thresholds aproximados - ajustar conforme histórico
+        if atr_pct < 2.0:
+            return "LOW"
+        elif atr_pct < 4.0:
+            return "MID"
+        else:
+            return "HIGH"
+            
+    def bin_features(self, features_raw: dict) -> dict:
+        """Converte features brutas em versão binada para agregação"""
+        try:
+            binned = {}
+            
+            # Sempre incluir symbol e side
+            binned["symbol"] = features_raw.get("symbol")
+            binned["side"] = features_raw.get("side")
+            
+            # Binning numérico
+            atr_pct = features_raw.get("atr_pct")
+            if atr_pct is not None:
+                binned["atr_pct_bin"] = round(atr_pct, 1)  # 0.1% precision
+                
+            vol_ratio = features_raw.get("vol_ratio")
+            if vol_ratio is not None:
+                binned["vol_ratio_bin"] = round(vol_ratio * 4) / 4  # 0.25 steps
+                
+            rsi = features_raw.get("rsi")
+            if rsi is not None:
+                binned["rsi_bin"] = int(rsi // 5) * 5  # múltiplos de 5
+                
+            # Bollinger Bands binning
+            bb_percent_b = features_raw.get("bb_percent_b")
+            if bb_percent_b is not None:
+                binned["bb_percent_b_bin"] = round(bb_percent_b, 1)  # 0.1 precision
+                
+            bb_width = features_raw.get("bb_width")
+            if bb_width is not None:
+                binned["bb_width_bin"] = round(bb_width, 1)  # 0.1% precision
+                
+            bb_squeeze = features_raw.get("bb_squeeze")
+            if bb_squeeze is not None:
+                binned["bb_squeeze"] = bool(bb_squeeze)  # boolean value
+                
+            # Percentis em blocos de 10
+            for field in ["atr_percentile_252", "vol_percentile_252"]:
+                val = features_raw.get(field)
+                if val is not None:
+                    binned[f"{field}_bin"] = int(val // 10) * 10
+                    
+            # Slopes com precisão de 0.1%
+            for field in ["slope_ema7", "slope_ema21"]:
+                val = features_raw.get(field) 
+                if val is not None:
+                    binned[f"{field}_bin"] = round(val, 1)
+                    
+            # Distâncias ATR
+            for field in ["dist_hhv20_atr", "dist_llv20_atr"]:
+                val = features_raw.get(field)
+                if val is not None:
+                    binned[f"{field}_bin"] = round(val * 2) / 2  # 0.5 steps
+                    
+            # Campos categóricos diretos
+            for field in ["hour_brt", "dow", "session_flag", "vol_regime"]:
+                val = features_raw.get(field)
+                if val is not None:
+                    binned[field] = val
+                    
+            # Core bins para backoff
+            binned["core_bins"] = {
+                "symbol": binned.get("symbol"),
+                "side": binned.get("side"),
+                "atr_regime": features_raw.get("vol_regime", "UNKNOWN"),
+                "vol_ratio_bin": binned.get("vol_ratio_bin"),
+                "hour_brt": binned.get("hour_brt"),
+                "session_flag": binned.get("session_flag")
+            }
+            
+            return binned
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error binning features: {e}", "WARN")
+            return {
+                "symbol": features_raw.get("symbol"),
+                "side": features_raw.get("side"),
+                "error": str(e)
+            }
+            
+    def generate_profile_key(self, features_binned: dict) -> str:
+        """Gera chave única para o perfil baseado em features binadas"""
+        # Ordenar chaves para consistência
+        key_parts = []
+        for k in sorted(features_binned.keys()):
+            if k != "core_bins" and features_binned[k] is not None:
+                key_parts.append(f"{k}:{features_binned[k]}")
+        
+        key_str = "|".join(key_parts)
+        # Usar hash para chaves muito longas
+        if len(key_str) > 200:
+            return hashlib.md5(key_str.encode()).hexdigest()
+        return key_str
+        
+    def get_stop_probability_with_backoff(self, features_binned: dict) -> tuple:
+        """
+        Calcula P(stop) com backoff hierárquico.
+        Retorna (p_stop, n_samples) ou (None, 0) se não encontrar dados suficientes
+        """
+        try:
+            # Tentar chave completa primeiro
+            full_key = self.generate_profile_key(features_binned)
+            
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (full_key,))
+            row = cursor.fetchone()
+            
+            if row and row[0] >= self.min_n:
+                n, stopped = row
+                p_stop = (stopped + 1) / (n + 2)  # Suavização de Laplace
+                return p_stop, n
+                
+            # Backoff para core bins se não tiver amostras suficientes
+            core_bins = features_binned.get("core_bins", {})
+            if core_bins:
+                core_key = self.generate_profile_key(core_bins)
+                cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (core_key,))
+                row = cursor.fetchone()
+                
+                if row and row[0] >= self.min_n:
+                    n, stopped = row
+                    p_stop = (stopped + 1) / (n + 2)
+                    return p_stop, n
+                    
+            # Backoff final apenas symbol + side
+            minimal_key = f"symbol:{features_binned.get('symbol')}|side:{features_binned.get('side')}"
+            cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (minimal_key,))
+            row = cursor.fetchone()
+            
+            if row and row[0] >= self.min_n:
+                n, stopped = row  
+                p_stop = (stopped + 1) / (n + 2)
+                return p_stop, n
+                
+            return None, 0
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error getting stop probability: {e}", "WARN")
+            return None, 0
+            
+    def get_pattern_classification_with_backoff(self, features_binned: dict) -> tuple:
+        """
+        Obtém classificação do padrão com backoff hierárquico.
+        Retorna (classification_dict, n_samples) ou (None, 0) se não encontrar dados suficientes
+        """
+        try:
+            # Tentar chave completa primeiro
+            full_key = self.generate_profile_key(features_binned)
+            
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (full_key,))
+            row = cursor.fetchone()
+            
+            if row:
+                n, stopped = row
+                n_wins = n - stopped
+                classification = self.classify_pattern_quality(n, n_wins)
+                return classification, n
+                
+            # Backoff para core bins se não tiver amostras suficientes
+            core_bins = features_binned.get("core_bins", {})
+            if core_bins:
+                core_key = self.generate_profile_key(core_bins)
+                cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (core_key,))
+                row = cursor.fetchone()
+                
+                if row:
+                    n, stopped = row
+                    n_wins = n - stopped
+                    classification = self.classify_pattern_quality(n, n_wins)
+                    return classification, n
+                    
+            # Backoff final apenas symbol + side
+            minimal_key = f"symbol:{features_binned.get('symbol')}|side:{features_binned.get('side')}"
+            cursor.execute("SELECT n, stopped FROM stats WHERE key = ?", (minimal_key,))
+            row = cursor.fetchone()
+            
+            if row:
+                n, stopped = row
+                n_wins = n - stopped
+                classification = self.classify_pattern_quality(n, n_wins)
+                return classification, n
+                
+            return None, 0
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error getting pattern classification: {e}", "WARN")
+            return None, 0
+            
+    def classify_pattern_quality(self, n: int, n_wins: int) -> dict:
+        """
+        Classifica qualidade do padrão baseado em estatísticas
+        """
+        win_rate = n_wins / n if n > 0 else 0.0
+        
+        # Determinar nível baseado na win rate
+        if win_rate >= 0.8:
+            level = "EXCELLENT"
+            emoji = "🟢"
+        elif win_rate >= 0.7:
+            level = "GOOD" 
+            emoji = "🔵"
+        elif win_rate >= 0.6:
+            level = "AVERAGE"
+            emoji = "🟡"
+        elif win_rate >= 0.5:
+            level = "POOR"
+            emoji = "🟠"
+        else:
+            level = "BAD"
+            emoji = "🔴"
+            
+        return {
+            "is_classified": True,
+            "level": level,
+            "name": f"{level.title()} Pattern",
+            "emoji": emoji,
+            "win_rate": win_rate,
+            "n_samples": n,
+            "n_wins": n_wins
+        }
+            
+    def record_entry(self, symbol: str, side: str, price: float, df: pd.DataFrame) -> dict:
+        """
+        Registra entrada no sistema de aprendizado.
+        Retorna contexto para usar no fechamento.
+        """
+        try:
+            # Extrair features
+            features_raw = self.extract_features_raw(symbol, side, df, price)
+            features_binned = self.bin_features(features_raw)
+            
+            # Gerar ID único para este evento
+            event_id = f"{symbol}_{side}_{int(time_module.time()*1000)}_{hash(str(features_raw)) % 10000}"
+            
+            # Registrar evento de abertura
+            def _insert_event():
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO events 
+                    (id, ts, symbol, side, price, features_raw_json, label)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    event_id,
+                    time_module.time(),
+                    symbol,
+                    side,
+                    price,
+                    json.dumps(features_raw, default=str),
+                    "open"
+                ))
+                self.conn.commit()
+                
+            self._retry_db_operation(_insert_event)
+            
+            # Calcular P(stop) informativo
+            p_stop, n_samples = self.get_stop_probability_with_backoff(features_binned)
+            
+            # Log observacional
+            core_bins_summary = {k: v for k, v in features_binned.get("core_bins", {}).items() 
+                               if v is not None}
+            
+            if self.observe_only:
+                p_stop_str = f"{p_stop:.3f}" if p_stop is not None else "N/A"
+                _log_global("LEARNER", 
+                    f"observe_only | {symbol} {side} | Pstop={p_stop_str}, "
+                    f"n={n_samples}, core_bins={core_bins_summary}", "INFO")
+            
+            # Incrementar contador de trades
+            with self.lock:
+                self.trade_counter += 1
+                
+            # Verificar se deve enviar relatório
+            self._check_and_send_report()
+            
+            # Retornar contexto para fechamento
+            return {
+                "event_id": event_id,
+                "entry_price": price,
+                "features_raw": features_raw,
+                "features_binned": features_binned,
+                "p_stop": p_stop,
+                "n_samples": n_samples
+            }
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error recording entry: {e}", "ERROR")
+            return {}
+            
+    def record_close(self, context: dict, close_price: float, close_kind: str = "unknown"):
+        """Registra fechamento e atualiza estatísticas"""
+        _log_global("LEARNER", f"🔍 DEBUG RECORD_CLOSE: context={bool(context)}, close_kind={close_kind}, close_price={close_price}", "INFO")
+        
+        if not context:
+            _log_global("LEARNER", "🔍 DEBUG: context vazio, retornando", "INFO")
+            return
+            
+        try:
+            event_id = context.get("event_id")
+            entry_price = context.get("entry_price")
+            features_binned = context.get("features_binned", {})
+            
+            _log_global("LEARNER", f"🔍 DEBUG: event_id={event_id}, entry_price={entry_price}", "INFO")
+            
+            if not event_id or not entry_price:
+                _log_global("LEARNER", "🔍 DEBUG: event_id ou entry_price ausentes, retornando", "INFO")
+                return
+                
+            # Determinar se foi STOP
+            is_stop = self._determine_if_stop(entry_price, close_price, close_kind, features_binned)
+            
+            _log_global("LEARNER", f"🔍 DEBUG: is_stop={is_stop} para close_kind={close_kind}", "INFO")
+            
+            label = "close_STOP" if is_stop else "close_NONSTOP"
+            
+            # Registrar evento de fechamento
+            def _insert_close():
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO events 
+                    (id, ts, symbol, side, price, features_raw_json, label)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"{event_id}_close",
+                    time_module.time(),
+                    features_binned.get("symbol") or context.get("features_raw", {}).get("symbol", "UNKNOWN"),
+                    features_binned.get("side") or context.get("features_raw", {}).get("side", "UNKNOWN"),
+                    close_price,
+                    json.dumps(context.get("features_raw", {}), default=str),
+                    label
+                ))
+                self.conn.commit()
+                
+            self._retry_db_operation(_insert_close)
+            
+            # Atualizar estatísticas
+            self._update_stats(features_binned, is_stop)
+            
+            # Log
+            pnl_pct = ((close_price - entry_price) / entry_price * 100) if entry_price else 0
+            core_bins_summary = {k: v for k, v in features_binned.get("core_bins", {}).items() 
+                               if v is not None}
+            
+            _log_global("LEARNER", 
+                f"close | label={label} | pnl={pnl_pct:.2f}% | core_bins={core_bins_summary}", "INFO")
+                
+        except Exception as e:
+            _log_global("LEARNER", f"Error recording close: {e}", "ERROR")
+            
+    def _determine_if_stop(self, entry_price: float, close_price: float, close_kind: str, features_binned: dict) -> bool:
+        """Determina se o fechamento foi por stop loss"""
+        try:
+            _log_global("LEARNER", f"🔍 DEBUG DETERMINE_STOP: close_kind={close_kind}, entry_price={entry_price}, close_price={close_price}", "INFO")
+            
+            # Se o close_kind indica stop externo
+            if close_kind in ["close_external", "external_stop", "stop_loss"]:
+                _log_global("LEARNER", f"🔍 DEBUG: close_kind {close_kind} identificado como STOP", "INFO")
+                return True
+                
+            # Calcular se bateu no nível de stop baseado na configuração
+            side = features_binned.get("side", "").lower()
+            leverage = features_binned.get("leverage_eff", 5.0)
+            stop_loss_pct = float(os.getenv("STOP_LOSS_CAPITAL_PCT", "0.025")) / leverage
+            
+            if side == "buy":
+                stop_level = entry_price * (1.0 - stop_loss_pct)
+                return close_price <= stop_level
+            elif side == "sell":
+                stop_level = entry_price * (1.0 + stop_loss_pct)
+                return close_price >= stop_level
+                
+            return False
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error determining stop: {e}", "WARN")
+            return False
+            
+    def _update_stats(self, features_binned: dict, is_stop: bool):
+        """Atualiza estatísticas para diferentes níveis de granularidade"""
+        try:
+            _log_global("LEARNER", f"🔍 DEBUG UPDATE_STATS: is_stop={is_stop}, features={len(features_binned)} fields", "INFO")
+            
+            # Gerar chaves para diferentes níveis
+            keys_to_update = []
+            
+            # 1. Chave completa
+            full_key = self.generate_profile_key(features_binned)
+            keys_to_update.append(full_key)
+            
+            # 2. Core bins
+            core_bins = features_binned.get("core_bins", {})
+            if core_bins:
+                core_key = self.generate_profile_key(core_bins)
+                keys_to_update.append(core_key)
+                
+            # 3. Minimal (symbol + side)
+            symbol = features_binned.get("symbol")
+            side = features_binned.get("side")
+            if symbol and side:
+                minimal_key = f"symbol:{symbol}|side:{side}"
+                keys_to_update.append(minimal_key)
+                
+            # Atualizar todas as chaves
+            def _update_all_keys():
+                cursor = self.conn.cursor()
+                current_time = time_module.time()
+                
+                for key in keys_to_update:
+                    # Upsert statistics
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO stats (key, features_json, n, stopped, updated)
+                        VALUES (
+                            ?, 
+                            ?, 
+                            COALESCE((SELECT n FROM stats WHERE key = ?), 0) + 1,
+                            COALESCE((SELECT stopped FROM stats WHERE key = ?), 0) + ?,
+                            ?
+                        )
+                    """, (
+                        key,
+                        json.dumps(features_binned, default=str),
+                        key,
+                        key,
+                        1 if is_stop else 0,
+                        current_time
+                    ))
+                    
+                self.conn.commit()
+                
+            self._retry_db_operation(_update_all_keys)
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error updating stats: {e}", "ERROR")
+            
+    def _check_and_send_report(self):
+        """Verifica se deve enviar relatório e envia se necessário"""
+        try:
+            should_report = False
+            
+            # Check por intervalo de trades
+            if self.report_interval_trades:
+                with self.lock:
+                    trade_diff = self.trade_counter - self.last_report_trade
+                    _log_global("LEARNER", f"🔍 DEBUG: trade_counter={self.trade_counter}, last_report_trade={self.last_report_trade}, diff={trade_diff}, interval={self.report_interval_trades}", "INFO")
+                    if trade_diff >= self.report_interval_trades:
+                        should_report = True
+                        
+            # Check por horário (cron daily)
+            elif self.report_cron_daily:
+                current_time = self.get_current_brt_time()
+                target_hour, target_min = map(int, self.report_cron_daily.split(':'))
+                _log_global("LEARNER", f"🔍 DEBUG: current_time={current_time.strftime('%H:%M')}, target={target_hour:02d}:{target_min:02d}", "INFO")
+                
+                # Janela de ±2 minutos
+                if (current_time.hour == target_hour and 
+                    abs(current_time.minute - target_min) <= 2):
+                    should_report = True
+                    
+            _log_global("LEARNER", f"🔍 DEBUG: should_report={should_report}", "INFO")
+            if should_report:
+                self._send_discord_report()
+                
+        except Exception as e:
+            _log_global("LEARNER", f"Error checking report trigger: {e}", "WARN")
+            
+    def _send_discord_report(self):
+        """Envia relatório para Discord com mutex anti-duplicata"""
+        _log_global("LEARNER", f"🔍 DEBUG: _send_discord_report() iniciada. webhook={bool(self.discord_webhook)}", "INFO")
+        
+        if not self.discord_webhook:
+            _log_global("LEARNER", "Discord webhook not configured, skipping report", "DEBUG")
+            return
+            
+        try:
+            # Definir period_key
+            if self.report_interval_trades:
+                period_key = f"trades_{self.trade_counter // self.report_interval_trades}"
+            else:
+                period_key = self.get_current_brt_time().strftime("%Y-%m-%d")
+                
+            _log_global("LEARNER", f"🔍 DEBUG: period_key={period_key}, trade_counter={self.trade_counter}", "INFO")
+                
+            # Tentar adquirir lock
+            def _try_acquire_lock():
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    INSERT OR IGNORE INTO reports_lock (period_key, created)
+                    VALUES (?, ?)
+                """, (period_key, time_module.time()))
+                
+                affected = cursor.rowcount
+                self.conn.commit()
+                return affected > 0
+                
+            lock_acquired = self._retry_db_operation(_try_acquire_lock)
+            
+            if not lock_acquired:
+                _log_global("LEARNER", f"Report lock already exists for period {period_key}", "DEBUG")
+                return
+                
+            # Gerar e enviar relatório
+            report_data = self._generate_report_data()
+            self._send_to_discord(report_data, period_key)
+            
+            # Atualizar contador de último relatório
+            with self.lock:
+                self.last_report_trade = self.trade_counter
+                
+        except Exception as e:
+            _log_global("LEARNER", f"Error sending Discord report: {e}", "ERROR")
+            
+    def _generate_report_data(self) -> dict:
+        """Gera dados do relatório watchlist"""
+        try:
+            cursor = self.conn.cursor()
+            
+            # Buscar perfis problemáticos
+            cursor.execute("""
+                SELECT key, features_json, n, stopped, 
+                       (CAST(stopped AS REAL) + 1) / (CAST(n AS REAL) + 2) as p_stop
+                FROM stats 
+                WHERE n >= ? AND (CAST(stopped AS REAL) / CAST(n AS REAL)) >= ?
+                ORDER BY p_stop DESC, n DESC
+                LIMIT ?
+            """, (self.min_n_watch, self.p_thresh_watch, self.max_watch_rows))
+            
+            problem_profiles = cursor.fetchall()
+            
+            # KPIs do período
+            cursor.execute("SELECT COUNT(*) FROM events WHERE label = 'open'")
+            total_entries = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM events WHERE label = 'close_STOP'")
+            total_stops = cursor.fetchone()[0]
+            
+            stop_rate = (total_stops / total_entries * 100) if total_entries > 0 else 0
+            
+            # Top 5 símbolos por perda
+            cursor.execute("""
+                SELECT symbol, COUNT(*) as stop_count
+                FROM events 
+                WHERE label = 'close_STOP'
+                GROUP BY symbol
+                ORDER BY stop_count DESC
+                LIMIT 5
+            """)
+            top_losers = cursor.fetchall()
+            
+            return {
+                "problem_profiles": problem_profiles,
+                "total_entries": total_entries,
+                "total_stops": total_stops,
+                "stop_rate": stop_rate,
+                "top_losers": top_losers,
+                "timestamp": self.get_current_brt_time()
+            }
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Error generating report data: {e}", "ERROR")
+            return {}
+            
+    def _send_to_discord(self, report_data: dict, period_key: str):
+        """Envia dados para Discord via webhook"""
+        try:
+            if not report_data:
+                return
+                
+            # Construir mensagem
+            message = self._build_discord_message(report_data, period_key)
+            
+            # Enviar via webhook
+            payload = {"content": message}
+            
+            response = requests.post(
+                self.discord_webhook,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                _log_global("LEARNER", 
+                    f"discord_report sent | rows={len(report_data.get('problem_profiles', []))} | "
+                    f"entries={report_data.get('total_entries', 0)} | "
+                    f"stop_rate={report_data.get('stop_rate', 0):.1f}%", "INFO")
+            else:
+                _log_global("LEARNER", f"Discord webhook failed: {response.status_code}", "WARN")
+                
+        except Exception as e:
+            _log_global("LEARNER", f"Error sending to Discord: {e}", "WARN")
+            
+    def _build_discord_message(self, data: dict, period_key: str) -> str:
+        """Constrói mensagem formatada para Discord"""
+        try:
+            timestamp = data.get("timestamp", self.get_current_brt_time())
+            
+            message = f"🚨 **Trading Learner - Perfis de Alto Risco**\n"
+            message += f"📅 {timestamp.strftime('%d/%m/%Y %H:%M BRT')}\n\n"
+            
+            # KPIs
+            message += f"📊 **Estatísticas do Período:**\n"
+            message += f"• **Total de Entradas**: {data.get('total_entries', 0)}\n"
+            message += f"• **Total de Stops**: {data.get('total_stops', 0)}\n"
+            message += f"• **Taxa de Stop**: {data.get('stop_rate', 0):.1f}%\n\n"
+            
+            # Top losers
+            top_losers = data.get('top_losers', [])
+            if top_losers:
+                message += f"💸 **Símbolos com Mais Perdas:**\n"
+                for symbol, count in top_losers[:5]:
+                    message += f"• **{symbol}**: {count} stops\n"
+                message += "\n"
+            
+            # Problem profiles - seção principal
+            profiles = data.get('problem_profiles', [])
+            if profiles:
+                message += f"⚠️ **PERFIS DE ALTO RISCO ({len(profiles)}):**\n"
+                message += f"*Configurações com P(stop) ≥ {self.p_thresh_watch:.0%} e amostra ≥ {self.min_n_watch}*\n\n"
+                
+                for i, (key, features_json, n, stopped, p_stop) in enumerate(profiles[:10]):
+                    try:
+                        features = json.loads(features_json) if features_json else {}
+                        symbol = features.get('symbol', 'UNKNOWN')
+                        side = features.get('side', '?').upper()
+                        
+                        # Extrair informações do core_bins para contexto
+                        core_bins = features.get('core_bins', {})
+                        session = core_bins.get('session_flag', 'N/A')
+                        vol_regime = core_bins.get('vol_regime', 'N/A')
+                        hour = core_bins.get('hour_brt', 'N/A')
+                        
+                        # Calcular taxa de stop
+                        stop_rate_profile = (stopped / n * 100) if n > 0 else 0
+                        
+                        message += f"**{i+1}.** `{symbol}` **{side}** - {stop_rate_profile:.1f}% stops\n"
+                        message += f"    • Amostra: {n} trades ({stopped} stops)\n"
+                        message += f"    • P(stop): {p_stop:.1%}\n"
+                        message += f"    • Contexto: {session} | Vol: {vol_regime} | Hora: {hour}\n\n"
+                        
+                    except Exception:
+                        message += f"**{i+1}.** Erro ao processar perfil\n\n"
+                        
+                # Resumo final
+                total_risky_trades = sum(n for _, _, n, _, _ in profiles)
+                total_risky_stops = sum(stopped for _, _, _, stopped, _ in profiles)
+                avg_risk_rate = (total_risky_stops / total_risky_trades * 100) if total_risky_trades > 0 else 0
+                
+                message += f"📈 **Resumo dos Perfis de Risco:**\n"
+                message += f"• Trades analisados: {total_risky_trades}\n"
+                message += f"• Stops nos perfis: {total_risky_stops}\n"
+                message += f"• Taxa média: {avg_risk_rate:.1f}%\n"
+                
+            else:
+                message += "✅ **Nenhum perfil de alto risco detectado!**\n"
+                message += f"*Todos os perfis têm P(stop) < {self.p_thresh_watch:.0%}*\n"
+                
+            # Footer
+            message += f"\n🤖 *Relatório automático do sistema de aprendizado*"
+                
+            # Truncar se muito longo
+            if len(message) > 1900:
+                message = message[:1850] + "\n... *(truncado)*"
+                
+            return message
+            
+        except Exception as e:
+            return f"❌ **Erro ao gerar relatório**: {str(e)[:100]}"
+    
+    # ========================================
+    # SISTEMA DE CLASSIFICAÇÃO DE PADRÕES
+    # ========================================
+    
+    # Classificações baseadas em taxa de vitória
+    PATTERN_CLASSIFICATIONS = {
+        1: {
+            "name": "MUITO BOM",
+            "emoji": "🟢",
+            "min_win_rate": 0.80,  # 80%+ vitórias
+            "description": "Padrão excelente com alta taxa de vitória"
+        },
+        2: {
+            "name": "BOM", 
+            "emoji": "🔵",
+            "min_win_rate": 0.70,  # 70-79% vitórias
+            "description": "Padrão bom com boa taxa de vitória"
+        },
+        3: {
+            "name": "LEGAL",
+            "emoji": "🟡", 
+            "min_win_rate": 0.60,  # 60-69% vitórias
+            "description": "Padrão aceitável com taxa de vitória razoável"
+        },
+        4: {
+            "name": "OK",
+            "emoji": "🟠",
+            "min_win_rate": 0.50,  # 50-59% vitórias
+            "description": "Padrão neutro com taxa de vitória marginal"
+        },
+        5: {
+            "name": "RUIM",
+            "emoji": "🔴",
+            "min_win_rate": 0.40,  # 40-49% vitórias
+            "description": "Padrão problemático com baixa taxa de vitória"
+        },
+        6: {
+            "name": "MUITO RUIM",
+            "emoji": "🟣",
+            "min_win_rate": 0.0,   # <40% vitórias
+            "description": "Padrão péssimo com taxa de vitória muito baixa"
+        }
+    }
+    
+    def classify_pattern_quality(self, win_rate: float, n_samples: int) -> Optional[Dict[str, Any]]:
+        """
+        Classifica a qualidade de um padrão baseado na taxa de vitória.
+        
+        Args:
+            win_rate: Taxa de vitória (0.0 - 1.0)
+            n_samples: Número de amostras
+            
+        Returns:
+            Dict com informações da classificação ou None se insuficiente
+        """
+        try:
+            # Requer mínimo de 5 entradas para classificar
+            MIN_SAMPLES_FOR_CLASSIFICATION = 5
+            
+            if n_samples < MIN_SAMPLES_FOR_CLASSIFICATION:
+                return {
+                    "is_classified": False,
+                    "reason": f"Insuficientes amostras ({n_samples} < {MIN_SAMPLES_FOR_CLASSIFICATION})",
+                    "n_samples": n_samples
+                }
+            
+            # Encontrar classificação apropriada
+            for level in sorted(self.PATTERN_CLASSIFICATIONS.keys()):
+                classification = self.PATTERN_CLASSIFICATIONS[level]
+                if win_rate >= classification["min_win_rate"]:
+                    return {
+                        "is_classified": True,
+                        "level": level,
+                        "name": classification["name"],
+                        "emoji": classification["emoji"],
+                        "description": classification["description"],
+                        "win_rate": win_rate,
+                        "n_samples": n_samples,
+                        "min_win_rate": classification["min_win_rate"]
+                    }
+            
+            # Se chegou aqui, é MUITO RUIM (< 40%)
+            worst_classification = self.PATTERN_CLASSIFICATIONS[6]
+            return {
+                "is_classified": True,
+                "level": 6,
+                "name": worst_classification["name"],
+                "emoji": worst_classification["emoji"],
+                "description": worst_classification["description"],
+                "win_rate": win_rate,
+                "n_samples": n_samples,
+                "min_win_rate": worst_classification["min_win_rate"]
+            }
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Erro na classificação de padrão: {e}", "ERROR")
+            return {
+                "is_classified": False,
+                "reason": f"Erro: {str(e)}",
+                "n_samples": n_samples
+            }
+    
+    def get_pattern_quality_summary(self) -> Dict[str, Any]:
+        """
+        Retorna estatísticas gerais dos padrões classificados.
+        
+        Returns:
+            Dict com estatísticas do banco de dados
+        """
+        try:
+            def _get_summary():
+                cursor = self.conn.cursor()
+                
+                # Total de entradas
+                cursor.execute("SELECT COUNT(*) FROM stats")
+                total_entries = cursor.fetchone()[0]
+                
+                # Padrões únicos
+                cursor.execute("SELECT COUNT(DISTINCT key) FROM stats")
+                unique_patterns = cursor.fetchone()[0]
+                
+                # Padrões com pelo menos 5 amostras (classificáveis)
+                cursor.execute("SELECT COUNT(*) FROM stats WHERE n >= 5")
+                classified_patterns = cursor.fetchone()[0]
+                
+                # Distribuição por qualidade
+                cursor.execute("""
+                    SELECT key, n, stopped 
+                    FROM stats 
+                    WHERE n >= 5
+                """)
+                
+                quality_distribution = {}
+                for key, n, stopped in cursor.fetchall():
+                    win_rate = (n - stopped) / n if n > 0 else 0.0
+                    classification = self.classify_pattern_quality(win_rate, n)
+                    
+                    if classification and classification["is_classified"]:
+                        quality_name = classification["name"]
+                        quality_distribution[quality_name] = quality_distribution.get(quality_name, 0) + 1
+                
+                return {
+                    "total_entries": total_entries,
+                    "unique_patterns": unique_patterns,
+                    "classified_patterns": classified_patterns,
+                    "quality_distribution": quality_distribution,
+                    "classification_levels": len(self.PATTERN_CLASSIFICATIONS)
+                }
+                
+            return self._retry_db_operation(_get_summary)
+            
+        except Exception as e:
+            _log_global("LEARNER", f"Erro ao obter resumo de qualidade: {e}", "ERROR")
+            return {
+                "total_entries": 0,
+                "unique_patterns": 0,
+                "classified_patterns": 0,
+                "quality_distribution": {},
+                "error": str(e)
+            }
+
+# Instância global do learner
+_global_learner: Optional[TradingLearner] = None
+_global_learner_inverse: Optional[TradingLearner] = None
+
+def get_learner() -> TradingLearner:
+    """Retorna instância global do learner (singleton)"""
+    global _global_learner
+    if _global_learner is None:
+        _global_learner = TradingLearner()
+    return _global_learner
+
+def get_learner_inverse() -> TradingLearner:
+    """Retorna instância global do learner inverso (singleton)"""
+    global _global_learner_inverse
+    if _global_learner_inverse is None:
+        _global_learner_inverse = TradingLearner(db_path="hl_learn_inverse.db")
+    return _global_learner_inverse
+
+def test_learner_discord_report():
+    """Função para testar o envio de relatório ao Discord"""
+    try:
+        learner = get_learner()
+        
+        # Inserir alguns dados de teste
+        test_data = [
+            ("BTCUSDT", "buy", 50000.0, True),   # Stop
+            ("BTCUSDT", "buy", 51000.0, False),  # Win  
+            ("BTCUSDT", "buy", 49000.0, True),   # Stop
+            ("ETHUSDT", "sell", 3000.0, True),   # Stop
+            ("ETHUSDT", "sell", 2950.0, True),   # Stop
+            ("SOLUSDT", "buy", 150.0, False),    # Win
+        ]
+        
+        print("🔄 Inserindo dados de teste no learner...")
+        
+        for symbol, side, price, is_stop in test_data:
+            # Simular features básicas
+            features_raw = {
+                "symbol": symbol,
+                "side": side,
+                "price": price,
+                "timestamp": learner.get_current_brt_time().timestamp(),
+                "atr_pct": 2.5,
+                "vol_ratio": 1.2,
+                "rsi": 65.0,
+                "hour_brt": learner.get_current_brt_time().hour,
+                "session_flag": "US_OPEN",
+                "vol_regime": "MID"
+            }
+            
+            features_binned = learner.bin_features(features_raw)
+            
+            # Simular inserção no banco
+            key = learner.generate_profile_key(features_binned)
+            
+            # Atualizar stats diretamente
+            cursor = learner.conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO stats (key, features_json, n, stopped, updated)
+                VALUES (
+                    ?, 
+                    ?, 
+                    COALESCE((SELECT n FROM stats WHERE key = ?), 0) + 1,
+                    COALESCE((SELECT stopped FROM stats WHERE key = ?), 0) + ?,
+                    ?
+                )
+            """, (
+                key,
+                json.dumps(features_binned, default=str),
+                key,
+                key, 
+                1 if is_stop else 0,
+                time_module.time()
+            ))
+            learner.conn.commit()
+        
+        print("✅ Dados de teste inseridos")
+        print("📤 Enviando relatório de teste ao Discord...")
+        
+        # Forçar envio de relatório
+        learner._send_discord_report()
+        
+        print("✅ Relatório enviado! Verifique seu Discord.")
+        
+    except Exception as e:
+        print(f"❌ Erro no teste: {e}")
+        import traceback
+        traceback.print_exc()
 
 BASE_URL = "https://api.binance.com/api/v3/"
 
@@ -1102,7 +2518,7 @@ def _binance_session():
             total=int(os.getenv("BINANCE_RETRIES", "3")),
             backoff_factor=float(os.getenv("BINANCE_BACKOFF", "0.5")),
             status_forcelist=[429, 451, 500, 502, 503, 504],
-            allowed_methods=["GET", "POST"]
+            allowed_methods=["GET", "POST"],
         )
         adapter = HTTPAdapter(max_retries=retry)
         s.mount("https://", adapter); s.mount("http://", adapter)
@@ -1164,9 +2580,6 @@ def get_binance_data(symbol, interval, start_date, end_date):
             break
     formatted_data = [{
         "data": item[0],
-        "open": round(float(item[1]), 7),
-        "high": round(float(item[2]), 7), 
-        "low": round(float(item[3]), 7),
         "valor_fechamento": round(float(item[4]), 7),
         "criptomoeda": symbol,
         "volume_compra": float(item[5]),
@@ -1304,9 +2717,6 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
                     cc = cc[-n_target:]
                 data = [{
                     "data": o[0],
-                    "open": float(o[1]),
-                    "high": float(o[2]),
-                    "low": float(o[3]),
                     "valor_fechamento": float(o[4]),
                     "criptomoeda": symbol,
                     "volume_compra": float(o[5] or 0.0),
@@ -1340,7 +2750,7 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
                     resp = requests.get(
                         f"{BASE_URL}ticker/price",
                         params={"symbol": symbol},
-                        timeout=int(os.getenv("BINANCE_TIMEOUT", "10"))
+                        timeout=int(os.getenv("BINANCE_TIMEOUT", "10")),
                     )
                     if resp.status_code == 200:
                         payload = resp.json()
@@ -1355,9 +2765,6 @@ def build_df(symbol: str = "SOLUSDT", tf: str = "15m",
             if live_price is not None:
                 data.append({
                     "data": cur_open_ms,
-                    "open": float(live_price),
-                    "high": float(live_price),
-                    "low": float(live_price),
                     "valor_fechamento": float(live_price),
                     "criptomoeda": symbol,
                     "volume_compra": 0.0,
@@ -1420,10 +2827,6 @@ class MockHyperliquidDEX:
             self.timeout = kwargs.get('timeout', 5000)
             self.options = kwargs.get('options', {})
         
-        # NOVO: Registro de posições simuladas para evitar fechamento instantâneo
-        self._mock_positions = {}  # {symbol: {'contracts': float, 'side': str, 'unrealizedPnl': float}}
-        self._mock_orders = {}     # {order_id: order_data}
-        
     def fetch_balance(self):
         live_enabled = _is_live_trading()
         if live_enabled:
@@ -1453,19 +2856,8 @@ class MockHyperliquidDEX:
         live_enabled = _is_live_trading()
         if live_enabled:
             _log_global("DEX", f"🔍 REAL: Verificando posições para {symbols}", level="DEBUG")
-            
-            # Retornar posições do registro interno
-            positions = []
-            for symbol, pos_data in self._mock_positions.items():
-                if symbols is None or symbol in symbols:
-                    positions.append({
-                        'symbol': symbol,
-                        'contracts': pos_data['contracts'],
-                        'side': pos_data['side'],
-                        'unrealizedPnl': pos_data['unrealizedPnl'],
-                        'entryPrice': pos_data.get('entryPrice', 0.0)
-                    })
-            return positions
+            # TODO: Implementar conexão real com Hyperliquid quando LIVE_TRADING=1
+            return []
         else:
             _log_global("DEX", f"🔍 Verificando posições para {symbols} (simulado)", level="DEBUG")
             return []
@@ -1484,46 +2876,8 @@ class MockHyperliquidDEX:
         live_enabled = _is_live_trading()
         if live_enabled:
             _log_global("DEX", f"🔥 REAL: Criando ordem {symbol} {side} {amount}", level="WARN")
-            
-            # Registrar posição no mock para simular posição real
-            import time
-            order_id = f"real_order_{int(time.time())}"
-            
-            # Obter preço atual para calcular PnL
-            try:
-                if not hasattr(self, '_binance_dex'):
-                    self._binance_dex = RealDataDex()
-                ticker = self._binance_dex.fetch_ticker(symbol)
-                entry_price = ticker['last']
-            except:
-                entry_price = 0.004  # Fallback
-            
-            # Calcular side e contracts
-            contracts = amount if side == 'buy' else -amount
-            position_side = 'long' if side == 'buy' else 'short'
-            
-            # Registrar posição
-            self._mock_positions[symbol] = {
-                'contracts': contracts,
-                'side': position_side,
-                'unrealizedPnl': 0.0,  # Começa em zero
-                'entryPrice': entry_price
-            }
-            
-            # Registrar ordem
-            self._mock_orders[order_id] = {
-                'id': order_id,
-                'symbol': symbol,
-                'side': side,
-                'amount': amount,
-                'price': entry_price,
-                'status': 'closed',  # Ordem de mercado executa imediatamente
-                'timestamp': time.time() * 1000
-            }
-            
-            _log_global("DEX", f"✅ Posição registrada: {symbol} {position_side} {contracts:.0f} contratos @ ${entry_price:.6f}", level="INFO")
-            
-            return {"id": order_id, "status": "closed"}
+            # TODO: Implementar criação de ordem real com Hyperliquid quando LIVE_TRADING=1
+            return {"id": "real_order_dev", "status": "open"}
         else:
             _log_global("DEX", f"⚠️  ORDEM SIMULADA: {symbol} {side} {amount}", level="WARN")
             return {"id": "mock_order_123", "status": "open"}
@@ -1827,6 +3181,8 @@ def _init_dex_if_needed_legacy(dex_timeout: int = 45000):
     })
     
     return dex
+    
+    return dex
 
 # Sistema TRADINGV4 com suporte a múltiplas carteiras
 def _init_system_if_needed():
@@ -2077,7 +3433,7 @@ class TradeLogger:
             _log_global(
                 "LOGGER",
                 f"XLSX não atualizado ({type(e).__name__}: {e}). CSV disponível em {os.path.abspath(self.csv_path)}",
-                level="WARN"
+                level="WARN",
             )
 
 # =========================
@@ -2180,8 +3536,8 @@ class GradientConfig:
     COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
     POST_COOLDOWN_CONFIRM: int = 0        # confirmações pós-cooldown desativadas
     COOLDOWN_MINUTOS: int   = 120          # tempo mínimo entre entradas após saída
-    ANTI_SPAM_SECS: int     = 30           # Anti-spam mais conservador
-    MIN_HOLD_BARS: int      = 5           # mínimo 5 velas antes de permitir saída (evita flip-flop)
+    ANTI_SPAM_SECS: int     = 3
+    MIN_HOLD_BARS: int      = 1           # não sair na mesma vela da entrada
 
     # Stops/TP
     STOP_ATR_MULT: float    = 0.0         # desativado (uso por % da margem)
@@ -2272,6 +3628,7 @@ class EMAGradientStrategy:
         self._last_price_snapshot: Optional[float] = None
         
         # Sistema de aprendizado
+        self._learner_context: Optional[dict] = None
         
         # Rastreamento de posição para detectar fechamentos externos
         self._last_position_size: Optional[float] = None
@@ -2279,26 +3636,42 @@ class EMAGradientStrategy:
         self._position_was_active: bool = False
 
     def _check_external_position_closure(self, current_pos: Optional[Dict[str, Any]]) -> None:
-        """Detecta se uma posição foi fechada externamente (por stop/TP da Hyperliquid) """
+        """Detecta se uma posição foi fechada externamente (por stop/TP da Hyperliquid) e registra no learner"""
         try:
             current_size = float(current_pos.get("contracts", 0)) if current_pos else 0.0
             
             # Debug detalhado
             self._log(f"🔍 DEBUG STOP: position_was_active={self._position_was_active}, "
+                     f"learner_context={bool(self._learner_context)}, "
                      f"current_size={current_size}", level="INFO")
             
+            # Se tínhamos uma posição ativa com contexto de learner e agora não temos mais
             if (self._position_was_active and 
+                self._learner_context and 
                 abs(current_size) < 0.001):  # Posição foi fechada
+                
+                self._log("🎯 Posição fechada externamente detectada - registrando no learner", level="INFO")
                 
                 # Buscar preço atual para registrar o fechamento
                 try:
                     ticker = self.dex.fetch_ticker(self.symbol)
                     current_price = float(ticker["last"])
-                    self._log(f"Posição fechada externamente em {current_price:.4f}", level="INFO")
+                    
+                    # Registrar fechamento no learner
+                    learner = get_learner()
+                    learner.record_close(
+                        context=self._learner_context,
+                        close_price=current_price,
+                        close_kind="external_stop"  # Fechamento por stop/TP da Hyperliquid
+                    )
+                    
+                    self._log(f"✅ Fechamento externo registrado no learner: preço={current_price:.4f}", level="INFO")
+                    
                 except Exception as e:
-                    self._log(f"Erro ao buscar preço de fechamento: {e}", level="WARN")
+                    self._log(f"⚠️ Erro ao registrar fechamento externo no learner: {e}", level="WARN")
                 
                 # Limpar contexto
+                self._learner_context = None
                 self._position_was_active = False
                 
             # Atualizar rastreamento da posição atual
@@ -2309,7 +3682,8 @@ class EMAGradientStrategy:
             else:
                 self._last_position_size = None
                 self._last_position_side = None
-                self._position_was_active = False
+                if not self._learner_context:  # Só resetar se já não há contexto pendente
+                    self._position_was_active = False
                     
         except Exception as e:
             self._log(f"Erro verificando fechamento externo: {e}", level="WARN")
@@ -2402,7 +3776,7 @@ class EMAGradientStrategy:
                 post_cooldown_confirm_bars=self.cfg.POST_COOLDOWN_CONFIRM,
                 stop_atr_mult=self.cfg.STOP_ATR_MULT,
                 takeprofit_atr_mult=(self.cfg.TAKEPROFIT_ATR_MULT or None),
-                trailing_atr_mult=(self.cfg.TRAILING_ATR_MULT or None)
+                trailing_atr_mult=(self.cfg.TRAILING_ATR_MULT or None),
             )
         except Exception:
             # fallback seguro
@@ -3289,7 +4663,7 @@ class EMAGradientStrategy:
             if self.debug:
                 self._log(
                     f"Stop existente reutilizado id={self._last_stop_order_id} price≈{px:.6f}",
-                    level="DEBUG"
+                    level="DEBUG",
                 )
             return existing
         try:
@@ -3355,7 +4729,7 @@ class EMAGradientStrategy:
             if self.debug:
                 self._log(
                     f"Take profit existente reutilizado id={self._last_take_order_id} price≈{px:.6f}",
-                    level="DEBUG"
+                    level="DEBUG",
                 )
             return existing
         try:
@@ -3497,6 +4871,91 @@ class EMAGradientStrategy:
             self._log(f"Falha ao sincronizar proteções: {type(e).__name__}: {e}", level="WARN")
 
     # ---------- ordens ----------
+    def _entrada_segura_pelo_learner(self, side: str, df_for_log: pd.DataFrame) -> Tuple[bool, float, int]:
+        """
+        Verifica a qualidade do padrão de entrada usando o novo sistema de classificação.
+        Retorna: (é_segura, probabilidade_stop, num_amostras)
+        
+        *** NOVO SISTEMA DE CLASSIFICAÇÃO ***
+        - MUITO BOM (🟢): ≥80% wins - Sinal muito positivo
+        - BOM (🔵): ≥70% wins - Sinal positivo  
+        - LEGAL (🟡): ≥60% wins - Sinal neutro positivo
+        - OK (🟠): ≥50% wins - Sinal neutro
+        - RUIM (🔴): ≥40% wins - Alerta moderado
+        - MUITO RUIM (🟣): <40% wins - Alerta severo
+        """
+        try:
+            learner = get_learner()
+            
+            # Extrair features da situação atual
+            price_now = self._preco_atual()
+            features_raw = learner.extract_features_raw(self.symbol, side, df_for_log, price_now)
+            features_binned = learner.bin_features(features_raw)
+            
+            # Obter classificação do padrão e probabilidade de stop
+            classification, n_samples = learner.get_pattern_classification_with_backoff(features_binned)
+            p_stop, _ = learner.get_stop_probability_with_backoff(features_binned)
+            
+            # SEMPRE permitir entrada - apenas sinalizar no Discord
+            is_safe = True
+            
+            if classification and classification["is_classified"]:
+                level = classification["level"]
+                name = classification["name"]
+                emoji = classification["emoji"]
+                win_rate = classification["win_rate"]
+                
+                if level == 1:  # MUITO BOM
+                    self._log(f"{emoji} PADRÃO EXCELENTE: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ENTRADA MUITO RECOMENDADA", level="INFO")
+                elif level == 2:  # BOM
+                    self._log(f"{emoji} PADRÃO BOM: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ENTRADA RECOMENDADA", level="INFO")
+                elif level == 3:  # LEGAL
+                    self._log(f"{emoji} PADRÃO ACEITÁVEL: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ENTRADA OK", level="INFO")
+                elif level == 4:  # OK
+                    self._log(f"{emoji} PADRÃO NEUTRO: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ENTRADA NEUTRA", level="INFO")
+                elif level == 5:  # RUIM
+                    self._log(f"{emoji} PADRÃO PROBLEMÁTICO: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ALERTA MODERADO", level="WARN")
+                    
+                    # Enviar alerta moderado no Discord
+                    try:
+                        self._notify_trade(
+                            kind="pattern_alert", 
+                            side=side, 
+                            price=price_now, 
+                            amount=0,
+                            note=f"🔴 PADRÃO RUIM: {win_rate:.1%} vitórias ({n_samples} amostras)",
+                            include_hl=False
+                        )
+                    except Exception:
+                        pass
+                        
+                elif level == 6:  # MUITO RUIM
+                    self._log(f"{emoji} PADRÃO PÉSSIMO: {name} | Taxa vitória: {win_rate:.1%} | Amostras: {n_samples} - ALERTA SEVERO", level="ERROR")
+                    
+                    # Enviar alerta severo no Discord
+                    try:
+                        self._notify_trade(
+                            kind="pattern_danger", 
+                            side=side, 
+                            price=price_now, 
+                            amount=0,
+                            note=f"🟣 PADRÃO MUITO RUIM: {win_rate:.1%} vitórias ({n_samples} amostras) - CUIDADO!",
+                            include_hl=False
+                        )
+                    except Exception:
+                        pass
+                        
+            else:
+                # Padrão não classificado (menos de 5 entradas)
+                reason = classification["reason"] if classification else "Padrão desconhecido"
+                self._log(f"⚪ PADRÃO NÃO CLASSIFICADO: {reason} | Amostras: {n_samples} - ENTRADA PERMITIDA", level="INFO")
+            
+            return is_safe, p_stop or 0.0, n_samples
+            
+        except Exception as e:
+            self._log(f"Erro verificando qualidade do padrão: {e} - permitindo entrada", level="WARN")
+            return True, 0.0, 0
+
     def _abrir_posicao_dual_wallet(self, side: str, usd_to_spend: float, df_for_log: pd.DataFrame, atr_last: Optional[float] = None):
         """Abre posição em TODAS as carteiras configuradas simultaneamente"""
         if self._posicao_aberta():
@@ -3505,6 +4964,10 @@ class EMAGradientStrategy:
             self._log("Entrada ignorada: ordem pendente detectada.", level="WARN"); return None, None
         if not self._anti_spam_ok("open"):
             self._log("Entrada bloqueada pelo anti-spam.", level="DEBUG"); return None, None
+        
+        # Verificação de segurança pelo sistema de aprendizado (apenas alerta)
+        is_safe, p_stop, n_samples = self._entrada_segura_pelo_learner(side, df_for_log)
+        
         # Configurar leverage
         try:
             lev_int = int(self.cfg.LEVERAGE)
@@ -3622,52 +5085,34 @@ class EMAGradientStrategy:
                 price=fill_price,
                 amount=sum(o["amount"] for o in orders_created),
                 note=note,
-                include_hl=False
+                include_hl=False,
             )
         except Exception:
             pass
+        
+        # Sistema de aprendizado (usando dados da carteira principal)
+        try:
+            learner = get_learner()
+            learner_context = learner.record_entry(
+                symbol=self.symbol,
+                side=self._norm_side(side),
+                price=fill_price,
+                df=df_for_log
+            )
+            self._learner_context = learner_context
+        except Exception as e:
             self._log(f"Erro no sistema de aprendizado (entrada): {e}", level="WARN")
+            self._learner_context = None
         
         # Criar proteções para TODAS as carteiras
         norm_side = self._norm_side(side)
-        
-        # Usar fill_price ou preço original para calcular TP/SL
-        price_for_calc = fill_price or price
-        
-        sl_price, tp_price = self._protection_prices(price_for_calc, norm_side)
-        self._log(f"[DUAL_TP/SL] Preço base=${price_for_calc:.6f} | SL=${sl_price:.6f} | TP=${tp_price if tp_price else 0:.6f}", level="INFO")
-        
+        sl_price, tp_price = self._protection_prices(fill_price, norm_side)
         manage_take = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT or 0.0) > 0.0
         sl_side = "sell" if norm_side == "buy" else "buy"
         tp_side = sl_side
         
         tp_display = f"{tp_price:.6f}" if manage_take else "disabled"
-        self._log(f"🛡️ Criando proteções em {len(orders_created)} carteiras | Lado executado: {norm_side} | SL: {sl_side}@{sl_price:.6f} | TP: {tp_display}", level="INFO")
-        
-        # Aguardar um pouco para garantir que a posição foi criada na exchange antes das proteções
-        import time as _time_mod
-        _time_mod.sleep(1)
-        
-        # Função auxiliar para verificar se posição realmente existe
-        def _verificar_posicao_ativa(wallet_dex, timeout_secs=5):
-            """Verifica se há posição ativa na carteira, com retry"""
-            import time as tm
-            start_time = tm.time()
-            
-            while tm.time() - start_time < timeout_secs:
-                try:
-                    positions = wallet_dex.fetch_positions(symbols=[self.symbol])
-                    for pos in positions:
-                        if pos.get('symbol') == self.symbol:
-                            size = abs(float(pos.get('contracts', 0)))
-                            side_pos = pos.get('side')
-                            if size > 0 and side_pos:
-                                return True, size, side_pos
-                    tm.sleep(0.5)  # Aguardar 500ms antes de tentar novamente
-                except Exception:
-                    tm.sleep(0.5)
-            
-            return False, 0.0, None
+        self._log(f"🛡️ Criando proteções em {len(orders_created)} carteiras | SL: {sl_price:.6f} | TP: {tp_display}", level="INFO")
         
         # Criar stops para cada carteira
         for order_info in orders_created:
@@ -3676,49 +5121,17 @@ class EMAGradientStrategy:
                 wallet_dex = order_info["dex"]
                 wallet_amount = order_info["amount"]
                 
-                # CORREÇÃO: Verificar se posição realmente existe antes de criar proteções
-                has_position, pos_size, pos_side = _verificar_posicao_ativa(wallet_dex, timeout_secs=3)
-                
-                if not has_position:
-                    self._log(f"[{wallet_name}] ⚠️ POSIÇÃO NÃO ENCONTRADA após 3s - Pulando proteções (posição pode ter fechado rapidamente)", level="WARN")
-                    continue
-                
-                self._log(f"[{wallet_name}] ✅ POSIÇÃO CONFIRMADA: {pos_side} {pos_size:.6f} - Criando proteções", level="DEBUG")
-                
-                # Ajustar quantidade das proteções para o tamanho real da posição
-                protection_amount = min(wallet_amount, pos_size)
-                
                 # Stop loss
-                stop_order = wallet_dex.create_order(self.symbol, "stop_market", sl_side, protection_amount, sl_price, {"reduceOnly": True})
+                stop_order = wallet_dex.create_order(self.symbol, "stop_market", sl_side, wallet_amount, sl_price, {"reduceOnly": True})
                 self._log(f"[{wallet_name}] Stop criado: {stop_order.get('id', 'N/A')}", level="DEBUG")
                 
                 # Take profit (se habilitado)
                 if manage_take and tp_price is not None:
-                    tp_order = wallet_dex.create_order(self.symbol, "limit", tp_side, protection_amount, tp_price, {"reduceOnly": True})
+                    tp_order = wallet_dex.create_order(self.symbol, "limit", tp_side, wallet_amount, tp_price, {"reduceOnly": True})
                     self._log(f"[{wallet_name}] TP criado: {tp_order.get('id', 'N/A')}", level="DEBUG")
                     
             except Exception as e:
-                error_msg = str(e)
-                self._log(f"[{order_info['wallet']}] Erro criando proteções: {error_msg}", level="ERROR")
-                
-                # Log adicional para debug do erro "reduce only"
-                if "Reduce only order would increase position" in error_msg:
-                    self._log(f"[{order_info['wallet']}] 🔍 DEBUG REDUCE_ONLY ERROR:", level="ERROR")
-                    self._log(f"    • Tentando criar: {sl_side} {order_info['amount']} (reduce_only=True)", level="ERROR")
-                    self._log(f"    • Preço SL: {sl_price:.6f}", level="ERROR")
-                    self._log(f"    • Lado da posição aberta: {norm_side}", level="ERROR")
-                    try:
-                        # Verificar posições reais em vez de balance
-                        pos_check = order_info['dex'].fetch_positions(symbols=[self.symbol])
-                        active_positions = [p for p in pos_check if abs(float(p.get('contracts', 0))) > 0]
-                        self._log(f"    • Posições ativas: {len(active_positions)}", level="ERROR")
-                        if active_positions:
-                            for p in active_positions:
-                                self._log(f"      - {p.get('symbol')}: {p.get('side')} {p.get('contracts')}", level="ERROR")
-                        else:
-                            self._log(f"    • NENHUMA POSIÇÃO ATIVA ENCONTRADA - Posição fechou antes das proteções", level="ERROR")
-                    except Exception as balance_err:
-                        self._log(f"    • Erro verificando posições: {balance_err}", level="ERROR")
+                self._log(f"[{order_info['wallet']}] Erro criando proteções: {e}", level="ERROR")
         
         # Log das proteções
         self._safe_log(
@@ -3748,6 +5161,8 @@ class EMAGradientStrategy:
             self._log("Entrada bloqueada pelo anti-spam.", level="DEBUG"); return None, None
         
         # Verificação de segurança pelo sistema de aprendizado (apenas alerta)
+        is_safe, p_stop, n_samples = self._entrada_segura_pelo_learner(side, df_for_log)
+        # Nota: is_safe sempre é True agora - learner apenas sinaliza, não bloqueia
 
         try:
             lev_int = int(self.cfg.LEVERAGE)
@@ -3770,7 +5185,7 @@ class EMAGradientStrategy:
 
         self._log(
             f"Abrindo {side.upper()} | notional≈${usd_to_spend*self.cfg.LEVERAGE:.2f} amount≈{amount:.6f} px≈{price:.4f}",
-            level="INFO"
+            level="INFO",
         )
         ordem_entrada = self.dex.create_order(self.symbol, "market", side, amount, price)  # Carteira mãe
         self._log(f"Resposta create_order: {ordem_entrada}", level="DEBUG")
@@ -3875,10 +5290,26 @@ class EMAGradientStrategy:
                 price=price,
                 amount=amount,
                 note="entrada executada",
-                include_hl=False
+                include_hl=False,
             )
         except Exception:
             pass
+
+        # Integração com sistema de aprendizado
+        learner_context = None
+        try:
+            learner = get_learner()
+            learner_context = learner.record_entry(
+                symbol=self.symbol,
+                side=self._norm_side(side),
+                price=fill_price,
+                df=df_for_log
+            )
+            # Armazenar contexto para usar no fechamento
+            self._learner_context = learner_context
+        except Exception as e:
+            self._log(f"Erro no sistema de aprendizado (entrada): {e}", level="WARN")
+            self._learner_context = None
 
         self._last_stop_order_id = None
         self._last_stop_order_px = None
@@ -3887,13 +5318,7 @@ class EMAGradientStrategy:
         self._trail_max_gain_pct = 0.0
 
         norm_side = self._norm_side(side)
-        
-        # Usar fill_price ou preço original para calcular TP/SL
-        price_for_calc = fill_price or price
-        
-        sl_price, tp_price = self._protection_prices(price_for_calc, norm_side)
-        self._log(f"[TP/SL] Preço base=${price_for_calc:.6f} | SL=${sl_price:.6f} | TP=${tp_price if tp_price else 0:.6f}", level="INFO")
-        
+        sl_price, tp_price = self._protection_prices(fill_price, norm_side)
         manage_take = float(self.cfg.TAKE_PROFIT_CAPITAL_PCT or 0.0) > 0.0
         if not manage_take:
             tp_price = None
@@ -3905,12 +5330,12 @@ class EMAGradientStrategy:
                 self._log(
                     f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) "
                     f"take={tp_price:.6f} (+{self.cfg.TAKE_PROFIT_CAPITAL_PCT*100:.1f}% margem)",
-                    level="DEBUG"
+                    level="DEBUG",
                 )
             else:
                 self._log(
                     f"Proteções configuradas | stop={sl_price:.6f} (-{self.cfg.STOP_LOSS_CAPITAL_PCT*100:.1f}% margem) | take=standby",
-                    level="DEBUG"
+                    level="DEBUG",
                 )
 
         # DEBUG: Verificar posição ANTES de criar stop
@@ -3987,7 +5412,7 @@ class EMAGradientStrategy:
                         self._log(
                             f"id={o.get('id')} type={o.get('type')} side={o.get('side')} reduceOnly={ro} "
                             f"stopLossPrice={info.get('stopLossPrice')} triggerPrice={info.get('triggerPrice')}",
-                            level="DEBUG"
+                            level="DEBUG",
                         )
         except Exception as e:
             self._log(f"Falha ao listar open_orders: {type(e).__name__}: {e}", level="WARN")
@@ -4052,18 +5477,6 @@ class EMAGradientStrategy:
         if not self._anti_spam_ok("close"):
             self._log("Fechamento bloqueado pelo anti-spam.", level="DEBUG"); return
 
-        # Verificar MIN_HOLD_BARS - não fechar se ainda não passou o tempo mínimo
-        if self._entry_bar_idx is not None and isinstance(df_for_log, pd.DataFrame):
-            current_bar_idx = len(df_for_log) - 1
-            bars_since_entry = current_bar_idx - self._entry_bar_idx
-            min_hold = int(self.cfg.MIN_HOLD_BARS or 0)
-            if min_hold > 0 and bars_since_entry < min_hold:
-                self._log(
-                    f"Fechamento bloqueado: posição aberta há {bars_since_entry} barra(s), mínimo {min_hold} barras necessário.",
-                    level="INFO"
-                )
-                return
-
         lado_atual = self._norm_side(pos.get("side") or pos.get("positionSide"))
         qty        = float(pos.get("contracts") or 0.0)  # COPIADO DO TRADINGANTIGO.PY
         price_now  = self._preco_atual()
@@ -4094,10 +5507,6 @@ class EMAGradientStrategy:
             except Exception:
                 pass
             self._trail_max_gain_pct = None
-            
-            # Limpar estado de entrada
-            self._entry_bar_idx = None
-            self._entry_bar_time = None
 
             # *** TRAILING STOP: Limpar High Water Mark ***
             _clear_high_water_mark(self.symbol)
@@ -4110,10 +5519,23 @@ class EMAGradientStrategy:
                     price=price_now,
                     amount=qty,
                     note="fechamento por decisão/trigger",
-                    include_hl=True
+                    include_hl=True,
                 )
             except Exception:
                 pass
+
+            # Integração com sistema de aprendizado
+            try:
+                if hasattr(self, '_learner_context') and self._learner_context:
+                    learner = get_learner()
+                    learner.record_close(
+                        context=self._learner_context,
+                        close_price=price_now,
+                        close_kind="close_external"  # Fechamento manual/por trigger
+                    )
+                    self._learner_context = None
+            except Exception as e:
+                self._log(f"Erro no sistema de aprendizado (fechamento): {e}", level="WARN")
 
     # ---------- trailing BE± ----------
     def _maybe_trailing_breakeven_plus(self, pos: Dict[str, Any], df_for_log: pd.DataFrame):
@@ -4210,7 +5632,7 @@ class EMAGradientStrategy:
             self._last_stop_order_px = target_stop
             self._log(
                 f"Trailing capital: novo stop {stop_side.upper()} @ {target_stop:.6f} (entry {entry:.6f}, px_now {px_now:.6f}, max_gain={max_gain:.2f}%)",
-                level="INFO"
+                level="INFO",
             )
             self._safe_log(
                 "ajuste_stop", df_for_log,
@@ -4408,7 +5830,7 @@ class EMAGradientStrategy:
                     price=last_px,
                     amount=None,
                     note="fechado externamente (possível stop)",
-                    include_hl=True
+                    include_hl=True,
                 )
             except Exception:
                 pass
@@ -4423,7 +5845,7 @@ class EMAGradientStrategy:
                 remaining_min = remaining_sec / 60.0
                 self._log(
                     f"Cooldown temporal ativo: novas entradas liberadas em {remaining_min:.1f} minuto(s).",
-                    level="INFO"
+                    level="INFO",
                 )
                 self._safe_log("cooldown_temporal", df_for_log=df, tipo="info")
                 self._last_pos_side = None
@@ -4520,7 +5942,7 @@ class EMAGradientStrategy:
                 if pnl_abs <= -abs(max_loss_abs):
                     self._log(
                         f"HARD STOP: Perda de {pnl_abs:.4f} USDC excedeu limite -{abs(max_loss_abs):.2f}. Fechando posição imediatamente.",
-                        level="WARN"
+                        level="WARN",
                     )
                     self._fechar_posicao(df_for_log=df)
                     return
@@ -4613,7 +6035,7 @@ class EMAGradientStrategy:
                         current_sell_volume, avg_sell_volume_30, sell_ratio,
                         buy_sell_ratio, avg_buy_sell_ratio
                     ),
-                    level="DEBUG"
+                    level="DEBUG",
                 )
             except Exception as e:
                 self._log(f"Erro calculando métricas de volume: {e}", level="WARN")
@@ -4730,12 +6152,12 @@ class EMAGradientStrategy:
                         current_sell_volume, avg_sell_volume_30, sell_ratio,
                         buy_sell_ratio, avg_buy_sell_ratio
                     ),
-                    level="DEBUG"
+                    level="DEBUG",
                 )
                 self._log(
                     f"No-trade check | |ema7-ema21|={abs(diff):.6f} vs eps={eps:.6f} | atr% saudável="
                     f"{self.cfg.ATR_PCT_MIN <= last.atr_pct <= self.cfg.ATR_PCT_MAX}",
-                    level="DEBUG"
+                    level="DEBUG",
                 )
                 # LONG conds
                 L1 = last.ema_short > last.ema_long
@@ -4745,7 +6167,7 @@ class EMAGradientStrategy:
                 L5 = last.volume > last.vol_ma
                 self._log(
                     f"Trigger LONG | EMA7>EMA21={L1} grad_ok={L2} atr_ok={L3} breakout={L4} vol_ok={L5}",
-                    level="DEBUG"
+                    level="DEBUG",
                 )
                 # SHORT conds
                 S1 = last.ema_short < last.ema_long
@@ -4755,7 +6177,7 @@ class EMAGradientStrategy:
                 S5 = L5
                 self._log(
                     f"Trigger SHORT | EMA7<EMA21={S1} grad_ok={S2} atr_ok={S3} breakout={S4} vol_ok={S5}",
-                    level="DEBUG"
+                    level="DEBUG",
                 )
             except Exception:
                 pass
@@ -5738,6 +7160,133 @@ if __name__ == "__main__":
                 except Exception as e:
                     _log_global("TRAILING_CHECK", f"Erro verificando {asset.name} ({wallet_name}): {type(e).__name__}: {e}", level="WARN")
 
+    def fast_safety_check_v4(asset_state) -> None:
+        """Executa verificações rápidas de segurança (PnL, ROI) para todos os ativos em TODAS as carteiras."""
+        
+        # Debug: verificar quantos assets estão no asset_state
+        _log_global("FAST_SAFETY_V4", f"Asset_state contém {len(asset_state)} assets: {list(asset_state.keys())}", level="DEBUG")
+        
+        # Verificar segurança para TODAS as carteiras
+        for wallet_config in WALLET_CONFIGS:
+            _log_global("FAST_SAFETY_V4", f"Verificando segurança para {wallet_config.name} (${wallet_config.usd_per_trade}/trade)...")
+            
+            try:
+                wallet_dex = _init_dex_if_needed(wallet_config)
+                open_positions = []
+                
+                for asset in ASSET_SETUPS:
+                    state = asset_state.get(asset.name)
+                    
+                    try:
+                        # Verificar se há posição aberta nesta carteira específica
+                        cache_key = f"positions_{asset.hl_symbol}_{wallet_config.name}"
+                        positions = _get_cached_api_call(cache_key, wallet_dex.fetch_positions, [asset.hl_symbol])
+                        if not positions or float(positions[0].get("contracts", 0)) == 0:
+                            continue
+                            
+                        pos = positions[0]
+                        emergency_closed = False
+                        
+                        # Se não tem strategy no asset_state, pular mas ainda mostrar no log
+                        if state is None:
+                            _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Posição encontrada mas asset não inicializado", level="DEBUG")
+                            continue
+                        
+                        # Obter strategy específica da carteira
+                        strategies = state.get("strategies", {})
+                        strategy = strategies.get(wallet_config.name)
+                        if not strategy:
+                            _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Strategy não encontrada", level="DEBUG")
+                            continue
+                        
+                        # Coletar informações da posição
+                        side = pos.get("side") or pos.get("positionSide", "")
+                        contracts = float(pos.get("contracts", 0))
+                        unrealized_pnl = float(pos.get("unrealizedPnl", 0))
+                        
+                        # Calcular ROI real usando mesma fórmula do trailing stop
+                        roi_pct = 0.0
+                        try:
+                            position_value = pos.get("positionValue") or pos.get("notional") or pos.get("size")
+                            leverage = float(pos.get("leverage", 10))
+                            
+                            if position_value is None:
+                                # Calcular position_value manualmente se necessário
+                                current_px = 0
+                                if strategy:
+                                    current_px = strategy._preco_atual()
+                                
+                                if current_px == 0:
+                                    # Fallback: usar ticker se não conseguimos do strategy
+                                    try:
+                                        cache_key = f"ticker_{asset.hl_symbol}_{wallet_config.name}"
+                                        ticker = _get_cached_api_call(cache_key, wallet_dex.fetch_ticker, asset.hl_symbol)
+                                        current_px = float(ticker.get("last", 0) or 0)
+                                    except Exception:
+                                        current_px = 0
+                                
+                                if contracts > 0 and current_px > 0:
+                                    position_value = abs(contracts * current_px)
+                            
+                            if position_value and position_value > 0 and leverage > 0:
+                                # Mesma fórmula: (PnL / (position_value / leverage)) * 100
+                                capital_real = position_value / leverage
+                                roi_pct = (unrealized_pnl / capital_real) * 100
+                        except Exception as e:
+                            _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Erro calculando ROI - {e}", level="WARN")
+                        
+                        # Adicionar à lista de posições abertas com status (apenas ROI)
+                        status = "OK"
+                        if roi_pct <= ROI_HARD_STOP:
+                            status = f"⚠️ ROI CRÍTICO: {roi_pct:.1f}% (será fechado!)"
+                        elif unrealized_pnl < -0.01:  # Alertar perdas > -1 cent
+                            status = f"📉 PnL: ${unrealized_pnl:.3f} ROI: {roi_pct:.1f}%"
+                        elif unrealized_pnl > 0.01:   # Alertar lucros > +1 cent
+                            status = f"📈 PnL: +${unrealized_pnl:.3f} ROI: +{roi_pct:.1f}%"
+                        
+                        open_positions.append(f"{asset.name} {side.upper()}: {status}")
+                        
+                        # VERIFICAR APENAS ROI - PnL em dólar desabilitado
+                        if roi_pct <= ROI_HARD_STOP:
+                            _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] 🚨 {wallet_config.name} ROI: {roi_pct:.4f} <= {ROI_HARD_STOP} = True", level="ERROR")
+                            try:
+                                qty = abs(contracts)
+                                side_norm = strategy._norm_side(side)
+                                exit_side = "sell" if side_norm in ("buy", "long") else "buy"
+                                
+                                # Buscar preço atual para ordem market
+                                ticker = wallet_dex.fetch_ticker(asset.hl_symbol)
+                                current_price = float(ticker.get("last", 0) or 0)
+                                if current_price <= 0:
+                                    continue
+                                    
+                                # Ajustar preço para garantir execução
+                                if exit_side == "sell":
+                                    order_price = current_price * 0.995
+                                else:
+                                    order_price = current_price * 1.005
+                                
+                                wallet_dex.create_order(asset.hl_symbol, "market", exit_side, qty, order_price, {"reduceOnly": True})
+                                emergency_closed = True
+                                _clear_high_water_mark(asset.name)  # Limpar HWM após fechamento de emergência
+                                _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Emergência ROI {roi_pct:.4f}% - posição fechada", level="ERROR")
+                            except Exception as e:
+                                _log_global("FAST_SAFETY_V4", f"{asset.name} ({wallet_config.name}): Erro fechando por ROI - {e}", level="WARN")
+                        else:
+                            _log_global("FAST_SAFETY_V4", f"[DEBUG_CLOSE] ✅ {wallet_config.name} ROI OK: {roi_pct:.4f} > {ROI_HARD_STOP}", level="DEBUG")
+                                
+                    except Exception as e:
+                        _log_global("FAST_SAFETY_V4", f"Erro no safety check {asset.name} ({wallet_config.name}): {type(e).__name__}: {e}", level="WARN")
+                
+                # Log resumo das posições abertas para esta carteira
+                if open_positions:
+                    _log_global("FAST_SAFETY_V4", f"{wallet_config.name}: Posições monitoradas: {' | '.join(open_positions)}", level="INFO")
+                else:
+                    _log_global("FAST_SAFETY_V4", f"{wallet_config.name}: Nenhuma posição aberta", level="DEBUG")
+                    
+            except Exception as e:
+                _log_global("FAST_SAFETY_V4", f"Erro geral na carteira {wallet_config.name}: {type(e).__name__}: {e}", level="ERROR")
+
     def executar_estrategia(
         df_in: pd.DataFrame,
         dex_in,
@@ -5749,7 +7298,7 @@ if __name__ == "__main__":
         """Executa a estratégia sequencialmente para cada ativo configurado."""
         _log_global(
             "ENGINE",
-            f"LIVE_TRADING={os.getenv('LIVE_TRADING', '0')} | DEX_TIMEOUT_MS={os.getenv('DEX_TIMEOUT_MS', '5000')} | assets={len(ASSET_SETUPS)}"
+            f"LIVE_TRADING={os.getenv('LIVE_TRADING', '0')} | DEX_TIMEOUT_MS={os.getenv('DEX_TIMEOUT_MS', '5000')} | assets={len(ASSET_SETUPS)}",
         )
 
         if trade_logger_in is not None:
@@ -5759,7 +7308,7 @@ if __name__ == "__main__":
         default_cols = df_in.columns if isinstance(df_in, pd.DataFrame) else pd.Index([])
 
         # Configuração dos loops OTIMIZADA
-# REMOVED:         fast_sleep = 3  # Fast safety loop: 3 segundos (reduzido de 5s)  
+        fast_sleep = 3  # Fast safety loop: 3 segundos (reduzido de 5s)  
         trailing_sleep = 15  # Trailing stop check: 15 segundos (placeholder - não implementado ainda)
         slow_sleep = 30  # Full analysis loop: 30 segundos (reduzido de 60s) 
         try:
@@ -5773,7 +7322,7 @@ if __name__ == "__main__":
         iter_count = 0
         last_full_analysis = 0
         
-# REMOVED:         _log_global("ENGINE", f"🚀 Iniciando ENGINE DUAL WALLET V4: FAST_SAFETY={fast_sleep}s | FULL_ANALYSIS={slow_sleep}s")
+        _log_global("ENGINE", f"🚀 Iniciando ENGINE DUAL WALLET V4: FAST_SAFETY={fast_sleep}s | FULL_ANALYSIS={slow_sleep}s")
         
         # Log configurações das carteiras
         _log_global("ENGINE", "💰 CONFIGURAÇÕES DAS CARTEIRAS:")
@@ -5961,6 +7510,7 @@ if __name__ == "__main__":
                                     strategy._last_price_snapshot = master_strategy._last_price_snapshot
                                     strategy._last_pos_side = master_strategy._last_pos_side
                                     strategy._position_was_active = master_strategy._position_was_active
+                                    strategy._learner_context = master_strategy._learner_context
                                 except Exception as sync_e:
                                     _log_global("ASSET", f"Erro sincronizando {wallet_name}: {sync_e}", level="WARN")
                                     
@@ -5978,6 +7528,8 @@ if __name__ == "__main__":
                 _log_global("ENGINE", "🛡️ Executando safety checks em batch...")
                 batch_safety_start = _time.time()
                 
+                # Fast safety check para todos os assets em todas as carteiras
+                fast_safety_check_v4(asset_state)
                 
                 # Trailing stop check para todas as posições (DESABILITADO)
                 # check_all_trailing_stops_v4(asset_state)
@@ -6002,7 +7554,7 @@ if __name__ == "__main__":
                 break
 
             # Sleep do fast loop
-# REMOVED:             _time.sleep(fast_sleep)
+            _time.sleep(fast_sleep)
     
     print("\n" + "="*80, flush=True)
     print("🚀 EXECUTANDO SISTEMA DE TRADING OTIMIZADO", flush=True)

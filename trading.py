@@ -721,13 +721,15 @@ class SimpleRatioConfig:
     """Configuração simples para estratégia baseada em avg_buy/sell ratio"""
     
     # Assets permitidos (símbolos corretos da Binance para dados históricos)
-    ASSETS: List[str] = ["PUMPUSDT", "AVNTUSDT"]
+    ASSETS: List[str] = ["PUMPUSDT", "AVNTUSDT", "SOLUSDT", "XRPUSDT"]
     
     # Mapeamento de símbolos: Binance (dados) -> Hyperliquid (trading)
     # Usar mercados perpétuos (:USDC) para trading com alavancagem
     SYMBOL_MAPPING = {
         "PUMPUSDT": "PUMP/USDC:USDC",  # Binance -> Hyperliquid Perp
-        "AVNTUSDT": "AVNT/USDC:USDC"   # Binance -> Hyperliquid Perp
+        "AVNTUSDT": "AVNT/USDC:USDC",  # Binance -> Hyperliquid Perp
+        "SOLUSDT": "SOL/USDC:USDC",    # Binance -> Hyperliquid Perp
+        "XRPUSDT": "XRP/USDC:USDC"     # Binance -> Hyperliquid Perp
     }
     
     @classmethod
@@ -741,7 +743,9 @@ class SimpleRatioConfig:
     # Leverage específico por símbolo (sobrescreve o padrão)
     LEVERAGE_PER_SYMBOL = {
         "PUMPUSDT": 10,
-        "AVNTUSDT": 5   # Leverage reduzido para AVNT
+        "AVNTUSDT": 5,   # Leverage reduzido para AVNT
+        "SOLUSDT": 20,   # SOL com leverage alto
+        "XRPUSDT": 20    # XRP com leverage alto
     }
     
     @classmethod
@@ -751,6 +755,21 @@ class SimpleRatioConfig:
     
     STOP_LOSS_PCT: float    = 0.20        # Stop loss fixo 20%
     TRADE_SIZE_USD: float   = 3.0         # Valor fixo por trade
+    
+    # === MELHORIAS DE PRECISÃO ===
+    # Melhoria 1: Histerese de Ratio (Anti-Ruído)
+    RATIO_THRESHOLD_LONG: float = 1.10    # Ratio precisa subir para 1.10 para entrar LONG (antes: 1.0)
+    RATIO_THRESHOLD_SHORT: float = 0.90   # Ratio precisa cair para 0.90 para entrar SHORT (antes: 0.99)
+    
+    # Melhoria 2: Filtro de Tendência com EMAs
+    ENABLE_TREND_FILTER: bool = True      # Ativar filtro de tendência EMA
+    EMA_FAST_PERIOD: int = 7              # EMA rápida (7 períodos)
+    EMA_SLOW_PERIOD: int = 21             # EMA lenta (21 períodos)
+    
+    # Melhoria 3: Take Profit Dinâmico com ATR
+    ENABLE_ATR_TAKE_PROFIT: bool = True   # Ativar Take Profit baseado em ATR
+    ATR_TP_MULTIPLIER: float = 2.5        # Multiplicador do ATR para Take Profit (2.5x ATR)
+    ATR_PERIOD: int = 14                  # Período do ATR
     
     # Ratio tracking (para detectar inversões)
     RATIO_HISTORY_SIZE: int = 5           # Últimos N ratios para detectar inversão
@@ -799,12 +818,9 @@ class SimpleRatioStrategy:
         self._last_open_at: Optional[datetime] = None
         self._last_close_at: Optional[datetime] = None
         
-        # Debug
-        self.debug_force_ratio: Optional[float] = None  # Para testes: força um ratio específico
+        # Take Profit dinâmico
+        self._take_profit_order_id: Optional[str] = None  # ID da ordem de Take Profit ativa
         
-        # Manter algumas variáveis essenciais para compatibilidade
-        self._first_step_done: bool = False
-
         base = symbol.split("/")[0]
         self._df_symbol_hint = f"{base}USDT"
 
@@ -967,16 +983,41 @@ class SimpleRatioStrategy:
             prev_ratio = self._ratio_3_history[-2]
             curr_ratio = self._ratio_3_history[-1]
 
-            # LONG: entra quando cruza de <=0.99 para >=1.0, sai quando cruza de >=1.0 para <=0.99
-            # SHORT: entra quando cruza de >=1.0 para <=0.99, sai quando cruza de <=0.99 para >=1.0
+            # LONG: entra quando cruza para limiar LONG, sai quando cruza para limiar SHORT
+            # SHORT: entra quando cruza para limiar SHORT, sai quando cruza para limiar LONG
             if not pos:
-                # Sem posição aberta
-                if prev_ratio <= 0.99 and curr_ratio >= 1.0:
-                    self._log(f"🚀 ENTRADA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
+                # Sem posição aberta - verificar sinais de entrada
+                
+                # MELHORIA 1: Histerese - usar limiares mais distantes
+                signal_long = (prev_ratio < self.cfg.RATIO_THRESHOLD_LONG and curr_ratio >= self.cfg.RATIO_THRESHOLD_LONG)
+                signal_short = (prev_ratio > self.cfg.RATIO_THRESHOLD_SHORT and curr_ratio <= self.cfg.RATIO_THRESHOLD_SHORT)
+                
+                # MELHORIA 2: Filtro de Tendência com EMAs
+                trend_allows_long = True
+                trend_allows_short = True
+                
+                if self.cfg.ENABLE_TREND_FILTER and len(df) >= max(self.cfg.EMA_FAST_PERIOD, self.cfg.EMA_SLOW_PERIOD):
+                    # Calcular EMAs
+                    ema_fast = df['valor_fechamento'].ewm(span=self.cfg.EMA_FAST_PERIOD, adjust=False).mean().iloc[-1]
+                    ema_slow = df['valor_fechamento'].ewm(span=self.cfg.EMA_SLOW_PERIOD, adjust=False).mean().iloc[-1]
+                    
+                    trend_allows_long = (ema_fast > ema_slow)  # Tendência de alta
+                    trend_allows_short = (ema_fast < ema_slow)  # Tendência de baixa
+                    
+                    self._log(f"📈 Tendência: EMA{self.cfg.EMA_FAST_PERIOD}={ema_fast:.6f} vs EMA{self.cfg.EMA_SLOW_PERIOD}={ema_slow:.6f} | "
+                             f"Alta={trend_allows_long} Baixa={trend_allows_short}", level="DEBUG")
+                
+                # Aplicar filtros
+                if signal_long and trend_allows_long:
+                    self._log(f"🚀 ENTRADA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (limiar: {self.cfg.RATIO_THRESHOLD_LONG})", level="INFO")
                     self._enter_position("buy", self.cfg.TRADE_SIZE_USD, df)
-                elif prev_ratio >= 1.0 and curr_ratio <= 0.99:
-                    self._log(f"🚀 ENTRADA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="INFO")
+                elif signal_short and trend_allows_short:
+                    self._log(f"🚀 ENTRADA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (limiar: {self.cfg.RATIO_THRESHOLD_SHORT})", level="INFO")
                     self._enter_position("sell", self.cfg.TRADE_SIZE_USD, df)
+                elif signal_long and not trend_allows_long:
+                    self._log(f"⛔ LONG bloqueado por tendência: EMA rápida abaixo da lenta", level="INFO")
+                elif signal_short and not trend_allows_short:
+                    self._log(f"⛔ SHORT bloqueado por tendência: EMA rápida acima da lenta", level="INFO")
             else:
                 # Com posição aberta - verificar tempo mínimo antes de permitir saída por cruzamento
                 import time as _time
@@ -1156,6 +1197,51 @@ class SimpleRatioStrategy:
                     self._log(f"⚠️  Erro criando stop loss: {e}", level="WARN")
                     self._log(f"   Continuando sem stop loss - posição vulnerável!", level="WARN")
 
+            # MELHORIA 3: Criar Take Profit dinâmico com ATR
+            if self.cfg.ENABLE_ATR_TAKE_PROFIT and len(df) >= self.cfg.ATR_PERIOD:
+                try:
+                    # Calcular ATR (Average True Range)
+                    high = df['valor_maximo']
+                    low = df['valor_minimo']
+                    close = df['valor_fechamento']
+                    
+                    # True Range = max(high-low, abs(high-prev_close), abs(low-prev_close))
+                    tr1 = high - low
+                    tr2 = abs(high - close.shift(1))
+                    tr3 = abs(low - close.shift(1))
+                    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                    
+                    # ATR = média móvel do True Range
+                    atr = tr.rolling(window=self.cfg.ATR_PERIOD).mean().iloc[-1]
+                    
+                    # Calcular preço do Take Profit
+                    tp_distance = atr * self.cfg.ATR_TP_MULTIPLIER
+                    if side == "buy":
+                        tp_price = current_price + tp_distance
+                    else:  # sell
+                        tp_price = current_price - tp_distance
+                    
+                    tp_side = "sell" if side == "buy" else "buy"
+                    
+                    self._log(f"[TAKE_PROFIT] ATR={atr:.6f}, Multiplicador={self.cfg.ATR_TP_MULTIPLIER}, "
+                             f"Distância={tp_distance:.6f}, TP={tp_price:.6f}", level="DEBUG")
+                    
+                    # Criar ordem limit de Take Profit
+                    tp_order = self._subconta_dex.create_order(
+                        self.trading_symbol,
+                        "limit",
+                        tp_side,
+                        amount,
+                        tp_price,
+                        {"reduceOnly": True}
+                    )
+                    
+                    self._take_profit_order_id = tp_order.get('id') if isinstance(tp_order, dict) else None
+                    self._log(f"💰 Take Profit criado: {tp_side} @ {tp_price:.6f} ({self.cfg.ATR_TP_MULTIPLIER}x ATR) | Ordem: {tp_order}", level="INFO")
+                    
+                except Exception as e:
+                    self._log(f"⚠️  Erro criando Take Profit: {e}", level="WARN")
+
             # Notificar
             self._notify_trade("open", side, current_price, amount, f"Entrada por ratio", include_hl=False)
             self._log(f"✅ POSIÇÃO ABERTA: {side.upper()} {amount:.2f} @ {current_price:.6f}", level="INFO")
@@ -1205,6 +1291,16 @@ class SimpleRatioStrategy:
             # Arredondar quantidade para precisão da exchange
             amount = self._round_amount(amount_raw)
             self._log(f"[CLOSE] Quantidade a fechar: {amount_raw:.8f} → arredondada: {amount:.8f}", level="DEBUG")
+            
+            # Cancelar ordem de Take Profit se existir
+            if self._take_profit_order_id:
+                try:
+                    self._subconta_dex.cancel_order(self._take_profit_order_id, self.trading_symbol)
+                    self._log(f"[CLOSE] Take Profit cancelado: {self._take_profit_order_id}", level="DEBUG")
+                except Exception as e:
+                    self._log(f"[CLOSE] Erro ao cancelar Take Profit (pode já ter sido executado): {e}", level="DEBUG")
+                finally:
+                    self._take_profit_order_id = None
                 
             # Determinar lado de fechamento
             close_side = "sell" if side == "buy" else "buy"
