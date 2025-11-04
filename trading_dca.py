@@ -38,13 +38,25 @@ def _http_post_json(url: str, payload: dict, timeout: int = _HTTP_TIMEOUT):
         return None
 
 def _hl_get_account_value(wallet: str) -> float:
-    """Busca o saldo de uma conta/vault específica via API Hyperliquid"""
+    """Busca o saldo DISPONÍVEL de uma conta/vault específica via API Hyperliquid"""
     if not wallet:
         return 0.0
     data = _http_post_json(_HL_INFO_URL, {"type": "clearinghouseState", "user": wallet})
     try:
-        return float(data["marginSummary"]["accountValue"]) if data else 0.0
-    except Exception:
+        if not data or "marginSummary" not in data:
+            return 0.0
+        
+        margin_summary = data["marginSummary"]
+        
+        # Saldo disponível = accountValue - totalMarginUsed
+        account_value = float(margin_summary.get("accountValue", 0))
+        margin_used = float(margin_summary.get("totalMarginUsed", 0))
+        
+        available = account_value - margin_used
+        
+        return max(available, 0.0)  # Garantir que não seja negativo
+    except Exception as e:
+        print(f"[ERROR] Erro parseando saldo: {e}")
         return 0.0
 
 def _hl_get_latest_fill(wallet: str, symbol: str = None):
@@ -64,6 +76,13 @@ def _hl_get_latest_fill(wallet: str, symbol: str = None):
     
     # Retornar fill mais recente
     return fills[0]
+
+def _hl_get_user_state(wallet: str):
+    """Busca estado completo do usuário incluindo posições abertas"""
+    if not wallet:
+        return None
+    data = _http_post_json(_HL_INFO_URL, {"type": "clearinghouseState", "user": wallet})
+    return data
 
 # ===== LOGGING =====
 _LOG_FILE = None
@@ -166,6 +185,8 @@ class DCAConfig:
                 (10, 15),  # -10% do máximo → investe 15% do capital
                 (20, 30),  # -20% do máximo → investe 30% do capital
                 (30, 50),  # -30% do máximo → investe 50% do capital
+                (40, 50),  # -40% do máximo → investe 50% do capital
+                (50, 50),  # -50% do máximo → investe 50% do capital
             ]
         
         if self.SELL_STEPS is None:
@@ -259,14 +280,23 @@ class StateManager:
     
     def record_buy(self, step: int, price: float, amount: float):
         """Registra uma compra"""
-        self.state["last_buy_timestamp"] = datetime.now().isoformat()
+        now = datetime.now()
+        self.state["last_buy_timestamp"] = now.isoformat()
         self.state["last_buy_step"] = step
         self.state["position_entries"].append({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now.isoformat(),
+            "step": step,
             "price": price,
             "amount": amount
         })
         self.save_state()
+        
+        log(f"💾 COMPRA REGISTRADA NO ESTADO:", "INFO")
+        log(f"   📅 Data/Hora: {now.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
+        log(f"   🎯 Degrau: {step}", "INFO")
+        log(f"   💰 Preço: ${price:.4f}", "INFO")
+        log(f"   🪙 Quantidade: {amount:.4f} SOL", "INFO")
+        log(f"   ⏰ Próxima compra: após {now + timedelta(days=5)} (ou avanço de degrau)", "INFO")
     
     def record_sell(self, step: int):
         """Registra uma venda"""
@@ -284,6 +314,41 @@ class StateManager:
         total_amount = sum(e["amount"] for e in entries)
         
         return total_value / total_amount if total_amount > 0 else 0.0
+    
+    def show_state_summary(self):
+        """Mostra resumo do estado atual"""
+        log("", "INFO")
+        log("📋 ESTADO ATUAL DO SISTEMA:", "INFO")
+        
+        # Última compra
+        if self.state["last_buy_timestamp"]:
+            last_buy = datetime.fromisoformat(self.state["last_buy_timestamp"])
+            days_since_buy = (datetime.now() - last_buy).days
+            log(f"   🟢 Última compra: {last_buy.strftime('%Y-%m-%d %H:%M:%S')} ({days_since_buy} dias atrás)", "INFO")
+            log(f"      Degrau: {self.state['last_buy_step']}", "INFO")
+        else:
+            log(f"   🟢 Última compra: Nenhuma", "INFO")
+        
+        # Última venda
+        if self.state["last_sell_timestamp"]:
+            last_sell = datetime.fromisoformat(self.state["last_sell_timestamp"])
+            days_since_sell = (datetime.now() - last_sell).days
+            log(f"   🔴 Última venda: {last_sell.strftime('%Y-%m-%d %H:%M:%S')} ({days_since_sell} dias atrás)", "INFO")
+            log(f"      Degrau: {self.state['last_sell_step']}", "INFO")
+        else:
+            log(f"   🔴 Última venda: Nenhuma", "INFO")
+        
+        # Entradas registradas
+        entries = self.state["position_entries"]
+        if entries:
+            log(f"   📊 Total de entradas: {len(entries)}", "INFO")
+            for i, entry in enumerate(entries, 1):
+                entry_time = datetime.fromisoformat(entry["timestamp"])
+                log(f"      {i}. {entry_time.strftime('%Y-%m-%d %H:%M')} | Degrau {entry.get('step', '?')} | ${entry['price']:.4f} | {entry['amount']:.4f} SOL", "INFO")
+        else:
+            log(f"   📊 Total de entradas: 0", "INFO")
+        
+        log("", "INFO")
 
 # ===== CONEXÃO COM EXCHANGES =====
 class ExchangeConnector:
@@ -302,11 +367,11 @@ class ExchangeConnector:
         
         # Hyperliquid para execução
         wallet_address = os.getenv("WALLET_ADDRESS", "")
-        private_key = os.getenv("PRIVATE_KEY", "")
-        vault_address = os.getenv("VAULT_ADDRESS", "")  # Subconta
+        private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY") or os.getenv("PRIVATE_KEY", "")
+        vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT") or os.getenv("VAULT_ADDRESS", "")  # Subconta
         
         if not wallet_address or not private_key:
-            raise ValueError("WALLET_ADDRESS e PRIVATE_KEY devem estar configurados")
+            raise ValueError("WALLET_ADDRESS e HYPERLIQUID_PRIVATE_KEY devem estar configurados")
         
         self.hyperliquid = ccxt.hyperliquid({
             'walletAddress': wallet_address,
@@ -371,14 +436,40 @@ class ExchangeConnector:
             return 0.0
     
     def get_position(self) -> Optional[Dict]:
-        """Retorna posição aberta (se houver)"""
+        """Retorna posição aberta (se houver) via API direta Hyperliquid"""
         try:
-            positions = self.hyperliquid.fetch_positions([self.cfg.SYMBOL])
+            # Usar API direta para obter estado do usuário
+            user_state = _hl_get_user_state(self.wallet_address)
             
-            for pos in positions:
-                if pos['symbol'] == self.cfg.SYMBOL and abs(float(pos.get('contracts', 0))) > 0:
-                    return pos
+            if not user_state or "assetPositions" not in user_state:
+                log("⚠️ Nenhuma posição encontrada na resposta da API", "DEBUG")
+                return None
             
+            asset_positions = user_state["assetPositions"]
+            
+            # Procurar posição do SOL
+            coin_name = self.cfg.SYMBOL.replace('/USDC:USDC', '')  # "SOL"
+            
+            for pos in asset_positions:
+                position_coin = pos.get("position", {}).get("coin", "")
+                size = float(pos.get("position", {}).get("szi", 0))
+                
+                if position_coin == coin_name and abs(size) > 0:
+                    # Converter para formato compatível
+                    entry_px = float(pos.get("position", {}).get("entryPx", 0))
+                    
+                    log(f"✅ Posição encontrada: {size} {coin_name} @ ${entry_px:.4f}", "DEBUG")
+                    
+                    return {
+                        "symbol": self.cfg.SYMBOL,
+                        "contracts": size,
+                        "entryPrice": entry_px,
+                        "side": "long" if size > 0 else "short",
+                        "unrealizedPnl": float(pos.get("position", {}).get("unrealizedPnl", 0)),
+                        "marginUsed": float(pos.get("position", {}).get("marginUsed", 0)),
+                    }
+            
+            log("⚠️ Nenhuma posição de SOL encontrada", "DEBUG")
             return None
             
         except Exception as e:
@@ -388,31 +479,47 @@ class ExchangeConnector:
     def create_market_order(self, side: str, amount_usd: float, leverage: int) -> bool:
         """Cria ordem market na Hyperliquid"""
         try:
+            # Configurar leverage primeiro
+            log(f"🔧 Configurando leverage {leverage}x para {self.cfg.SYMBOL}", "DEBUG")
+            self.hyperliquid.set_leverage(leverage, self.cfg.SYMBOL, {"marginMode": "isolated"})
+            
             # Buscar preço atual
             current_price = self.get_current_price()
             if current_price <= 0:
                 log("❌ Preço inválido, não é possível criar ordem", "ERROR")
                 return False
             
-            # Calcular quantidade de SOL
+            # Calcular quantidade de SOL com alavancagem
+            # Fórmula: amount = (USD_a_gastar * leverage) / preço
             notional = amount_usd * leverage
             amount = notional / current_price
             
             # Arredondar quantidade conforme precisão do mercado
             amount = float(self.hyperliquid.amount_to_precision(self.cfg.SYMBOL, amount))
             
-            log(f"📤 Criando ordem: {side} {amount:.4f} SOL (${amount_usd:.2f} x {leverage}x = ${notional:.2f})", "INFO")
+            # Verificar valor mínimo
+            notional_value = amount * current_price
+            if notional_value < self.cfg.MIN_ORDER_USD:
+                log(f"❌ Valor nocional muito baixo: ${notional_value:.2f} < ${self.cfg.MIN_ORDER_USD}", "ERROR")
+                return False
             
-            # Criar ordem
+            log(f"📤 Criando ordem: {side} {amount:.4f} SOL", "INFO")
+            log(f"   💰 USD investidos: ${amount_usd:.2f}", "INFO")
+            log(f"   📊 Leverage: {leverage}x", "INFO")
+            log(f"   💵 Valor nocional: ${notional:.2f}", "INFO")
+            log(f"   📈 Preço: ${current_price:.4f}", "INFO")
+            
+            # Criar ordem market (Hyperliquid exige price para calcular slippage)
             order = self.hyperliquid.create_order(
                 symbol=self.cfg.SYMBOL,
                 type='market',
                 side=side,
                 amount=amount,
-                params={'leverage': leverage}
+                price=current_price,  # Necessário para Hyperliquid calcular slippage
+                params={}
             )
             
-            log(f"✅ Ordem criada: {order}", "INFO")
+            log(f"✅ Ordem criada com sucesso: {order}", "INFO")
             return True
             
         except Exception as e:
@@ -443,12 +550,13 @@ class ExchangeConnector:
             
             log(f"📤 Fechando {percentage:.0f}% da posição ({amount_to_close:.4f} SOL)", "INFO")
             
-            # Fechar posição (ordem market com reduceOnly)
+            # Fechar posição (ordem market com reduceOnly - Hyperliquid exige price)
             order = self.hyperliquid.create_order(
                 symbol=self.cfg.SYMBOL,
                 type='market',
                 side='sell',  # Sempre sell para fechar LONG
                 amount=amount_to_close,
+                price=current_price,  # Necessário para Hyperliquid calcular slippage
                 params={'reduceOnly': True}
             )
             
@@ -505,20 +613,60 @@ class DCAStrategy:
             "has_position": position is not None,
         }
         
-        # Se tem posição, calcular % de ganho
+        # Se tem posição, calcular % de ganho REAL (considerando alavancagem)
         if position:
             entry_price = self.state.get_average_entry_price()
-            if entry_price > 0:
-                pct_gain = ((current_price - entry_price) / entry_price) * 100
-                analysis["entry_price"] = entry_price
-                analysis["pct_gain"] = pct_gain
-                analysis["position_value"] = abs(float(position.get('contracts', 0))) * current_price
+            position_size = abs(float(position.get('contracts', 0)))
+            position_value = position_size * current_price
+            
+            # PNL real da posição (já considera alavancagem)
+            unrealized_pnl = float(position.get('unrealizedPnl', 0))
+            margin_used = float(position.get('marginUsed', 0))
+            
+            # % de ganho baseado no PNL real sobre a margem usada
+            # Isso já reflete o impacto da alavancagem!
+            if margin_used > 0:
+                pct_gain_real = (unrealized_pnl / margin_used) * 100
+            else:
+                # Fallback: calcular manualmente com alavancagem
+                price_change_pct = ((current_price - entry_price) / entry_price) * 100
+                pct_gain_real = price_change_pct * self.cfg.LEVERAGE
+            
+            # Variação de preço (para referência)
+            price_diff = current_price - entry_price
+            price_change_pct = ((current_price - entry_price) / entry_price) * 100
+            
+            analysis["entry_price"] = entry_price
+            analysis["pct_gain"] = pct_gain_real  # Usar o PNL real!
+            analysis["position_size"] = position_size
+            analysis["position_value"] = position_value
+            analysis["unrealized_pnl"] = unrealized_pnl
+            
+            # Log detalhado da posição
+            log(f"", "INFO")
+            log(f"📈 POSIÇÃO ABERTA:", "INFO")
+            log(f"   🪙 Quantidade: {position_size:.4f} SOL", "INFO")
+            log(f"   💰 Preço de entrada: ${entry_price:.4f}", "INFO")
+            log(f"   📊 Preço atual: ${current_price:.4f}", "INFO")
+            log(f"    Variação de preço: ${price_diff:+.4f} ({price_change_pct:+.2f}%)", "INFO")
+            log(f"   💵 Valor atual da posição: ${position_value:.2f}", "INFO")
+            log(f"   {'📈' if pct_gain_real >= 0 else '📉'} **PNL REAL (c/ {self.cfg.LEVERAGE}x leverage): {pct_gain_real:+.2f}%** | ${unrealized_pnl:+.2f}", "INFO")
+            
+            # Mostrar próximos degraus de venda
+            next_sell_step = None
+            for i, (threshold, _) in enumerate(self.cfg.SELL_STEPS):
+                if pct_gain_real < threshold:
+                    next_sell_step = threshold
+                    break
+            
+            if next_sell_step:
+                points_to_next = next_sell_step - pct_gain_real
+                log(f"   🎯 Próximo degrau de venda: +{next_sell_step}% PNL (faltam {points_to_next:.2f}%)", "INFO")
+            else:
+                log(f"   ✅ Acima de todos os degraus de venda!", "INFO")
         
         log(f"📊 Análise: Preço=${current_price:.4f} | Max 30d=${max_price_30d:.4f} | "
             f"Abaixo do max={pct_below_max:.2f}% | Posição={'SIM' if position else 'NÃO'}", "INFO")
-        
-        if "pct_gain" in analysis:
-            log(f"📈 Posição: Entry=${analysis['entry_price']:.4f} | Ganho={analysis['pct_gain']:.2f}%", "INFO")
         
         return analysis
     
@@ -526,15 +674,18 @@ class DCAStrategy:
         """Verifica se deve comprar e retorna o degrau"""
         pct_below_max = analysis.get("pct_below_max", 0)
         
-        # Verificar cada degrau de compra (do maior para o menor)
-        for i, (threshold, capital_pct) in enumerate(sorted(self.cfg.BUY_STEPS, reverse=True)):
+        # Verificar cada degrau de compra (do maior para o menor threshold)
+        # Precisamos manter o índice original para identificar corretamente o degrau
+        for step_idx in range(len(self.cfg.BUY_STEPS) - 1, -1, -1):  # De trás pra frente
+            threshold, capital_pct = self.cfg.BUY_STEPS[step_idx]
+            
             if pct_below_max >= threshold:
                 # Verificar se pode comprar (cooldown)
-                if self.state.can_buy(i, self.cfg.BUY_COOLDOWN_DAYS):
-                    log(f"🚨 SINAL DE COMPRA: Degrau {i} ativado ({pct_below_max:.2f}% >= {threshold}%)", "INFO")
-                    return i
+                if self.state.can_buy(step_idx, self.cfg.BUY_COOLDOWN_DAYS):
+                    log(f"🚨 SINAL DE COMPRA: Degrau {step_idx} ativado ({pct_below_max:.2f}% >= {threshold}%) → {capital_pct}% do capital", "INFO")
+                    return step_idx
                 else:
-                    log(f"⏳ Degrau {i} ativado mas em cooldown", "DEBUG")
+                    log(f"⏳ Degrau {step_idx} ativado mas em cooldown", "DEBUG")
         
         return None
     
@@ -545,15 +696,18 @@ class DCAStrategy:
         
         pct_gain = analysis.get("pct_gain", 0)
         
-        # Verificar cada degrau de venda (do maior para o menor)
-        for i, (threshold, position_pct) in enumerate(sorted(self.cfg.SELL_STEPS, reverse=True)):
+        # Verificar cada degrau de venda (do maior para o menor threshold)
+        # Precisamos manter o índice original para identificar corretamente o degrau
+        for step_idx in range(len(self.cfg.SELL_STEPS) - 1, -1, -1):  # De trás pra frente
+            threshold, position_pct = self.cfg.SELL_STEPS[step_idx]
+            
             if pct_gain >= threshold:
                 # Verificar se pode vender (cooldown)
-                if self.state.can_sell(i, self.cfg.SELL_COOLDOWN_DAYS):
-                    log(f"🚨 SINAL DE VENDA: Degrau {i} ativado ({pct_gain:.2f}% >= {threshold}%)", "INFO")
-                    return i
+                if self.state.can_sell(step_idx, self.cfg.SELL_COOLDOWN_DAYS):
+                    log(f"🚨 SINAL DE VENDA: Degrau {step_idx} ativado ({pct_gain:.2f}% >= {threshold}%) → {position_pct}% da posição", "INFO")
+                    return step_idx
                 else:
-                    log(f"⏳ Degrau {i} ativado mas em cooldown", "DEBUG")
+                    log(f"⏳ Degrau {step_idx} ativado mas em cooldown", "DEBUG")
         
         return None
     
@@ -564,21 +718,30 @@ class DCAStrategy:
         balance = analysis["balance"]
         current_price = analysis["current_price"]
         
-        # Calcular quanto investir
+        # Calcular quanto investir (em USD da carteira)
         amount_usd = balance * (capital_pct / 100.0)
         
-        if amount_usd < self.cfg.MIN_ORDER_USD:
-            log(f"⚠️ Valor muito baixo para comprar: ${amount_usd:.2f} < ${self.cfg.MIN_ORDER_USD}", "WARN")
+        # Com leverage 5x: se investe $4, valor nocional = $20
+        notional_value = amount_usd * self.cfg.LEVERAGE
+        amount_coins = notional_value / current_price
+        
+        # IMPORTANTE: Verificar mínimo usando valor NOCIONAL (alavancado), não valor da carteira
+        if notional_value < self.cfg.MIN_ORDER_USD:
+            log(f"⚠️ Valor nocional muito baixo: ${notional_value:.2f} < ${self.cfg.MIN_ORDER_USD}", "WARN")
+            log(f"   (${amount_usd:.2f} da carteira × {self.cfg.LEVERAGE}x leverage = ${notional_value:.2f})", "WARN")
             return False
         
-        log(f"🟢 COMPRANDO: Degrau {step} | {capital_pct}% do saldo (${amount_usd:.2f}) | Leverage {self.cfg.LEVERAGE}x", "INFO")
+        log(f"🟢 COMPRANDO: Degrau {step} ({threshold}% abaixo do máximo)", "INFO")
+        log(f"   💰 Capital da carteira: ${balance:.2f}", "INFO")
+        log(f"   📊 {capital_pct}% do capital = ${amount_usd:.2f}", "INFO")
+        log(f"   🔧 Leverage {self.cfg.LEVERAGE}x → Valor nocional: ${notional_value:.2f}", "INFO")
+        log(f"   🪙 Quantidade SOL: {amount_coins:.4f} @ ${current_price:.4f}", "INFO")
         
         # Executar ordem
         success = self.exchange.create_market_order("buy", amount_usd, self.cfg.LEVERAGE)
         
         if success:
-            # Registrar compra
-            amount_coins = (amount_usd * self.cfg.LEVERAGE) / current_price
+            # Registrar compra (usar valor nocional para cálculo correto)
             self.state.record_buy(step, current_price, amount_coins)
             
             # Notificar Discord
@@ -586,9 +749,10 @@ class DCAStrategy:
                 "🟢 COMPRA EXECUTADA",
                 f"**Degrau:** {step} ({threshold}% abaixo do máximo)\n"
                 f"**Preço:** ${current_price:.4f}\n"
-                f"**Valor:** ${amount_usd:.2f}\n"
+                f"**Capital usado:** ${amount_usd:.2f} ({capital_pct}% do saldo)\n"
                 f"**Leverage:** {self.cfg.LEVERAGE}x\n"
-                f"**Capital usado:** {capital_pct}%",
+                f"**Valor nocional:** ${notional_value:.2f}\n"
+                f"**Quantidade SOL:** {amount_coins:.4f}",
                 0x00ff00
             )
         
@@ -628,6 +792,9 @@ class DCAStrategy:
         log("🔄 INICIANDO CICLO DCA", "INFO")
         log("=" * 80, "INFO")
         
+        # Mostrar estado atual
+        self.state.show_state_summary()
+        
         try:
             # Analisar mercado
             analysis = self.analyze_market()
@@ -665,7 +832,13 @@ def main():
     # Carregar variáveis de ambiente
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        # Tentar carregar .env.dca primeiro, senão .env padrão
+        if os.path.exists('.env.dca'):
+            load_dotenv('.env.dca')
+            log("✅ Carregado .env.dca", "INFO")
+        else:
+            load_dotenv()
+            log("✅ Carregado .env", "INFO")
     except ImportError:
         log("⚠️ python-dotenv não instalado, usando variáveis de ambiente do sistema", "WARN")
     
@@ -686,14 +859,14 @@ def main():
     # Loop principal
     log("🔁 Entrando no loop principal (Ctrl+C para parar)", "INFO")
     
-    # Intervalo de verificação (a cada 1 hora)
-    check_interval = 3600  # 1 hora em segundos
+    # Intervalo de verificação (a cada 60 segundos para monitoramento rápido)
+    check_interval = 60  # 60 segundos
     
     try:
         while True:
             strategy.run_cycle()
             
-            log(f"⏰ Próximo ciclo em {check_interval//60} minutos...", "INFO")
+            log(f"⏰ Próximo ciclo em {check_interval} segundos...", "INFO")
             time.sleep(check_interval)
             
     except KeyboardInterrupt:

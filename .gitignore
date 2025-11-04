@@ -3,6 +3,12 @@ venv/
 *.pyc
 __pycache__/
 
+# Configurações locais e credenciais
+.env.local
+.env
+.env.dca
+.env.test
+
 # Trade logs
 trade_log_*.csv
 

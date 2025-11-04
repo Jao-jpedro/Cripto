@@ -4644,31 +4644,41 @@ class EMAGradientStrategy:
                     existing_orders: Optional[List[Dict[str, Any]]] = None):
         amt = self._round_amount(amount)
         px  = float(stop_price)
+        
+        # Aplicar slippage agressivo no stop para execução mais rápida
+        # Se stop de VENDA (fecha LONG): aceitar preço pior (menor) - slippage 1%
+        # Se stop de COMPRA (fecha SHORT): aceitar preço pior (maior) - slippage 1%
+        stop_slippage = 0.01  # 1% de slippage agressivo para stop loss
+        if side == "sell":
+            px_trigger = px * (1 - stop_slippage)  # Trigger mais cedo para garantir execução
+        else:  # buy
+            px_trigger = px * (1 + stop_slippage)  # Trigger mais cedo para garantir execução
+        
         # Apenas ordem de gatilho (stop), nunca market - COPIADO DO TRADINGANTIGO.PY
         params = {
             "reduceOnly": True,
-            "triggerPrice": px,
-            "stopLossPrice": px,
+            "triggerPrice": px_trigger,   # Usar preço com slippage
+            "stopLossPrice": px_trigger,  # Usar preço com slippage
             "trigger": "mark",
         }
         if self.debug:
-            self._log(f"Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f}", level="DEBUG")
+            self._log(f"Criando STOP gatilho {side.upper()} reduceOnly @ {px:.6f} (trigger @ {px_trigger:.6f}, slippage={stop_slippage*100:.1f}%)", level="DEBUG")
         if existing_orders is None:
-            existing = self._find_matching_protection("stop", side, px)
+            existing = self._find_matching_protection("stop", side, px_trigger)
         else:
-            existing = self._find_matching_protection_in_orders("stop", side, px, existing_orders)
+            existing = self._find_matching_protection_in_orders("stop", side, px_trigger, existing_orders)
         if existing is not None:
             self._last_stop_order_id = self._extract_order_id(existing)
-            self._last_stop_order_px = px
+            self._last_stop_order_px = px_trigger
             if self.debug:
                 self._log(
-                    f"Stop existente reutilizado id={self._last_stop_order_id} price≈{px:.6f}",
+                    f"Stop existente reutilizado id={self._last_stop_order_id} price≈{px_trigger:.6f}",
                     level="DEBUG",
                 )
             return existing
         try:
             # COPIADO DO TRADINGANTIGO.PY: Hyperliquid exige especificar preço base mesmo para stop_market
-            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px, params)  # Carteira mãe
+            ret = self.dex.create_order(self.symbol, "stop_market", side, amt, px_trigger, params)  # Carteira mãe
             
             # INVALIDAR CACHE após criar ordem para garantir fresh data
             cache_keys_to_clear = [
@@ -4701,10 +4711,10 @@ class EMAGradientStrategy:
             tp = inf.get("triggerPrice") if isinstance(inf, dict) else None
             self._log(f"STOP criado id={oid} type={typ} reduceOnly={ro} stopLoss={sl} trigger={tp}", level="DEBUG")
             self._last_stop_order_id = str(oid) if oid else None
-            self._last_stop_order_px = px
+            self._last_stop_order_px = px_trigger
             # Logger opcional
             try:
-                self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px, exec_amount=amt, order_id=str(oid) if oid else None)
+                self._safe_log("stop_criado", df_for_log, tipo="info", exec_price=px_trigger, exec_amount=amt, order_id=str(oid) if oid else None)
             except Exception:
                 pass
         except Exception:
@@ -5120,17 +5130,36 @@ class EMAGradientStrategy:
                 wallet_dex = order_info["dex"]
                 wallet_amount = order_info["amount"]
                 
-                # Stop loss
-                stop_order = wallet_dex.create_order(self.symbol, "stop_market", sl_side, wallet_amount, sl_price, {"reduceOnly": True})
-                self._log(f"[{wallet_name}] Stop criado: {stop_order.get('id', 'N/A')}", level="DEBUG")
+                # Stop loss - Hyperliquid requer parâmetros específicos
+                sl_params = {
+                    "reduceOnly": True,
+                    "triggerPrice": sl_price,  # Preço de trigger
+                    "trigger": "mark"           # Usar mark price como trigger
+                }
+                stop_order = wallet_dex.create_order(
+                    self.symbol, 
+                    "stop_market", 
+                    sl_side, 
+                    wallet_amount, 
+                    sl_price,  # Preço base (exigido pelo Hyperliquid)
+                    sl_params
+                )
+                self._log(f"[{wallet_name}] 🛡️ Stop criado: {stop_order.get('id', 'N/A')} @ trigger={sl_price:.6f}", level="INFO")
                 
                 # Take profit (se habilitado)
                 if manage_take and tp_price is not None:
-                    tp_order = wallet_dex.create_order(self.symbol, "limit", tp_side, wallet_amount, tp_price, {"reduceOnly": True})
-                    self._log(f"[{wallet_name}] TP criado: {tp_order.get('id', 'N/A')}", level="DEBUG")
+                    tp_order = wallet_dex.create_order(
+                        self.symbol, 
+                        "limit", 
+                        tp_side, 
+                        wallet_amount, 
+                        tp_price, 
+                        {"reduceOnly": True, "postOnly": False}  # postOnly=False para executar imediatamente se preço cruzar
+                    )
+                    self._log(f"[{wallet_name}] 💰 TP criado: {tp_order.get('id', 'N/A')} @ {tp_price:.6f}", level="INFO")
                     
             except Exception as e:
-                self._log(f"[{order_info['wallet']}] Erro criando proteções: {e}", level="ERROR")
+                self._log(f"[{order_info['wallet']}] ⚠️ Erro criando proteções: {e}", level="ERROR")
         
         # Log das proteções
         self._safe_log(
@@ -5461,13 +5490,32 @@ class EMAGradientStrategy:
                 self._log(f"Falha ao cancelar ordem {order_id}: {e}", level="WARN")
 
     # ---------- fechar posição via market reduceOnly ----------
-    def _market_reduce_only(self, side: str, amount: float):
+    def _market_reduce_only(self, side: str, amount: float, slippage_pct: float = 0.005):
+        """
+        Fecha posição com ordem market reduceOnly.
+        
+        Args:
+            side: 'buy' ou 'sell'
+            amount: quantidade a fechar
+            slippage_pct: % de slippage para garantir execução rápida (padrão: 0.5%)
+        """
         amt = self._round_amount(amount)
         px  = self._preco_atual()
+        
+        # Aplicar slippage agressivo para execução imediata
+        # Se vendendo (fechando LONG): aceitar preço pior (menor)
+        # Se comprando (fechando SHORT): aceitar preço pior (maior)
+        if side == "sell":
+            px_adjusted = px * (1 - slippage_pct)  # Aceitar 0.5% abaixo do preço atual
+        else:  # buy
+            px_adjusted = px * (1 + slippage_pct)  # Aceitar 0.5% acima do preço atual
+        
         params = {"reduceOnly": True}
         if self.debug:
-            self._log(f"Fechando posição via MARKET reduceOnly {side.upper()} qty={amt} px_ref={px:.6f}", level="DEBUG")
-        return self.dex.create_order(self.symbol, "market", side, amt, px, params)  # Carteira mãe
+            self._log(f"Fechando posição via MARKET reduceOnly {side.upper()} qty={amt} px_ref={px:.6f} px_adjusted={px_adjusted:.6f} (slippage={slippage_pct*100:.2f}%)", level="DEBUG")
+        
+        return self.dex.create_order(self.symbol, "market", side, amt, px_adjusted, params)  # Carteira mãe
+
 
     def _fechar_posicao(self, df_for_log: pd.DataFrame):
         pos = self._posicao_aberta()

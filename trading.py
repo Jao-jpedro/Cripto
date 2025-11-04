@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
 
 """
-Sistema de Trading Simplificado - Apenas SimpleRatioStrategy
-Removidas todas as funcionalidades desnecessárias: learner, fast, safat, etc.
+Sistema de Trading DCA (Dollar Cost Averaging) - SOL Long Only
+Estratégia de degraus de compra e venda baseada em % do preço máximo/ganho
 """
 
 import os
 import sys
 import time
-import sqlite3
-import hashlib
+import json
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
-
-# ===== CONFIGURAÇÃO DE TIMEZONE =====
-UTC = timezone.utc
 
 # ===== IMPORTS ESSENCIAIS =====
 import ccxt
 import requests
 
+# ===== CONFIGURAÇÃO DE TIMEZONE =====
+UTC = timezone.utc
+
 # ===== HYPERLIQUID API =====
 _HL_INFO_URL = "https://api.hyperliquid.xyz/info"
-_HTTP_TIMEOUT = 10  # segundos
+_HTTP_TIMEOUT = 10
 _SESSION = requests.Session()
 
 def _http_post_json(url: str, payload: dict, timeout: int = _HTTP_TIMEOUT):
@@ -35,21 +34,57 @@ def _http_post_json(url: str, payload: dict, timeout: int = _HTTP_TIMEOUT):
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        _log_global("HTTP", f"Requisição falhou: {type(e).__name__}: {e}", level="WARN")
+        print(f"[WARN] Requisição falhou: {e}")
         return None
 
 def _hl_get_account_value(wallet: str) -> float:
-    """Busca o saldo de uma conta/vault específica via API Hyperliquid"""
+    """Busca o saldo DISPONÍVEL de uma conta/vault específica via API Hyperliquid"""
     if not wallet:
         return 0.0
     data = _http_post_json(_HL_INFO_URL, {"type": "clearinghouseState", "user": wallet})
     try:
-        return float(data["marginSummary"]["accountValue"]) if data else 0.0
-    except Exception:
+        if not data or "marginSummary" not in data:
+            return 0.0
+        
+        margin_summary = data["marginSummary"]
+        
+        # Saldo disponível = accountValue - totalMarginUsed
+        account_value = float(margin_summary.get("accountValue", 0))
+        margin_used = float(margin_summary.get("totalMarginUsed", 0))
+        
+        available = account_value - margin_used
+        
+        return max(available, 0.0)  # Garantir que não seja negativo
+    except Exception as e:
+        print(f"[ERROR] Erro parseando saldo: {e}")
         return 0.0
 
-# ===== LOGGING GLOBAL =====
-# Configuração global de log file
+def _hl_get_latest_fill(wallet: str, symbol: str = None):
+    """Busca último preenchimento (fill) de ordem via API Hyperliquid"""
+    if not wallet:
+        return None
+    data = _http_post_json(_HL_INFO_URL, {"type": "userFills", "user": wallet})
+    if not data or not isinstance(data, list) or len(data) == 0:
+        return None
+    
+    fills = data
+    if symbol:
+        fills = [f for f in fills if f.get('coin') == symbol.replace('/USDC:USDC', '')]
+    
+    if not fills:
+        return None
+    
+    # Retornar fill mais recente
+    return fills[0]
+
+def _hl_get_user_state(wallet: str):
+    """Busca estado completo do usuário incluindo posições abertas"""
+    if not wallet:
+        return None
+    data = _http_post_json(_HL_INFO_URL, {"type": "clearinghouseState", "user": wallet})
+    return data
+
+# ===== LOGGING =====
 _LOG_FILE = None
 
 def setup_log_file():
@@ -57,18 +92,16 @@ def setup_log_file():
     global _LOG_FILE
     if _LOG_FILE is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _LOG_FILE = f"trading_session_{timestamp}.log"
+        _LOG_FILE = f"trading_dca_{timestamp}.log"
         print(f"📝 Log será salvo em: {_LOG_FILE}")
 
-def _log_global(channel: str, message: str, level: str = "INFO"):
-    """Sistema de log global com gravação em arquivo"""
+def log(message: str, level: str = "INFO"):
+    """Sistema de log simplificado"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_line = f"[{timestamp}] [{level}] [{channel}] {message}"
+    log_line = f"[{timestamp}] [{level}] {message}"
     
-    # Print no terminal
     print(log_line, flush=True)
     
-    # Salvar em arquivo se configurado
     if _LOG_FILE:
         try:
             with open(_LOG_FILE, 'a', encoding='utf-8') as f:
@@ -79,20 +112,19 @@ def _log_global(channel: str, message: str, level: str = "INFO"):
 
 # ===== NOTIFICAÇÕES DISCORD =====
 class DiscordNotifier:
-    """Sistema simplificado de notificações Discord"""
+    """Sistema de notificações Discord"""
     
     def __init__(self):
         self.webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
         self.enabled = bool(self.webhook_url)
         self.last_notification_time = 0
-        self.cooldown_seconds = 30  # Cooldown entre notificações
+        self.cooldown_seconds = 30
     
-    def send_notification(self, title: str, message: str, color: int = 0x00ff00):
+    def send(self, title: str, message: str, color: int = 0x00ff00):
         """Envia notificação para Discord"""
         if not self.enabled:
             return False
         
-        # Rate limiting
         current_time = time.time()
         if current_time - self.last_notification_time < self.cooldown_seconds:
             return False
@@ -102,1634 +134,749 @@ class DiscordNotifier:
                 "title": title,
                 "description": message,
                 "color": color,
-                "timestamp": datetime.now().isoformat(),
-                "footer": {
-                    "text": "SimpleRatio Trading Bot"
-                }
+                "timestamp": datetime.now().isoformat()
             }
             
-            payload = {
-                "embeds": [embed]
-            }
-            
-            response = requests.post(self.webhook_url, json=payload, timeout=10)
+            response = requests.post(self.webhook_url, json={"embeds": [embed]}, timeout=10)
             
             if response.status_code == 204:
                 self.last_notification_time = current_time
-                _log_global("DISCORD", f"Notificação enviada: {title}", "INFO")
                 return True
-            else:
-                _log_global("DISCORD", f"Erro enviando notificação: {response.status_code}", "WARN")
-                return False
+            return False
                 
         except Exception as e:
-            _log_global("DISCORD", f"Erro no Discord: {e}", "ERROR")
+            log(f"Erro no Discord: {e}", "ERROR")
+            return False
+
+discord = DiscordNotifier()
+
+# ===== CONFIGURAÇÃO DCA =====
+@dataclass
+class DCAConfig:
+    """Configuração da estratégia DCA"""
+    
+    # Asset
+    SYMBOL: str = "SOL/USDC:USDC"
+    LEVERAGE: int = 5
+    
+    # Dados históricos
+    HISTORICAL_DAYS: int = 30  # Últimos 30 dias
+    TIMEFRAME: str = "1d"       # Gráfico de 1 dia
+    
+    # Degraus de COMPRA (% abaixo do máximo 30 dias)
+    # Formato: (% abaixo do máximo, % do capital disponível a investir)
+    BUY_STEPS: List[tuple] = None
+    
+    # Degraus de VENDA (% de ganho da posição)
+    # Formato: (% de ganho, % da posição a vender)
+    SELL_STEPS: List[tuple] = None
+    
+    # Cooldowns
+    BUY_COOLDOWN_DAYS: int = 5   # Cooldown entre compras (ou até próximo degrau)
+    SELL_COOLDOWN_DAYS: int = 3  # Cooldown entre vendas (ou até próximo degrau)
+    
+    # Gestão de capital
+    MIN_ORDER_USD: float = 10.0  # Mínimo $10 para ordem Hyperliquid
+    
+    def __post_init__(self):
+        if self.BUY_STEPS is None:
+            # (% abaixo do max, % do capital)
+            self.BUY_STEPS = [
+                (10, 15),  # -10% do máximo → investe 15% do capital
+                (20, 30),  # -20% do máximo → investe 30% do capital
+                (30, 50),  # -30% do máximo → investe 50% do capital
+                (40, 50),  # -40% do máximo → investe 50% do capital
+                (50, 50),  # -50% do máximo → investe 50% do capital
+            ]
+        
+        if self.SELL_STEPS is None:
+            # (% de ganho, % da posição a vender)
+            self.SELL_STEPS = [
+                (10, 20),  # +10% de ganho → vende 20% da posição
+                (20, 20),  # +20% de ganho → vende 20% da posição
+                (30, 20),  # +30% de ganho → vende 20% da posição
+                (40, 20),  # +40% de ganho → vende 20% da posição
+                (50, 20),  # +50% de ganho → vende 20% da posição
+            ]
+
+# ===== GERENCIADOR DE ESTADO =====
+class StateManager:
+    """Gerencia o estado da estratégia (últimas operações, cooldowns, etc)"""
+    
+    def __init__(self, state_file: str = "dca_state.json"):
+        self.state_file = state_file
+        self.state = self.load_state()
+    
+    def load_state(self) -> dict:
+        """Carrega estado do arquivo JSON"""
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                log(f"Erro carregando estado: {e}", "WARN")
+        
+        # Estado inicial
+        return {
+            "last_buy_timestamp": None,
+            "last_buy_step": None,  # Último degrau de compra executado
+            "last_sell_timestamp": None,
+            "last_sell_step": None,  # Último degrau de venda executado
+            "position_entries": [],  # Lista de entradas com preço e quantidade
+        }
+    
+    def save_state(self):
+        """Salva estado no arquivo JSON"""
+        try:
+            with open(self.state_file, 'w') as f:
+                json.dump(self.state, f, indent=2)
+        except Exception as e:
+            log(f"Erro salvando estado: {e}", "ERROR")
+    
+    def can_buy(self, current_step: int, cooldown_days: int) -> bool:
+        """Verifica se pode comprar (respeita cooldown ou avanço de degrau)"""
+        if self.state["last_buy_timestamp"] is None:
+            return True
+        
+        last_timestamp = datetime.fromisoformat(self.state["last_buy_timestamp"])
+        time_diff = datetime.now() - last_timestamp
+        
+        # Se avançou para um degrau maior (pior), pode comprar imediatamente
+        last_step = self.state["last_buy_step"]
+        if last_step is not None and current_step > last_step:
+            log(f"✅ Avanço de degrau: {last_step} → {current_step}, pode comprar", "INFO")
+            return True
+        
+        # Senão, respeita cooldown
+        cooldown_passed = time_diff.days >= cooldown_days
+        if not cooldown_passed:
+            log(f"⏳ Cooldown de compra: {time_diff.days}/{cooldown_days} dias", "DEBUG")
+        return cooldown_passed
+    
+    def can_sell(self, current_step: int, cooldown_days: int) -> bool:
+        """Verifica se pode vender (respeita cooldown ou avanço de degrau)"""
+        if self.state["last_sell_timestamp"] is None:
+            return True
+        
+        last_timestamp = datetime.fromisoformat(self.state["last_sell_timestamp"])
+        time_diff = datetime.now() - last_timestamp
+        
+        # Se avançou para um degrau maior (melhor lucro), pode vender imediatamente
+        last_step = self.state["last_sell_step"]
+        if last_step is not None and current_step > last_step:
+            log(f"✅ Avanço de degrau: {last_step} → {current_step}, pode vender", "INFO")
+            return True
+        
+        # Não pode vender no mesmo degrau ou inferior dentro do cooldown
+        if last_step is not None and current_step <= last_step:
+            if time_diff.days < cooldown_days:
+                log(f"⏳ Cooldown de venda: degrau {current_step} <= {last_step}, aguardar {cooldown_days - time_diff.days} dias", "DEBUG")
+                return False
+        
+        cooldown_passed = time_diff.days >= cooldown_days
+        if not cooldown_passed:
+            log(f"⏳ Cooldown de venda: {time_diff.days}/{cooldown_days} dias", "DEBUG")
+        return cooldown_passed
+    
+    def record_buy(self, step: int, price: float, amount: float):
+        """Registra uma compra"""
+        now = datetime.now()
+        self.state["last_buy_timestamp"] = now.isoformat()
+        self.state["last_buy_step"] = step
+        self.state["position_entries"].append({
+            "timestamp": now.isoformat(),
+            "step": step,
+            "price": price,
+            "amount": amount
+        })
+        self.save_state()
+        
+        log(f"💾 COMPRA REGISTRADA NO ESTADO:", "INFO")
+        log(f"   📅 Data/Hora: {now.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
+        log(f"   🎯 Degrau: {step}", "INFO")
+        log(f"   💰 Preço: ${price:.4f}", "INFO")
+        log(f"   🪙 Quantidade: {amount:.4f} SOL", "INFO")
+        log(f"   ⏰ Próxima compra: após {now + timedelta(days=5)} (ou avanço de degrau)", "INFO")
+    
+    def record_sell(self, step: int):
+        """Registra uma venda"""
+        self.state["last_sell_timestamp"] = datetime.now().isoformat()
+        self.state["last_sell_step"] = step
+        self.save_state()
+    
+    def get_average_entry_price(self) -> float:
+        """Calcula preço médio de entrada baseado nas entradas registradas"""
+        entries = self.state["position_entries"]
+        if not entries:
+            return 0.0
+        
+        total_value = sum(e["price"] * e["amount"] for e in entries)
+        total_amount = sum(e["amount"] for e in entries)
+        
+        return total_value / total_amount if total_amount > 0 else 0.0
+    
+    def show_state_summary(self):
+        """Mostra resumo do estado atual"""
+        log("", "INFO")
+        log("📋 ESTADO ATUAL DO SISTEMA:", "INFO")
+        
+        # Última compra
+        if self.state["last_buy_timestamp"]:
+            last_buy = datetime.fromisoformat(self.state["last_buy_timestamp"])
+            days_since_buy = (datetime.now() - last_buy).days
+            log(f"   🟢 Última compra: {last_buy.strftime('%Y-%m-%d %H:%M:%S')} ({days_since_buy} dias atrás)", "INFO")
+            log(f"      Degrau: {self.state['last_buy_step']}", "INFO")
+        else:
+            log(f"   🟢 Última compra: Nenhuma", "INFO")
+        
+        # Última venda
+        if self.state["last_sell_timestamp"]:
+            last_sell = datetime.fromisoformat(self.state["last_sell_timestamp"])
+            days_since_sell = (datetime.now() - last_sell).days
+            log(f"   🔴 Última venda: {last_sell.strftime('%Y-%m-%d %H:%M:%S')} ({days_since_sell} dias atrás)", "INFO")
+            log(f"      Degrau: {self.state['last_sell_step']}", "INFO")
+        else:
+            log(f"   🔴 Última venda: Nenhuma", "INFO")
+        
+        # Entradas registradas
+        entries = self.state["position_entries"]
+        if entries:
+            log(f"   📊 Total de entradas: {len(entries)}", "INFO")
+            for i, entry in enumerate(entries, 1):
+                entry_time = datetime.fromisoformat(entry["timestamp"])
+                log(f"      {i}. {entry_time.strftime('%Y-%m-%d %H:%M')} | Degrau {entry.get('step', '?')} | ${entry['price']:.4f} | {entry['amount']:.4f} SOL", "INFO")
+        else:
+            log(f"   📊 Total de entradas: 0", "INFO")
+        
+        log("", "INFO")
+
+# ===== CONEXÃO COM EXCHANGES =====
+class ExchangeConnector:
+    """Gerencia conexões com Binance (dados) e Hyperliquid (execução)"""
+    
+    def __init__(self, cfg: DCAConfig):
+        self.cfg = cfg
+        
+        # Binance para dados históricos
+        self.binance = ccxt.binance({
+            'apiKey': os.getenv('BINANCE_API_KEY', ''),
+            'secret': os.getenv('BINANCE_API_SECRET', ''),
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future'}
+        })
+        
+        # Hyperliquid para execução
+        wallet_address = os.getenv("WALLET_ADDRESS", "")
+        private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY") or os.getenv("PRIVATE_KEY", "")
+        vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT") or os.getenv("VAULT_ADDRESS", "")  # Subconta
+        
+        if not wallet_address or not private_key:
+            raise ValueError("WALLET_ADDRESS e HYPERLIQUID_PRIVATE_KEY devem estar configurados")
+        
+        self.hyperliquid = ccxt.hyperliquid({
+            'walletAddress': wallet_address,
+            'privateKey': private_key,
+            'enableRateLimit': True,
+        })
+        
+        # Usar subconta se configurada
+        if vault_address:
+            self.hyperliquid.options['vaultAddress'] = vault_address
+            log(f"🏦 Usando subconta (vault): {vault_address}", "INFO")
+        
+        self.wallet_address = vault_address if vault_address else wallet_address
+        
+        log("✅ Conexões estabelecidas: Binance (dados) + Hyperliquid (execução)", "INFO")
+    
+    def fetch_historical_data(self, days: int) -> pd.DataFrame:
+        """Busca dados históricos da Binance"""
+        try:
+            # Binance usa SOLUSDT para futuros
+            symbol_binance = "SOL/USDT:USDT"
+            
+            since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+            
+            ohlcv = self.binance.fetch_ohlcv(
+                symbol_binance,
+                timeframe=self.cfg.TIMEFRAME,
+                since=since,
+                limit=days + 5  # Alguns dias extras para garantir
+            )
+            
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
+            log(f"📊 Dados históricos: {len(df)} candles, {df['timestamp'].min()} até {df['timestamp'].max()}", "INFO")
+            
+            return df
+            
+        except Exception as e:
+            log(f"❌ Erro buscando dados históricos: {e}", "ERROR")
+            return pd.DataFrame()
+    
+    def get_current_price(self) -> float:
+        """Busca preço atual do SOL"""
+        try:
+            ticker = self.binance.fetch_ticker("SOL/USDT:USDT")
+            price = ticker['last']
+            log(f"💰 Preço atual SOL: ${price:.4f}", "DEBUG")
+            return price
+        except Exception as e:
+            log(f"❌ Erro buscando preço: {e}", "ERROR")
+            return 0.0
+    
+    def get_balance(self) -> float:
+        """Retorna saldo disponível na conta Hyperliquid"""
+        try:
+            balance = _hl_get_account_value(self.wallet_address) if self.wallet_address else 0.0
+            log(f"💵 Saldo disponível: ${balance:.2f}", "DEBUG")
+            return balance
+        except Exception as e:
+            log(f"❌ Erro buscando saldo: {e}", "ERROR")
+            return 0.0
+    
+    def get_position(self) -> Optional[Dict]:
+        """Retorna posição aberta (se houver) via API direta Hyperliquid"""
+        try:
+            # Usar API direta para obter estado do usuário
+            user_state = _hl_get_user_state(self.wallet_address)
+            
+            if not user_state or "assetPositions" not in user_state:
+                log("⚠️ Nenhuma posição encontrada na resposta da API", "DEBUG")
+                return None
+            
+            asset_positions = user_state["assetPositions"]
+            
+            # Procurar posição do SOL
+            coin_name = self.cfg.SYMBOL.replace('/USDC:USDC', '')  # "SOL"
+            
+            for pos in asset_positions:
+                position_coin = pos.get("position", {}).get("coin", "")
+                size = float(pos.get("position", {}).get("szi", 0))
+                
+                if position_coin == coin_name and abs(size) > 0:
+                    # Converter para formato compatível
+                    entry_px = float(pos.get("position", {}).get("entryPx", 0))
+                    
+                    log(f"✅ Posição encontrada: {size} {coin_name} @ ${entry_px:.4f}", "DEBUG")
+                    
+                    return {
+                        "symbol": self.cfg.SYMBOL,
+                        "contracts": size,
+                        "entryPrice": entry_px,
+                        "side": "long" if size > 0 else "short",
+                        "unrealizedPnl": float(pos.get("position", {}).get("unrealizedPnl", 0)),
+                        "marginUsed": float(pos.get("position", {}).get("marginUsed", 0)),
+                    }
+            
+            log("⚠️ Nenhuma posição de SOL encontrada", "DEBUG")
+            return None
+            
+        except Exception as e:
+            log(f"❌ Erro buscando posição: {e}", "ERROR")
+            return None
+    
+    def create_market_order(self, side: str, amount_usd: float, leverage: int) -> bool:
+        """Cria ordem market na Hyperliquid"""
+        try:
+            # Configurar leverage primeiro
+            log(f"🔧 Configurando leverage {leverage}x para {self.cfg.SYMBOL}", "DEBUG")
+            self.hyperliquid.set_leverage(leverage, self.cfg.SYMBOL, {"marginMode": "isolated"})
+            
+            # Buscar preço atual
+            current_price = self.get_current_price()
+            if current_price <= 0:
+                log("❌ Preço inválido, não é possível criar ordem", "ERROR")
+                return False
+            
+            # Calcular quantidade de SOL com alavancagem
+            # Fórmula: amount = (USD_a_gastar * leverage) / preço
+            notional = amount_usd * leverage
+            amount = notional / current_price
+            
+            # Arredondar quantidade conforme precisão do mercado
+            amount = float(self.hyperliquid.amount_to_precision(self.cfg.SYMBOL, amount))
+            
+            # Verificar valor mínimo
+            notional_value = amount * current_price
+            if notional_value < self.cfg.MIN_ORDER_USD:
+                log(f"❌ Valor nocional muito baixo: ${notional_value:.2f} < ${self.cfg.MIN_ORDER_USD}", "ERROR")
+                return False
+            
+            log(f"📤 Criando ordem: {side} {amount:.4f} SOL", "INFO")
+            log(f"   💰 USD investidos: ${amount_usd:.2f}", "INFO")
+            log(f"   📊 Leverage: {leverage}x", "INFO")
+            log(f"   💵 Valor nocional: ${notional:.2f}", "INFO")
+            log(f"   📈 Preço: ${current_price:.4f}", "INFO")
+            
+            # Criar ordem market (Hyperliquid exige price para calcular slippage)
+            order = self.hyperliquid.create_order(
+                symbol=self.cfg.SYMBOL,
+                type='market',
+                side=side,
+                amount=amount,
+                price=current_price,  # Necessário para Hyperliquid calcular slippage
+                params={}
+            )
+            
+            log(f"✅ Ordem criada com sucesso: {order}", "INFO")
+            return True
+            
+        except Exception as e:
+            log(f"❌ Erro criando ordem: {e}", "ERROR")
             return False
     
-    def notify_trade_open(self, symbol: str, side: str, price: float, amount: float, reason: str = ""):
-        """Notifica abertura de trade"""
-        side_emoji = "🟢" if side.lower() == "buy" else "🔴"
-        title = f"{side_emoji} POSIÇÃO ABERTA"
-        
-        message = f"""
-**Símbolo:** {symbol}
-**Direção:** {side.upper()}
-**Preço:** ${price:.6f}
-**Quantidade:** {amount:.2f}
-**Motivo:** {reason}
-        """.strip()
-        
-        color = 0x00ff00 if side.lower() == "buy" else 0xff0000
-        return self.send_notification(title, message, color)
-    
-    def notify_trade_close(self, symbol: str, side: str, price: float, amount: float, pnl_pct: float = None, reason: str = ""):
-        """Notifica fechamento de trade"""
-        if pnl_pct is not None:
-            if pnl_pct > 0:
-                title = "💰 POSIÇÃO FECHADA - LUCRO"
-                color = 0x00ff00
-                pnl_text = f"+{pnl_pct:.2f}%"
-            else:
-                title = "📉 POSIÇÃO FECHADA - PREJUÍZO"
-                color = 0xff0000
-                pnl_text = f"{pnl_pct:.2f}%"
-        else:
-            title = "🚪 POSIÇÃO FECHADA"
-            color = 0xffff00
-            pnl_text = "N/A"
-        
-        message = f"""
-**Símbolo:** {symbol}
-**Direção:** {side.upper()}
-**Preço:** ${price:.6f}
-**Quantidade:** {amount:.2f}
-**P&L:** {pnl_text}
-**Motivo:** {reason}
-        """.strip()
-        
-        return self.send_notification(title, message, color)
-    
-    def notify_error(self, error_msg: str, symbol: str = ""):
-        """Notifica erro crítico"""
-        title = "⚠️ ERRO NO SISTEMA"
-        
-        message = f"""
-**Símbolo:** {symbol if symbol else "Sistema"}
-**Erro:** {error_msg}
-**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        """.strip()
-        
-        return self.send_notification(title, message, 0xff0000)
-
-# Instância global do notificador
-discord_notifier = DiscordNotifier()
-
-# ===== CALCULADORA DE INDICADORES TÉCNICOS =====
-class TechnicalIndicators:
-    """Calcula indicadores técnicos para monitoramento"""
-    
-    @staticmethod
-    def ema(data: pd.Series, period: int) -> pd.Series:
-        """Calcula EMA (Exponential Moving Average)"""
-        return data.ewm(span=period, adjust=False).mean()
-    
-    @staticmethod
-    def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
-        """Calcula ATR (Average True Range)"""
-        high_low = high - low
-        high_close = np.abs(high - close.shift())
-        low_close = np.abs(low - close.shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        return ranges.rolling(window=period).mean()
-    
-    @staticmethod
-    def volume_ma(volume: pd.Series, period: int = 30) -> pd.Series:
-        """Calcula média móvel do volume"""
-        return volume.rolling(window=period).mean()
-    
-    @staticmethod
-    def gradient_percentage(data: pd.Series, periods: int = 1) -> float:
-        """Calcula gradiente percentual"""
-        if len(data) < periods + 1:
-            return 0.0
-        current = data.iloc[-1]
-        past = data.iloc[-(periods + 1)]
-        if past == 0:
-            return 0.0
-        return ((current - past) / past) * 100
-    
-    @staticmethod
-    def k_atr_ratio(close_price: float, atr_value: float) -> float:
-        """Calcula ratio K-ATR"""
-        if atr_value == 0:
-            return 0.0
-        return close_price / atr_value
-    
-    @staticmethod
-    def estimate_buy_sell_volumes(df: pd.DataFrame) -> Dict[str, float]:
-        """Estima volumes de compra e venda baseado no movimento de preços"""
-        if len(df) < 2:
-            return {"buy_vol": 0, "sell_vol": 0, "total_vol": 0}
-        
-        current_row = df.iloc[-1]
-        prev_row = df.iloc[-2]
-        
-        current_close = float(current_row.get('valor_fechamento', 0))
-        prev_close = float(prev_row.get('valor_fechamento', current_close))
-        current_volume = float(current_row.get('volume', 0))
-        
-        # Estimar proporção de compra/venda baseado no movimento de preço
-        price_change = current_close - prev_close
-        
-        if price_change > 0:
-            # Preço subiu - mais volume de compra
-            buy_ratio = min(0.8, 0.5 + abs(price_change) / current_close * 20)
-        elif price_change < 0:
-            # Preço caiu - mais volume de venda
-            buy_ratio = max(0.2, 0.5 - abs(price_change) / current_close * 20)
-        else:
-            # Sem mudança de preço
-            buy_ratio = 0.5
-        
-        buy_vol = current_volume * buy_ratio
-        sell_vol = current_volume * (1 - buy_ratio)
-        
-        return {
-            "buy_vol": buy_vol,
-            "sell_vol": sell_vol,
-            "total_vol": current_volume,
-            "buy_ratio": buy_ratio
-        }
-
-# ===== MONITOR DE INDICADORES =====
-class TradingMonitor:
-    """Sistema de monitoramento de indicadores técnicos"""
-    
-    def __init__(self):
-        self.indicators = TechnicalIndicators()
-        self.last_snapshot_time = 0
-        self.snapshot_interval = 20  # Snapshot a cada 20 segundos
-    
-    def should_take_snapshot(self) -> bool:
-        """Verifica se deve tirar um snapshot dos indicadores"""
-        current_time = time.time()
-        if current_time - self.last_snapshot_time >= self.snapshot_interval:
-            self.last_snapshot_time = current_time
-            return True
-        return False
-    
-    def calculate_indicators(self, df: pd.DataFrame, symbol: str) -> Dict[str, Any]:
-        """Calcula todos os indicadores técnicos"""
-        if len(df) < 30:
-            return {}
-        
+    def close_position_partial(self, percentage: float) -> bool:
+        """Fecha parcialmente a posição (percentage = 0-100)"""
         try:
-            # Preparar dados
-            close = df['valor_fechamento'].astype(float)
-            volume = df['volume'].astype(float)
+            pos = self.get_position()
+            if not pos:
+                log("⚠️ Nenhuma posição aberta para fechar", "WARN")
+                return False
             
-            # Verificar se temos colunas de high/low
-            if 'valor_alta' in df.columns and 'valor_baixa' in df.columns:
-                high = df['valor_alta'].astype(float)
-                low = df['valor_baixa'].astype(float)
-            else:
-                # Usar close como approximação
-                high = close
-                low = close
+            current_amount = abs(float(pos.get('contracts', 0)))
+            amount_to_close = current_amount * (percentage / 100.0)
             
-            current_close = close.iloc[-1]
-            current_volume = volume.iloc[-1]
+            # Arredondar
+            amount_to_close = float(self.hyperliquid.amount_to_precision(self.cfg.SYMBOL, amount_to_close))
             
-            # Calcular EMAs
-            ema7 = self.indicators.ema(close, 7)
-            ema21 = self.indicators.ema(close, 21)
+            # Verificar mínimo
+            current_price = self.get_current_price()
+            notional = amount_to_close * current_price
             
-            # Calcular ATR
-            atr = self.indicators.atr(high, low, close, 14)
-            current_atr = atr.iloc[-1] if len(atr) > 0 else 0
-            atr_pct = (current_atr / current_close * 100) if current_close > 0 else 0
+            if notional < self.cfg.MIN_ORDER_USD:
+                log(f"⚠️ Ordem muito pequena (${notional:.2f} < ${self.cfg.MIN_ORDER_USD}), pulando", "WARN")
+                return False
             
-            # Calcular Volume MA
-            vol_ma = self.indicators.volume_ma(volume, 30)
-            current_vol_ma = vol_ma.iloc[-1] if len(vol_ma) > 0 else 0
+            log(f"📤 Fechando {percentage:.0f}% da posição ({amount_to_close:.4f} SOL)", "INFO")
             
-            # Calcular gradiente EMA7
-            grad_ema7 = self.indicators.gradient_percentage(ema7, 1)
+            # Fechar posição (ordem market com reduceOnly - Hyperliquid exige price)
+            order = self.hyperliquid.create_order(
+                symbol=self.cfg.SYMBOL,
+                type='market',
+                side='sell',  # Sempre sell para fechar LONG
+                amount=amount_to_close,
+                price=current_price,  # Necessário para Hyperliquid calcular slippage
+                params={'reduceOnly': True}
+            )
             
-            # Calcular K-ATR
-            k_atr = self.indicators.k_atr_ratio(current_close, current_atr)
-            
-            # Calcular médias de volume (30 candles)
-            avg_30c = vol_ma.iloc[-1] if len(vol_ma) > 0 else current_volume
-            vol_ratio = current_volume / avg_30c if avg_30c > 0 else 0
-            
-            # Estimar volumes de compra/venda
-            buysell_data = self.indicators.estimate_buy_sell_volumes(df)
-            
-            # Calcular médias históricas de compra/venda (últimos 30 períodos)
-            if len(df) >= 30:
-                buy_volumes = []
-                sell_volumes = []
-                
-                for i in range(-30, 0):
-                    if abs(i) <= len(df):
-                        temp_df = df.iloc[max(0, len(df) + i - 1):len(df) + i + 1]
-                        if len(temp_df) >= 2:
-                            temp_buysell = self.indicators.estimate_buy_sell_volumes(temp_df)
-                            buy_volumes.append(temp_buysell["buy_vol"])
-                            sell_volumes.append(temp_buysell["sell_vol"])
-                
-                buy_avg30 = np.mean(buy_volumes) if buy_volumes else buysell_data["buy_vol"]
-                sell_avg30 = np.mean(sell_volumes) if sell_volumes else buysell_data["sell_vol"]
-            else:
-                buy_avg30 = buysell_data["buy_vol"]
-                sell_avg30 = buysell_data["sell_vol"]
-            
-            # Calcular ratios
-            buy_ratio = buysell_data["buy_vol"] / buy_avg30 if buy_avg30 > 0 else 0
-            sell_ratio = buysell_data["sell_vol"] / sell_avg30 if sell_avg30 > 0 else 0
-            buy_sell_ratio = buysell_data["buy_vol"] / buysell_data["sell_vol"] if buysell_data["sell_vol"] > 0 else 0
-            avg_buy_sell_ratio = buy_avg30 / sell_avg30 if sell_avg30 > 0 else 0
-            
-            return {
-                "symbol": symbol,
-                "close": current_close,
-                "ema7": ema7.iloc[-1],
-                "ema21": ema21.iloc[-1],
-                "atr": current_atr,
-                "atr_pct": atr_pct,
-                "volume": current_volume,
-                "vol_ma": current_vol_ma,
-                "grad_ema7": grad_ema7,
-                "k_atr": k_atr,
-                "trades_now": current_volume,
-                "avg_30c": avg_30c,
-                "vol_ratio": vol_ratio,
-                "buy_vol": buysell_data["buy_vol"],
-                "buy_avg30": buy_avg30,
-                "buy_ratio": buy_ratio,
-                "sell_vol": buysell_data["sell_vol"],
-                "sell_avg30": sell_avg30,
-                "sell_ratio": sell_ratio,
-                "buy_sell_ratio": buy_sell_ratio,
-                "avg_buy_sell_ratio": avg_buy_sell_ratio
-            }
+            log(f"✅ Posição fechada parcialmente: {order}", "INFO")
+            return True
             
         except Exception as e:
-            _log_global("MONITOR", f"Erro calculando indicadores: {e}", "ERROR")
+            log(f"❌ Erro fechando posição: {e}", "ERROR")
+            return False
+
+# ===== ESTRATÉGIA DCA =====
+class DCAStrategy:
+    """Estratégia DCA com degraus de compra e venda"""
+    
+    def __init__(self, cfg: DCAConfig):
+        self.cfg = cfg
+        self.state = StateManager()
+        self.exchange = ExchangeConnector(cfg)
+    
+    def analyze_market(self) -> Dict[str, Any]:
+        """Analisa o mercado e retorna informações"""
+        # Buscar dados históricos
+        df = self.exchange.fetch_historical_data(self.cfg.HISTORICAL_DAYS)
+        
+        if df.empty:
+            log("❌ Sem dados históricos disponíveis", "ERROR")
             return {}
-    
-    def print_snapshot(self, indicators: Dict[str, Any]):
-        """Imprime snapshot dos indicadores no formato solicitado"""
-        if not indicators:
-            return
         
-        snapshot = (
-            f"[DEBUG] [{indicators['symbol']}] Trigger snapshot | "
-            f"close={indicators['close']:.6f} "
-            f"ema7={indicators['ema7']:.6f} "
-            f"ema21={indicators['ema21']:.6f} "
-            f"atr={indicators['atr']:.6f} "
-            f"atr%={indicators['atr_pct']:.3f} "
-            f"vol={indicators['volume']:.2f} "
-            f"vol_ma={indicators['vol_ma']:.2f} "
-            f"grad%_ema7={indicators['grad_ema7']:.4f} | "
-            f"current_k_atr={indicators['k_atr']:.3f} | "
-            f"trades_now={indicators['trades_now']:.0f} "
-            f"avg_30c={indicators['avg_30c']:.0f} "
-            f"ratio={indicators['vol_ratio']:.2f}x | "
-            f"buy_vol={indicators['buy_vol']:.0f} "
-            f"buy_avg30={indicators['buy_avg30']:.0f} "
-            f"buy_ratio={indicators['buy_ratio']:.2f}x | "
-            f"sell_vol={indicators['sell_vol']:.0f} "
-            f"sell_avg30={indicators['sell_avg30']:.0f} "
-            f"sell_ratio={indicators['sell_ratio']:.2f}x | "
-            f"buy/sell={indicators['buy_sell_ratio']:.2f} "
-            f"avg_buy/sell={indicators['avg_buy_sell_ratio']:.2f}"
-        )
+        # Calcular máximo dos últimos 30 dias
+        max_price_30d = df['high'].max()
         
-        print(snapshot, flush=True)
-
-# Instância global do monitor
-trading_monitor = TradingMonitor()
-
-# ===== CACHE DE DADOS =====
-class DataCache:
-    def __init__(self, ttl_seconds: int = 30):
-        self.cache = {}
-        self.ttl = ttl_seconds
+        # Preço atual
+        current_price = self.exchange.get_current_price()
+        
+        if current_price <= 0 or max_price_30d <= 0:
+            log("❌ Preços inválidos", "ERROR")
+            return {}
+        
+        # Calcular % abaixo do máximo
+        pct_below_max = ((max_price_30d - current_price) / max_price_30d) * 100
+        
+        # Posição atual
+        position = self.exchange.get_position()
+        
+        # Saldo disponível
+        balance = self.exchange.get_balance()
+        
+        analysis = {
+            "current_price": current_price,
+            "max_price_30d": max_price_30d,
+            "pct_below_max": pct_below_max,
+            "position": position,
+            "balance": balance,
+            "has_position": position is not None,
+        }
+        
+        # Se tem posição, calcular % de ganho REAL (considerando alavancagem)
+        if position:
+            entry_price = self.state.get_average_entry_price()
+            position_size = abs(float(position.get('contracts', 0)))
+            position_value = position_size * current_price
+            
+            # PNL real da posição (já considera alavancagem)
+            unrealized_pnl = float(position.get('unrealizedPnl', 0))
+            margin_used = float(position.get('marginUsed', 0))
+            
+            # % de ganho baseado no PNL real sobre a margem usada
+            # Isso já reflete o impacto da alavancagem!
+            if margin_used > 0:
+                pct_gain_real = (unrealized_pnl / margin_used) * 100
+            else:
+                # Fallback: calcular manualmente com alavancagem
+                price_change_pct = ((current_price - entry_price) / entry_price) * 100
+                pct_gain_real = price_change_pct * self.cfg.LEVERAGE
+            
+            # Variação de preço (para referência)
+            price_diff = current_price - entry_price
+            price_change_pct = ((current_price - entry_price) / entry_price) * 100
+            
+            analysis["entry_price"] = entry_price
+            analysis["pct_gain"] = pct_gain_real  # Usar o PNL real!
+            analysis["position_size"] = position_size
+            analysis["position_value"] = position_value
+            analysis["unrealized_pnl"] = unrealized_pnl
+            
+            # Log detalhado da posição
+            log(f"", "INFO")
+            log(f"📈 POSIÇÃO ABERTA:", "INFO")
+            log(f"   🪙 Quantidade: {position_size:.4f} SOL", "INFO")
+            log(f"   💰 Preço de entrada: ${entry_price:.4f}", "INFO")
+            log(f"   📊 Preço atual: ${current_price:.4f}", "INFO")
+            log(f"    Variação de preço: ${price_diff:+.4f} ({price_change_pct:+.2f}%)", "INFO")
+            log(f"   💵 Valor atual da posição: ${position_value:.2f}", "INFO")
+            log(f"   {'📈' if pct_gain_real >= 0 else '📉'} **PNL REAL (c/ {self.cfg.LEVERAGE}x leverage): {pct_gain_real:+.2f}%** | ${unrealized_pnl:+.2f}", "INFO")
+            
+            # Mostrar próximos degraus de venda
+            next_sell_step = None
+            for i, (threshold, _) in enumerate(self.cfg.SELL_STEPS):
+                if pct_gain_real < threshold:
+                    next_sell_step = threshold
+                    break
+            
+            if next_sell_step:
+                points_to_next = next_sell_step - pct_gain_real
+                log(f"   🎯 Próximo degrau de venda: +{next_sell_step}% PNL (faltam {points_to_next:.2f}%)", "INFO")
+            else:
+                log(f"   ✅ Acima de todos os degraus de venda!", "INFO")
+        
+        log(f"📊 Análise: Preço=${current_price:.4f} | Max 30d=${max_price_30d:.4f} | "
+            f"Abaixo do max={pct_below_max:.2f}% | Posição={'SIM' if position else 'NÃO'}", "INFO")
+        
+        return analysis
     
-    def get(self, key: str):
-        if key in self.cache:
-            timestamp, data = self.cache[key]
-            if time.time() - timestamp < self.ttl:
-                return data
+    def check_buy_signals(self, analysis: Dict) -> Optional[int]:
+        """Verifica se deve comprar e retorna o degrau"""
+        pct_below_max = analysis.get("pct_below_max", 0)
+        
+        # Verificar cada degrau de compra (do maior para o menor threshold)
+        # Precisamos manter o índice original para identificar corretamente o degrau
+        for step_idx in range(len(self.cfg.BUY_STEPS) - 1, -1, -1):  # De trás pra frente
+            threshold, capital_pct = self.cfg.BUY_STEPS[step_idx]
+            
+            if pct_below_max >= threshold:
+                # Verificar se pode comprar (cooldown)
+                if self.state.can_buy(step_idx, self.cfg.BUY_COOLDOWN_DAYS):
+                    log(f"🚨 SINAL DE COMPRA: Degrau {step_idx} ativado ({pct_below_max:.2f}% >= {threshold}%) → {capital_pct}% do capital", "INFO")
+                    return step_idx
+                else:
+                    log(f"⏳ Degrau {step_idx} ativado mas em cooldown", "DEBUG")
+        
         return None
     
-    def set(self, key: str, data):
-        self.cache[key] = (time.time(), data)
-    
-    def clear(self):
-        self.cache.clear()
-
-# Cache global
-_data_cache = DataCache(ttl_seconds=30)
-
-def _get_cached_api_call(cache_key: str, func, *args, **kwargs):
-    """Wrapper para chamadas de API com cache"""
-    cached = _data_cache.get(cache_key)
-    if cached is not None:
-        return cached
-    
-    result = func(*args, **kwargs)
-    _data_cache.set(cache_key, result)
-    return result
-
-# ===== EXCEÇÃO PERSONALIZADA =====
-class MarketDataUnavailable(Exception):
-    """Sinaliza indisponibilidade temporária de candles para um ativo/timeframe."""
-    pass
-
-# ===== CONFIGURAÇÃO DE CARTEIRAS =====
-@dataclass
-class WalletConfig:
-    name: str
-    is_subconta: bool = False
-    vault_address: Optional[str] = None
-    
-    def get_dex_instance(self):
-        """Retorna instância do DEX para esta carteira"""
-        if self.is_subconta and self.vault_address:
-            return RealDataDex(vault_address=self.vault_address)
-        else:
-            return RealDataDex()
-
-# Configurações de carteiras usando variáveis de ambiente
-def get_wallet_config():
-    """Obtém configuração da carteira a partir das variáveis de ambiente"""
-    wallet_address = os.getenv("WALLET_ADDRESS")
-    private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY") 
-    subaccount = os.getenv("HYPERLIQUID_SUBACCOUNT")
-    
-    # Se há subaccount especificada, usar como subconta
-    if subaccount:
-        return WalletConfig(
-            name="Subconta Trading (ENV)",
-            is_subconta=True,
-            vault_address=wallet_address  # Vault sempre igual ao WALLET_ADDRESS
-        )
-    else:
-        # Usar carteira principal
-        return WalletConfig(
-            name="Carteira Principal (ENV)",
-            is_subconta=False,
-            vault_address=wallet_address  # Vault sempre igual ao WALLET_ADDRESS
-        )
-
-# Configurações de carteiras disponíveis (fallback)
-WALLET_CONFIGS = [
-    WalletConfig(
-        name="Carteira Principal",
-        is_subconta=False,
-        vault_address=None
-    ),
-    WalletConfig(
-        name="Subconta Trading",
-        is_subconta=True,
-        vault_address="0x5ff0f14d577166f9ede3d9568a423166be61ea9d"
-    )
-]
-
-# ===== DEX REAL =====
-class RealDataDex:
-    """Interface simplificada para Hyperliquid"""
-    
-    def __init__(self, vault_address: Optional[str] = None):
-        # Configuração básica para Hyperliquid
-        self.vault_address = vault_address
-        self._setup_hyperliquid()
-    
-    def _setup_hyperliquid(self):
-        """Configura conexão com Hyperliquid usando variáveis de ambiente"""
-        try:
-            # Obter variáveis de ambiente OBRIGATÓRIAS
-            wallet_address = os.getenv("WALLET_ADDRESS")  # Conta mãe (sempre necessária)
-            private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")  # Chave privada da conta mãe
-            vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")  # Subconta (vault) - OPCIONAL
+    def check_sell_signals(self, analysis: Dict) -> Optional[int]:
+        """Verifica se deve vender e retorna o degrau"""
+        if not analysis.get("has_position"):
+            return None
+        
+        pct_gain = analysis.get("pct_gain", 0)
+        
+        # Verificar cada degrau de venda (do maior para o menor threshold)
+        # Precisamos manter o índice original para identificar corretamente o degrau
+        for step_idx in range(len(self.cfg.SELL_STEPS) - 1, -1, -1):  # De trás pra frente
+            threshold, position_pct = self.cfg.SELL_STEPS[step_idx]
             
-            # Validar credenciais obrigatórias
-            if not wallet_address or not private_key:
-                _log_global("DEX", "❌ ERRO: WALLET_ADDRESS e HYPERLIQUID_PRIVATE_KEY são obrigatórias", "ERROR")
-                _log_global("DEX", f"   WALLET_ADDRESS: {'✅ OK' if wallet_address else '❌ FALTANDO'}", "ERROR")
-                _log_global("DEX", f"   HYPERLIQUID_PRIVATE_KEY: {'✅ OK' if private_key else '❌ FALTANDO'}", "ERROR")
-                self.exchange = None
-                return
-
-            # Configuração no formato do tradingv4.py (testado e funcional)
-            config = {
-                'walletAddress': wallet_address,  # Conta mãe (obrigatória)
-                'privateKey': private_key,         # Chave privada (obrigatória)
-                'enableRateLimit': True,
-                'timeout': 45000,
-                'options': {
-                    'timeout': 45000,
-                    'defaultType': 'swap',
-                }
-            }
-
-            # IMPORTANTE: Adicionar vaultAddress se for operar em subconta
-            if vault_address:
-                config['options']['vaultAddress'] = vault_address
-                _log_global("DEX", f"🔐 Wallet (mãe): {wallet_address[:10]}... | 🏦 Vault (subconta): {vault_address[:10]}...", "INFO")
-            else:
-                _log_global("DEX", f"🔐 Wallet (mãe): {wallet_address[:10]}... | ℹ️  Sem subconta (operações na conta principal)", "INFO")
-
-            # Inicializar exchange
-            self.exchange = ccxt.hyperliquid(config)
-            _log_global("DEX", "✅ Hyperliquid exchange inicializado com sucesso", "INFO")
-            
-            # Verificar saldo imediatamente para diagnóstico
-            try:
-                # Se tem vault_address, buscar saldo da SUBCONTA via API Hyperliquid
-                if vault_address:
-                    _log_global("DEX", "🔍 Verificando saldo da SUBCONTA (vault)...", "INFO")
-                    vault_value = _hl_get_account_value(vault_address)
-                    
-                    if vault_value > 0:
-                        # Saldo da vault obtido com sucesso
-                        usdc_total = vault_value
-                        usdc_free = vault_value  # Todo saldo da vault está disponível
-                        usdc_used = 0.0
-                        _log_global("DEX", "💰 SALDO DA SUBCONTA (VAULT):", "INFO")
-                        _log_global("DEX", f"   💵 USDC Livre: ${usdc_free:.2f}", "INFO")
-                        _log_global("DEX", f"   📊 USDC Total: ${usdc_total:.2f}", "INFO")
-                    else:
-                        # Fallback: tentar fetch_balance (pode retornar saldo da conta principal)
-                        _log_global("DEX", "⚠️  API da vault não retornou saldo, usando fallback...", "WARN")
-                        balance = self.exchange.fetch_balance()
-                        usdc_balance = balance.get('USDC', {})
-                        usdc_free = float(usdc_balance.get('free', 0))
-                        usdc_used = float(usdc_balance.get('used', 0))
-                        usdc_total = float(usdc_balance.get('total', 0))
-                        _log_global("DEX", "💰 SALDO (fallback - pode ser conta principal):", "INFO")
-                        _log_global("DEX", f"   � USDC Livre: ${usdc_free:.2f}", "INFO")
-                        _log_global("DEX", f"   🔒 USDC Usado: ${usdc_used:.2f}", "INFO")
-                        _log_global("DEX", f"   📊 USDC Total: ${usdc_total:.2f}", "INFO")
+            if pct_gain >= threshold:
+                # Verificar se pode vender (cooldown)
+                if self.state.can_sell(step_idx, self.cfg.SELL_COOLDOWN_DAYS):
+                    log(f"🚨 SINAL DE VENDA: Degrau {step_idx} ativado ({pct_gain:.2f}% >= {threshold}%) → {position_pct}% da posição", "INFO")
+                    return step_idx
                 else:
-                    # Sem vault - usar fetch_balance normal (conta principal)
-                    _log_global("DEX", "🔍 Verificando saldo da CONTA PRINCIPAL...", "INFO")
-                    balance = self.exchange.fetch_balance()
-                    usdc_balance = balance.get('USDC', {})
-                    usdc_free = float(usdc_balance.get('free', 0))
-                    usdc_used = float(usdc_balance.get('used', 0))
-                    usdc_total = float(usdc_balance.get('total', 0))
-                    _log_global("DEX", "💰 SALDO DA CONTA PRINCIPAL:", "INFO")
-                    _log_global("DEX", f"   💵 USDC Livre: ${usdc_free:.2f}", "INFO")
-                    _log_global("DEX", f"   🔒 USDC Usado: ${usdc_used:.2f}", "INFO")
-                    _log_global("DEX", f"   📊 USDC Total: ${usdc_total:.2f}", "INFO")
-                
-                if usdc_free < 3.0:
-                    _log_global("DEX", f"   ⚠️  AVISO: Saldo livre muito baixo (${usdc_free:.2f} < $3.00)", "WARN")
-                    if vault_address:
-                        _log_global("DEX", f"   💡 DICA: Transfira USDC da conta mãe para a subconta {vault_address[:10]}...", "WARN")
-            except Exception as e:
-                _log_global("DEX", f"   ⚠️  Não foi possível verificar saldo: {e}", "WARN")
-
-        except Exception as e:
-            _log_global("DEX", f"❌ Erro configurando Hyperliquid: {e}", "ERROR")
-            # Fallback para modo demo sem exchange real
-            self.exchange = None
-    
-    def fetch_ticker(self, symbol: str):
-        """Busca ticker do símbolo"""
-        if not self.exchange:
-            # Retorna ticker fictício para modo demo
-            return {'symbol': symbol, 'last': 0.004500}
-        return self.exchange.fetch_ticker(symbol)
-    
-    def fetch_balance(self):
-        """Busca saldo da conta ou subconta (vault)"""
-        if not self.exchange:
-            # Retorna saldo fictício para modo demo
-            return {'USDC': {'free': 1000.0, 'used': 0.0, 'total': 1000.0}}
+                    log(f"⏳ Degrau {step_idx} ativado mas em cooldown", "DEBUG")
         
-        # Verificar se está usando subconta (vault)
-        vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")
+        return None
+    
+    def execute_buy(self, step: int, analysis: Dict) -> bool:
+        """Executa compra no degrau especificado"""
+        threshold, capital_pct = self.cfg.BUY_STEPS[step]
         
-        if vault_address:
-            # Buscar saldo da SUBCONTA via API Hyperliquid
-            vault_value = _hl_get_account_value(vault_address)
-            if vault_value > 0:
-                return {
-                    'USDC': {
-                        'free': vault_value,
-                        'used': 0.0,
-                        'total': vault_value
-                    }
-                }
-            else:
-                # Fallback para fetch_balance padrão
-                _log_global("DEX", "⚠️  API da vault não retornou saldo, usando fallback", "WARN")
-                return self.exchange.fetch_balance()
-        else:
-            # Sem vault - buscar saldo da conta principal
-            return self.exchange.fetch_balance()
-    
-    def fetch_positions(self, symbols: List[str] = None):
-        """Busca posições abertas (sempre da subconta se configurada)"""
-        if not self.exchange:
-            # Retorna lista vazia para modo demo
-            return []
+        balance = analysis["balance"]
+        current_price = analysis["current_price"]
         
-        # Para Hyperliquid com vault, as posições são automaticamente da vault
-        # quando vaultAddress está configurado no exchange
-        vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")
-        wallet_address = os.getenv("WALLET_ADDRESS")
+        # Calcular quanto investir (em USD da carteira)
+        amount_usd = balance * (capital_pct / 100.0)
         
-        if vault_address:
-            # Usar vault address para buscar posições da SUBCONTA
-            params = {'user': vault_address}
-            return self.exchange.fetch_positions(symbols, params)
-        elif wallet_address:
-            # Sem vault - usar conta principal
-            params = {'user': wallet_address}
-            return self.exchange.fetch_positions(symbols, params)
-        else:
-            return self.exchange.fetch_positions(symbols)
-    
-    def fetch_open_orders(self, symbol: str):
-        """Busca ordens abertas"""
-        if not self.exchange:
-            return []
-        return self.exchange.fetch_open_orders(symbol)
-    
-    def create_order(self, symbol: str, type_: str, side: str, amount: float, price: float, params: dict = None):
-        """Cria ordem"""
-        if not self.exchange:
-            # Modo demo: log da ordem mas não executa
-            _log_global("DEX", f"💤 DEMO: {side.upper()} {amount:.2f} {symbol} @ {price:.6f}", "INFO")
-            return {'id': 'demo_order_12345', 'symbol': symbol, 'side': side, 'amount': amount}
-        return self.exchange.create_order(symbol, type_, side, amount, price, params or {})
-    
-    def cancel_order(self, order_id: str, symbol: str):
-        """Cancela ordem"""
-        if not self.exchange:
-            return {'id': order_id, 'status': 'canceled'}
-        return self.exchange.cancel_order(order_id, symbol)
-    
-    def set_leverage(self, leverage: int, symbol: str, params: dict = None):
-        """Define leverage"""
-        if not self.exchange:
-            _log_global("DEX", f"💤 DEMO: Set leverage {leverage}x for {symbol}", "DEBUG")
-            return
-        return self.exchange.set_leverage(leverage, symbol, params or {})
-    
-    def amount_to_precision(self, symbol: str, amount: float):
-        """Arredonda quantidade para precisão correta do mercado"""
-        if not self.exchange:
-            # Modo demo: retorna quantidade com 4 casas decimais
-            return round(amount, 4)
-        return self.exchange.amount_to_precision(symbol, amount)
-
-# ===== LOGGER DE TRADES =====
-class TradeLogger:
-    def __init__(self, df_columns: pd.Index, 
-                 use_local_csv: bool = True, 
-                 use_sqlite_db: bool = False,
-                 csv_path: str = None,
-                 db_path: str = None):
-        self.df_columns = df_columns
-        self.use_local_csv = use_local_csv
-        self.use_sqlite_db = use_sqlite_db
-        self.csv_path = csv_path or "trading_log.csv"
-        self.db_path = db_path or "trading.db"
-    
-    def log_trade(self, event_type: str, details: Dict[str, Any]):
-        """Log de trade simplificado"""
-        timestamp = datetime.now().isoformat()
-        log_entry = {
-            'timestamp': timestamp,
-            'event_type': event_type,
-            **details
-        }
+        # Com leverage 5x: se investe $4, valor nocional = $20
+        notional_value = amount_usd * self.cfg.LEVERAGE
+        amount_coins = notional_value / current_price
         
-        # Log apenas no console por simplicidade
-        _log_global("TRADE", f"{event_type}: {details}", "INFO")
-
-# ===== CONFIGURAÇÃO SIMPLIFICADA =====
-class SimpleRatioConfig:
-    """Configuração simples para estratégia baseada em avg_buy/sell ratio"""
-    
-    # Assets permitidos (símbolos corretos da Binance para dados históricos)
-    ASSETS: List[str] = ["PUMPUSDT", "AVNTUSDT", "SOLUSDT", "XRPUSDT"]
-    
-    # Mapeamento de símbolos: Binance (dados) -> Hyperliquid (trading)
-    # Usar mercados perpétuos (:USDC) para trading com alavancagem
-    SYMBOL_MAPPING = {
-        "PUMPUSDT": "PUMP/USDC:USDC",  # Binance -> Hyperliquid Perp
-        "AVNTUSDT": "AVNT/USDC:USDC",  # Binance -> Hyperliquid Perp
-        "SOLUSDT": "SOL/USDC:USDC",    # Binance -> Hyperliquid Perp
-        "XRPUSDT": "XRP/USDC:USDC"     # Binance -> Hyperliquid Perp
-    }
-    
-    @classmethod
-    def get_trading_symbol(cls, data_symbol: str) -> str:
-        """Converte símbolo de dados para símbolo de trading"""
-        return cls.SYMBOL_MAPPING.get(data_symbol, data_symbol)
-    
-    # Execução
-    LEVERAGE: int           = 10          # Leverage padrão moderado
-    
-    # Leverage específico por símbolo (sobrescreve o padrão)
-    LEVERAGE_PER_SYMBOL = {
-        "PUMPUSDT": 10,
-        "AVNTUSDT": 5,   # Leverage reduzido para AVNT
-        "SOLUSDT": 20,   # SOL com leverage alto
-        "XRPUSDT": 20    # XRP com leverage alto
-    }
-    
-    @classmethod
-    def get_leverage(cls, data_symbol: str) -> int:
-        """Retorna leverage para o símbolo específico"""
-        return cls.LEVERAGE_PER_SYMBOL.get(data_symbol, cls.LEVERAGE)
-    
-    STOP_LOSS_PCT: float    = 0.20        # Stop loss fixo 20%
-    TRADE_SIZE_USD: float   = 3.0         # Valor fixo por trade
-    
-    # === MELHORIAS DE PRECISÃO ===
-    # Melhoria 1: Histerese de Ratio (Anti-Ruído)
-    RATIO_THRESHOLD_LONG: float = 1.10    # Ratio precisa subir para 1.10 para entrar LONG (antes: 1.0)
-    RATIO_THRESHOLD_SHORT: float = 0.90   # Ratio precisa cair para 0.90 para entrar SHORT (antes: 0.99)
-    
-    # Melhoria 2: Filtro de Tendência com EMAs
-    ENABLE_TREND_FILTER: bool = True      # Ativar filtro de tendência EMA
-    EMA_FAST_PERIOD: int = 7              # EMA rápida (7 períodos)
-    EMA_SLOW_PERIOD: int = 21             # EMA lenta (21 períodos)
-    
-    # Melhoria 3: Take Profit Dinâmico com ATR Híbrido Inteligente
-    ENABLE_ATR_TAKE_PROFIT: bool = True   # Ativar Take Profit baseado em ATR
-    ATR_PERIOD: int = 14                  # Período do ATR
-    
-    # Sistema Híbrido: Multiplicador adaptativo baseado em EMA + Volume + Ratio
-    ENABLE_SMART_TP: bool = True          # Ativar Take Profit Inteligente (pontuação 0-3)
-    TP_CONSERVATIVE: float = 1.8          # Multiplicador conservador (pontuação 0-1)
-    TP_BALANCED: float = 2.5              # Multiplicador balanceado (pontuação 1-2)
-    TP_AGGRESSIVE: float = 3.5            # Multiplicador agressivo (pontuação 2-3)
-    
-    # Thresholds para pontuação do TP inteligente:
-    TP_EMA_DISTANCE_THRESHOLD: float = 0.02    # +1 ponto se EMA distance >= 2%
-    TP_VOLUME_RATIO_THRESHOLD: float = 1.3     # +1 ponto se volume >= 1.3x média
-    TP_RATIO_STRENGTH_THRESHOLD: float = 1.15  # +1 ponto se ratio >= 1.15 (LONG) ou <= 0.85 (SHORT)
-    
-    # Inversão Automática Inteligente
-    ENABLE_AUTO_REVERSE: bool = True      # Ativar inversão automática ao fechar
-    # Condições para permitir inversão (todas devem ser satisfeitas):
-    REVERSE_MIN_EMA_DISTANCE: float = 0.02  # EMA7 deve estar >2% distante da EMA21
-    REVERSE_MIN_RATIO_STRENGTH: float = 1.20  # LONG: ratio >1.20 | SHORT: ratio <0.80
-    REVERSE_MIN_VOLUME_RATIO: float = 1.2   # Volume atual deve ser >1.2x da média
-    
-    # Ratio tracking (para detectar inversões)
-    RATIO_HISTORY_SIZE: int = 5           # Últimos N ratios para detectar inversão
-    
-    # Validação (mantemos alguns filtros básicos de segurança)
-    USD_PER_TRADE: float    = 3.0         # Valor fixo por trade
-    MIN_ORDER_USD: float    = 10.0
-    STOP_LOSS_CAPITAL_PCT: float = 0.20  # 20% da margem como stop inicial (reduzido de 30% para 20%)
-    TAKE_PROFIT_CAPITAL_PCT: float = 0.50   # take profit em 50% da margem (aumentado de 30% para 50%)
-    MAX_LOSS_ABS_USD: float    = 50.00     # hard stop emergencial - limite absoluto de perda por posição (DESABILITADO TEMP)
-
-    # down & anti-flip-flop
-    COOLDOWN_BARS: int      = 0           # cooldown por velas desativado (usar tempo)
-    POST_COOLDOWN_CONFIRM: int = 0        # confirmações pós-cooldown desativadas
-    COOLDOWN_MINUTOS: int   = 120          # tempo mínimo entre entradas após saída
-
-# ===== ASSET SETUP =====
-class AssetSetup:
-    def __init__(self):
-        pass
-
-# ===== ESTRATÉGIA PRINCIPAL =====
-class SimpleRatioStrategy:
-    """Estratégia simplificada baseada apenas em avg_buy/sell ratio"""
-    
-    def __init__(self, dex, symbol: str, cfg: SimpleRatioConfig = SimpleRatioConfig(), logger: "TradeLogger" = None, debug: bool = True, wallet_config: WalletConfig = None):
-        self.dex = dex
-        self.symbol = symbol  # Símbolo para dados (Binance)
-        self.trading_symbol = cfg.get_trading_symbol(symbol)  # Símbolo para trading (Hyperliquid)
-        self.cfg = cfg
-        self.logger = logger
-        self.debug = debug
-        self.wallet_config = wallet_config or WALLET_CONFIGS[0]  # Default para carteira principal
-
-        # Estado simples para nova estratégia de ratio
-        self._last_pos_side: Optional[str] = None
-        self._position_entry_time: Optional[float] = None
-        self._entry_price: Optional[float] = None       # Preço de entrada para cálculo de P&L
-        self._last_ratio_value: Optional[float] = None  # Último valor do ratio avg_buy/sell
-        self._ratio_history: List[float] = []           # Histórico de ratios para detectar inversões
-        self._orphan_position_detected: bool = False    # Flag para posições órfãs (sem entry_time)
-        self._orphan_last_ratio: Optional[float] = None # Último ratio quando órfã foi detectada
+        # IMPORTANTE: Verificar mínimo usando valor NOCIONAL (alavancado), não valor da carteira
+        if notional_value < self.cfg.MIN_ORDER_USD:
+            log(f"⚠️ Valor nocional muito baixo: ${notional_value:.2f} < ${self.cfg.MIN_ORDER_USD}", "WARN")
+            log(f"   (${amount_usd:.2f} da carteira × {self.cfg.LEVERAGE}x leverage = ${notional_value:.2f})", "WARN")
+            return False
         
-        # Cooldown para evitar flip-flop (entradas muito rápidas após saídas)
-        self._cooldown_until: Optional[datetime] = None
-        self._last_open_at: Optional[datetime] = None
-        self._last_close_at: Optional[datetime] = None
+        log(f"🟢 COMPRANDO: Degrau {step} ({threshold}% abaixo do máximo)", "INFO")
+        log(f"   💰 Capital da carteira: ${balance:.2f}", "INFO")
+        log(f"   📊 {capital_pct}% do capital = ${amount_usd:.2f}", "INFO")
+        log(f"   🔧 Leverage {self.cfg.LEVERAGE}x → Valor nocional: ${notional_value:.2f}", "INFO")
+        log(f"   🪙 Quantidade SOL: {amount_coins:.4f} @ ${current_price:.4f}", "INFO")
         
-        # Take Profit dinâmico
-        self._take_profit_order_id: Optional[str] = None  # ID da ordem de Take Profit ativa
+        # Executar ordem
+        success = self.exchange.create_market_order("buy", amount_usd, self.cfg.LEVERAGE)
         
-        base = symbol.split("/")[0]
-        self._df_symbol_hint = f"{base}USDT"
-
-        # Buffer local (redundância) e flags
-        self._local_events = []              # lista de eventos (fallback/espelho)
-        self._local_events_count = 0         # contador de eventos locais
-        self.force_local_log = False         # True => ignora logger externo
-        self.duplicate_local_always = True   # True => sempre duplica no local
-
-        # Estado para cooldown por barras e intenção pós-cooldown
-        self._bars_since_last_close = 0     # contador de barras desde último fechamento
-        self._pending_intent_after_cd = None # intenção pendente pós-cooldown
-
-    @property
-    def _subconta_dex(self):
-        """Retorna a instância do DEX configurada para subconta"""
-        return self.wallet_config.get_dex_instance()
-
-    def _log(self, message: str, level: str = "INFO"):
-        """Log interno da estratégia"""
-        prefix = f"[{self.symbol}]"
-        _log_global("STRATEGY", f"{prefix} {message}", level)
-
-    def _try_recover_position_entry_time(self, pos_side: str) -> Optional[float]:
-        """
-        Tenta recuperar o timestamp de abertura da posição via API Hyperliquid.
-        Retorna timestamp em segundos ou None se não conseguir.
-        """
+        if success:
+            # Registrar compra (usar valor nocional para cálculo correto)
+            self.state.record_buy(step, current_price, amount_coins)
+            
+            # Notificar Discord
+            discord.send(
+                "🟢 COMPRA EXECUTADA",
+                f"**Degrau:** {step} ({threshold}% abaixo do máximo)\n"
+                f"**Preço:** ${current_price:.4f}\n"
+                f"**Capital usado:** ${amount_usd:.2f} ({capital_pct}% do saldo)\n"
+                f"**Leverage:** {self.cfg.LEVERAGE}x\n"
+                f"**Valor nocional:** ${notional_value:.2f}\n"
+                f"**Quantidade SOL:** {amount_coins:.4f}",
+                0x00ff00
+            )
+        
+        return success
+    
+    def execute_sell(self, step: int, analysis: Dict) -> bool:
+        """Executa venda no degrau especificado"""
+        threshold, position_pct = self.cfg.SELL_STEPS[step]
+        
+        pct_gain = analysis.get("pct_gain", 0)
+        current_price = analysis["current_price"]
+        
+        log(f"🔴 VENDENDO: Degrau {step} | {position_pct}% da posição | Ganho {pct_gain:.2f}%", "INFO")
+        
+        # Executar ordem
+        success = self.exchange.close_position_partial(position_pct)
+        
+        if success:
+            # Registrar venda
+            self.state.record_sell(step)
+            
+            # Notificar Discord
+            discord.send(
+                "🔴 VENDA EXECUTADA",
+                f"**Degrau:** {step} ({threshold}% de ganho)\n"
+                f"**Preço:** ${current_price:.4f}\n"
+                f"**Ganho:** +{pct_gain:.2f}%\n"
+                f"**Posição vendida:** {position_pct}%",
+                0xff9900
+            )
+        
+        return success
+    
+    def run_cycle(self):
+        """Executa um ciclo da estratégia"""
+        log("=" * 80, "INFO")
+        log("🔄 INICIANDO CICLO DCA", "INFO")
+        log("=" * 80, "INFO")
+        
+        # Mostrar estado atual
+        self.state.show_state_summary()
+        
         try:
-            vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")
-            if not vault_address:
-                return None
+            # Analisar mercado
+            analysis = self.analyze_market()
             
-            # Buscar últimos fills da wallet via API Hyperliquid
-            fills_data = _http_post_json(_HL_INFO_URL, {"type": "userFills", "user": vault_address})
-            
-            if not fills_data or not isinstance(fills_data, list):
-                return None
-            
-            # Procurar o fill mais recente que abriu a posição atual
-            # Fills vêm ordenados do mais recente para o mais antigo
-            for fill in fills_data[:20]:  # Verificar últimos 20 fills
-                try:
-                    coin = fill.get("coin", "")
-                    side = fill.get("side", "").lower()
-                    time_ms = fill.get("time", 0)
-                    
-                    # Verificar se é o ativo correto (PUMP ou AVNT)
-                    if coin in ["PUMP", "AVNT"]:
-                        # Verificar se é o lado correto (buy ou sell)
-                        if side == pos_side.lower():
-                            # Converter milliseconds para seconds
-                            entry_time = float(time_ms) / 1000.0
-                            self._log(f"[RECOVER] Encontrado entry_time via API: {datetime.fromtimestamp(entry_time).strftime('%H:%M:%S')}", level="INFO")
-                            return entry_time
-                except Exception as e:
-                    continue
-            
-            self._log(f"[RECOVER] Não foi possível encontrar entry_time nos últimos fills", level="WARN")
-            return None
-            
-        except Exception as e:
-            self._log(f"[RECOVER] Erro ao tentar recuperar entry_time: {e}", level="WARN")
-            return None
-
-    def step(self, df: pd.DataFrame):
-        """Função principal da estratégia simplificada"""
-        try:
-            if len(df) < 30:  # Precisamos de dados suficientes
-                return
-
-            # Log do estado da posição no início do step
-            pos = self._posicao_aberta()
-            if pos:
-                import time as _time
-                pos_side = pos.get('side')
-                
-                # Se detectar posição órfã (entry_time=None), tentar recuperar da API
-                if self._position_entry_time is None and not self._orphan_position_detected:
-                    self._log(f"[ORPHAN] Posição órfã detectada: {pos_side} {abs(float(pos.get('contracts', 0))):.2f} - tentando recuperar entry_time via API...", level="WARN")
-                    
-                    # Tentar recuperar entry_time da API
-                    recovered_time = self._try_recover_position_entry_time(pos_side)
-                    
-                    if recovered_time:
-                        # Sucesso! Agora temos o entry_time real
-                        self._position_entry_time = recovered_time
-                        self._log(f"[ORPHAN] ✅ Entry_time recuperado com sucesso! Posição aberta há {_time.time() - recovered_time:.2f}s", level="INFO")
-                    else:
-                        # Não conseguiu recuperar - marcar como órfã e aguardar próximo cruzamento
-                        self._orphan_position_detected = True
-                        # Salvar o ratio atual para detectar o PRÓXIMO cruzamento
-                        ratio_3 = self._ratio_3_history[-1] if len(self._ratio_3_history) > 0 else None
-                        self._orphan_last_ratio = ratio_3
-                        self._log(f"[ORPHAN] ⚠️ Não foi possível recuperar entry_time. Posição marcada como órfã (ratio atual: {ratio_3:.4f}). Aguardando PRÓXIMO cruzamento...", level="WARN")
-                
-                # Log do tempo em posição
-                if self._position_entry_time is not None:
-                    time_in_pos = _time.time() - self._position_entry_time
-                    self._log(f"[STEP_INIT] Posição ativa: {pos_side} {abs(float(pos.get('contracts', 0))):.2f} (há {time_in_pos/60:.2f}min)", level="DEBUG")
-                elif self._orphan_position_detected:
-                    self._log(f"[STEP_INIT] Posição órfã: {pos_side} {abs(float(pos.get('contracts', 0))):.2f} (aguardando próximo cruzamento, último ratio: {self._orphan_last_ratio})", level="DEBUG")
-            else:
-                self._log(f"[STEP_INIT] Sem posição aberta", level="DEBUG")
-
-            # 1. Calcular e mostrar snapshot de indicadores técnicos para cada ativo
-            indicators = trading_monitor.calculate_indicators(df, self.symbol)
-            if indicators:
-                trading_monitor.print_snapshot(indicators)
-
-
-            # 2. Calcular médias e somas de volumes de compra/venda para 30, 10, 5 e 3 candles
-            def rolling_buy_sell_vol_sum(df, window):
-                buy_vols = []
-                sell_vols = []
-                for i in range(-window, 0):
-                    if abs(i) <= len(df):
-                        temp_df = df.iloc[max(0, len(df) + i - 1):len(df) + i + 1]
-                        if len(temp_df) >= 2:
-                            temp_buysell = TechnicalIndicators.estimate_buy_sell_volumes(temp_df)
-                            buy_vols.append(temp_buysell["buy_vol"])
-                            sell_vols.append(temp_buysell["sell_vol"])
-                return sum(buy_vols), sum(sell_vols)
-
-            def rolling_avg_buy_sell_ratio(df, window):
-                ratios = []
-                for i in range(-window, 0):
-                    if abs(i) <= len(df):
-                        temp_df = df.iloc[max(0, len(df) + i - 1):len(df) + i + 1]
-                        if len(temp_df) >= 2:
-                            temp_buysell = TechnicalIndicators.estimate_buy_sell_volumes(temp_df)
-                            buy = temp_buysell["buy_vol"]
-                            sell = temp_buysell["sell_vol"]
-                            if sell > 0:
-                                ratios.append(buy / sell)
-                return np.mean(ratios) if ratios else 0
-
-            # Ratio avg_buy/sell (média dos ratios)
-            # 1. Calcular e mostrar snapshot de indicadores técnicos para cada ativo
-            indicators = trading_monitor.calculate_indicators(df, self.symbol)
-            if indicators:
-                trading_monitor.print_snapshot(indicators)
-
-            ratio_3 = rolling_avg_buy_sell_ratio(df, 3) if len(df) >= 3 else 0
-
-            # Atualizar histórico do ratio_3
-            if not hasattr(self, '_ratio_3_history'):
-                self._ratio_3_history = []
-            self._ratio_3_history.append(ratio_3)
-            if len(self._ratio_3_history) > 2:
-                self._ratio_3_history = self._ratio_3_history[-2:]
-
-            # Log do ratio_3
-            self._log(f"📊 Ratio avg_buy/sell 3 candles: {ratio_3:.3f}", level="DEBUG")
-
-            # Detectar cruzamento para entrada/saída
-            pos = self._posicao_aberta()
-            if len(self._ratio_3_history) < 2:
-                return
-            prev_ratio = self._ratio_3_history[-2]
-            curr_ratio = self._ratio_3_history[-1]
-
-            # LONG: entra quando cruza para limiar LONG, sai quando cruza para limiar SHORT
-            # SHORT: entra quando cruza para limiar SHORT, sai quando cruza para limiar LONG
-            if not pos:
-                # Sem posição aberta - verificar sinais de entrada
-                
-                # MELHORIA 1: Histerese - usar limiares mais distantes
-                signal_long = (prev_ratio < self.cfg.RATIO_THRESHOLD_LONG and curr_ratio >= self.cfg.RATIO_THRESHOLD_LONG)
-                signal_short = (prev_ratio > self.cfg.RATIO_THRESHOLD_SHORT and curr_ratio <= self.cfg.RATIO_THRESHOLD_SHORT)
-                
-                # MELHORIA 2: Filtro de Tendência com EMAs
-                trend_allows_long = True
-                trend_allows_short = True
-                
-                if self.cfg.ENABLE_TREND_FILTER and len(df) >= max(self.cfg.EMA_FAST_PERIOD, self.cfg.EMA_SLOW_PERIOD):
-                    # Calcular EMAs
-                    ema_fast = df['valor_fechamento'].ewm(span=self.cfg.EMA_FAST_PERIOD, adjust=False).mean().iloc[-1]
-                    ema_slow = df['valor_fechamento'].ewm(span=self.cfg.EMA_SLOW_PERIOD, adjust=False).mean().iloc[-1]
-                    
-                    trend_allows_long = (ema_fast > ema_slow)  # Tendência de alta
-                    trend_allows_short = (ema_fast < ema_slow)  # Tendência de baixa
-                    
-                    self._log(f"📈 Tendência: EMA{self.cfg.EMA_FAST_PERIOD}={ema_fast:.6f} vs EMA{self.cfg.EMA_SLOW_PERIOD}={ema_slow:.6f} | "
-                             f"Alta={trend_allows_long} Baixa={trend_allows_short}", level="DEBUG")
-                
-                # Aplicar filtros
-                if signal_long and trend_allows_long:
-                    self._log(f"🚀 ENTRADA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (limiar: {self.cfg.RATIO_THRESHOLD_LONG})", level="INFO")
-                    self._enter_position("buy", self.cfg.TRADE_SIZE_USD, df)
-                elif signal_short and trend_allows_short:
-                    self._log(f"🚀 ENTRADA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (limiar: {self.cfg.RATIO_THRESHOLD_SHORT})", level="INFO")
-                    self._enter_position("sell", self.cfg.TRADE_SIZE_USD, df)
-                elif signal_long and not trend_allows_long:
-                    self._log(f"⛔ LONG bloqueado por tendência: EMA rápida abaixo da lenta", level="INFO")
-                elif signal_short and not trend_allows_short:
-                    self._log(f"⛔ SHORT bloqueado por tendência: EMA rápida acima da lenta", level="INFO")
-            else:
-                # Com posição aberta - verificar tempo mínimo antes de permitir saída por cruzamento
-                import time as _time
-                time_in_position = 0
-                allow_exit = False
-                
-                if self._position_entry_time is not None:
-                    time_in_position = _time.time() - self._position_entry_time
-                    self._log(f"[EXIT_CHECK] Posição aberta há {time_in_position/60:.2f} minutos", level="DEBUG")
-                    # Tempo mínimo de 5 minutos (300 segundos) antes de permitir saída por cruzamento
-                    allow_exit = (time_in_position >= 300)
-                elif self._orphan_position_detected and self._orphan_last_ratio is not None:
-                    # Posição órfã - verificar se é um NOVO cruzamento (diferente do que estava quando detectamos)
-                    # Só fechar se o ratio atual cruzou a partir de um lado diferente do órfão
-                    # Se órfão estava >=1.0 e agora cruzou para <=0.99, OU
-                    # Se órfão estava <=0.99 e agora cruzou para >=1.0
-                    # Isso garante que é um NOVO cruzamento, não o mesmo que estava quando detectamos
-                    is_new_crossing = (
-                        (self._orphan_last_ratio >= 1.0 and curr_ratio <= 0.99) or
-                        (self._orphan_last_ratio <= 0.99 and curr_ratio >= 1.0)
-                    )
-                    if is_new_crossing:
-                        self._log(f"[ORPHAN] ✅ Novo cruzamento detectado para posição órfã (órfão em {self._orphan_last_ratio:.4f} → agora {curr_ratio:.4f}) - permitindo fechamento", level="INFO")
-                        allow_exit = True
-                    else:
-                        self._log(f"[ORPHAN] ⏸️  Ainda no mesmo lado do cruzamento original (órfão: {self._orphan_last_ratio:.4f}, atual: {curr_ratio:.4f}) - aguardando novo cruzamento", level="DEBUG")
-                        allow_exit = False
-                else:
-                    # Posição sem entry_time mas também não detectada como órfã ainda
-                    # Isso pode acontecer no primeiro ciclo após abrir posição (race condition)
-                    # Vamos esperar o próximo ciclo para validar
-                    self._log(f"[EXIT_CHECK] ⚠️ Aguardando próximo ciclo para validar estado da posição", level="DEBUG")
-                    allow_exit = False
-                
-                side = self._norm_side(pos.get("side"))
-                if side == "buy":
-                    if prev_ratio >= 1.0 and curr_ratio <= 0.99:
-                        self._log(f"[EXIT_CHECK] LONG: ratio cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="DEBUG")
-                        if allow_exit:
-                            self._log(f"🚪 SAÍDA LONG: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
-                            self._close_position(df)  # Fecha LONG e abre SHORT automaticamente
-                        else:
-                            tempo_msg = f"{time_in_position/60:.1f}min < 5.0min" if self._position_entry_time else "aguardando novo cruzamento"
-                            self._log(f"⏸️  SAÍDA LONG IGNORADA: {tempo_msg}", level="INFO")
-                elif side == "sell":
-                    if prev_ratio <= 0.99 and curr_ratio >= 1.0:
-                        self._log(f"[EXIT_CHECK] SHORT: ratio cruzou de {prev_ratio:.3f} para {curr_ratio:.3f}", level="DEBUG")
-                        if allow_exit:
-                            self._log(f"🚪 SAÍDA SHORT: ratio_3 cruzou de {prev_ratio:.3f} para {curr_ratio:.3f} (tempo: {time_in_position/60:.1f}min)", level="INFO")
-                            self._close_position(df)  # Fecha SHORT e abre LONG automaticamente
-                        else:
-                            tempo_msg = f"{time_in_position/60:.1f}min < 5.0min" if self._position_entry_time else "aguardando novo cruzamento"
-                            self._log(f"⏸️  SAÍDA SHORT IGNORADA: {tempo_msg}", level="INFO")
-            # Bloco removido: toda a lógica de entrada/saída já está implementada acima usando apenas o ratio de 3 candles
-            # Garantir que não há uso de variáveis fora do escopo
-                        
-            # 3. Verificar fechamento por tempo (4 horas) - mantido do sistema anterior
-            if self._position_entry_time is not None:
-                import time as _time
-                current_time = _time.time()
-                time_in_position = current_time - self._position_entry_time
-                time_limit_4h = 4 * 60 * 60  # 4 horas em segundos
-                
-                if time_in_position >= time_limit_4h:
-                    self._log(f"⏰ SAÍDA POR TEMPO: {time_in_position/3600:.1f}h - fechando posição SEM inverter", level="WARN")
-                    self._close_position(df, open_reverse=False)  # Não abrir invertida no timeout
-                    return
-                    
-        except Exception as e:
-            self._log(f"Erro verificando condições de saída: {e}", level="ERROR")
-            
-    def _update_ratio_history(self, current_ratio: float):
-        """Atualiza histórico de ratios mantendo apenas os últimos N valores"""
-        self._ratio_history.append(current_ratio)
-        
-        # Manter apenas os últimos valores conforme configuração
-        max_history = self.cfg.RATIO_HISTORY_SIZE
-        if len(self._ratio_history) > max_history:
-            self._ratio_history = self._ratio_history[-max_history:]
-            
-        self._last_ratio_value = current_ratio
-        
-    def _enter_position(self, side: str, usd_to_spend: float, df: pd.DataFrame):
-        """Abre posição simples na subconta"""
-        try:
-            import time as _time
-            self._log(f"[ENTRADA] Sinal detectado para {side.upper()} em {self.trading_symbol}", level="INFO")
-            
-            # Verificar saldo disponível antes de tentar
-            try:
-                balance = self._subconta_dex.fetch_balance()
-                usdc_free = float(balance.get('USDC', {}).get('free', 0))
-                self._log(f"[ENTRADA] Saldo disponível: ${usdc_free:.2f} USDC", level="DEBUG")
-                
-                if usdc_free < usd_to_spend:
-                    self._log(f"[ENTRADA] Saldo insuficiente: precisa ${usd_to_spend:.2f} mas tem apenas ${usdc_free:.2f}", level="ERROR")
-                    self._log(f"[ENTRADA] DICA: Transfira USDC da conta principal para a subconta (Vault: {self.wallet_config.vault_address})", level="WARN")
-                    return
-            except Exception as e:
-                self._log(f"[ENTRADA] Aviso: não foi possível verificar saldo: {e}", level="WARN")
-            
-            # Configurar leverage específico para o símbolo
-            leverage = self.cfg.get_leverage(self.symbol)
-            self._subconta_dex.set_leverage(leverage, self.trading_symbol, {"marginMode": "isolated"})
-            self._log(f"[ENTRADA] Leverage configurado: {leverage}x para {self.symbol}", level="DEBUG")
-
-            # Sempre buscar o preço atual da Hyperliquid
-            current_price = self._preco_atual()
-            self._log(f"[ENTRADA] Preço atual Hyperliquid: {current_price}", level="DEBUG")
-            if not current_price or current_price <= 0:
-                self._log(f"[ENTRADA] Preço inválido para entrada: {current_price}", level="ERROR")
-                return
-
-            # Calcular quantidade e arredondar para precisão da exchange
-            amount_raw = usd_to_spend * leverage / current_price
-            amount = self._round_amount(amount_raw)
-            self._log(f"[ENTRADA] Quantidade calculada: {amount_raw:.8f} → arredondada: {amount:.8f} (${usd_to_spend:.2f} × {leverage}x ÷ ${current_price:.6f})", level="DEBUG")
-            
-            # Verificar quantidade mínima
-            notional_value = amount * current_price
-            self._log(f"[ENTRADA] Valor nocional da ordem: ${notional_value:.2f} (amount={amount:.8f} × price={current_price:.6f})", level="DEBUG")
-            
-            if notional_value < 10.0:  # Hyperliquid geralmente exige mínimo de $10
-                self._log(f"[ENTRADA] AVISO: Valor nocional muito baixo (${notional_value:.2f} < $10.00) - pode ser rejeitado", level="WARN")
-
-            # Criar ordem market
-            try:
-                # Log detalhado antes de enviar
-                self._log(f"[ENTRADA] Enviando ordem: symbol={self.trading_symbol}, side={side}, amount={amount:.6f}, price={current_price:.6f}", level="DEBUG")
-                order = self._subconta_dex.create_order(self.trading_symbol, "market", side, amount, current_price)
-                self._log(f"[ENTRADA] Ordem enviada para Hyperliquid: {order}", level="INFO")
-            except Exception as e:
-                error_str = str(e)
-                self._log(f"[ENTRADA] Falha ao enviar ordem para Hyperliquid: {e}", level="ERROR")
-                # Decodificar erros específicos da Hyperliquid
-                if "(0, 32)" in error_str:
-                    self._log(f"[ENTRADA] Erro Hyperliquid (0, 32): Quantidade inválida ou saldo insuficiente. Amount={amount:.6f}, Price={current_price:.6f}", level="ERROR")
-                elif "(0, 33)" in error_str:
-                    self._log(f"[ENTRADA] Erro Hyperliquid (0, 33): Mercado não disponível ou pausado", level="ERROR")
-                elif "(0, 34)" in error_str:
-                    self._log(f"[ENTRADA] Erro Hyperliquid (0, 34): Preço fora dos limites permitidos", level="ERROR")
-                raise
-
-            # Registrar tempo de entrada
-            self._position_entry_time = _time.time()
-            self._last_pos_side = self._norm_side(side)
-            self._entry_price = current_price  # Rastrear preço de entrada para P&L
-
-            # Criar stop loss - seguindo padrão do tradingv4.py
-            # Passa leverage para calcular stop correto (20% do capital = 2% do preço com 10x)
-            sl_price = self._calculate_stop_price(current_price, side, leverage)
-            if sl_price:
-                sl_side = "sell" if side == "buy" else "buy"
-                try:
-                    # Log detalhado antes de criar stop
-                    self._log(f"[STOP] Criando stop loss: entry={current_price:.6f}, stop_trigger={sl_price:.6f}, side={sl_side}", level="DEBUG")
-                    
-                    # Para Hyperliquid, seguir padrão do tradingv4.py
-                    sl_params = {
-                        "reduceOnly": True,
-                        "triggerPrice": sl_price,      # Preço de gatilho
-                        "stopLossPrice": sl_price,     # Preço do stop loss
-                        "trigger": "mark",             # Usar mark price
-                    }
-                    
-                    # Hyperliquid exige especificar preço base mesmo para stop_market
-                    sl_order = self._subconta_dex.create_order(
-                        self.trading_symbol, 
-                        "stop_market", 
-                        sl_side, 
-                        amount, 
-                        sl_price,  # Preço base (exigido pelo Hyperliquid)
-                        sl_params
-                    )
-                    self._log(f"🛡️ Stop loss criado: {sl_side} @ trigger={sl_price:.6f} | Ordem: {sl_order}", level="INFO")
-                except Exception as e:
-                    self._log(f"⚠️  Erro criando stop loss: {e}", level="WARN")
-                    self._log(f"   Continuando sem stop loss - posição vulnerável!", level="WARN")
-
-            # MELHORIA 3: Criar Take Profit dinâmico com ATR Híbrido Inteligente
-            if self.cfg.ENABLE_ATR_TAKE_PROFIT and len(df) >= self.cfg.ATR_PERIOD:
-                try:
-                    # Calcular ATR (Average True Range)
-                    high = df['valor_maximo']
-                    low = df['valor_minimo']
-                    close = df['valor_fechamento']
-                    
-                    # True Range = max(high-low, abs(high-prev_close), abs(low-prev_close))
-                    tr1 = high - low
-                    tr2 = abs(high - close.shift(1))
-                    tr3 = abs(low - close.shift(1))
-                    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                    
-                    # ATR = média móvel do True Range
-                    atr = tr.rolling(window=self.cfg.ATR_PERIOD).mean().iloc[-1]
-                    
-                    # SISTEMA HÍBRIDO INTELIGENTE: Calcular multiplicador adaptativo
-                    tp_multiplier = self.cfg.TP_BALANCED  # Padrão: 2.5x
-                    tp_score = 0
-                    score_reasons = []
-                    
-                    if self.cfg.ENABLE_SMART_TP:
-                        # Fator 1: Distância EMA (tendência clara?)
-                        if len(df) >= max(self.cfg.EMA_FAST_PERIOD, self.cfg.EMA_SLOW_PERIOD):
-                            ema_fast = df['valor_fechamento'].ewm(span=self.cfg.EMA_FAST_PERIOD, adjust=False).mean().iloc[-1]
-                            ema_slow = df['valor_fechamento'].ewm(span=self.cfg.EMA_SLOW_PERIOD, adjust=False).mean().iloc[-1]
-                            ema_distance_pct = abs((ema_fast - ema_slow) / ema_slow)
-                            
-                            if ema_distance_pct >= self.cfg.TP_EMA_DISTANCE_THRESHOLD:
-                                tp_score += 1
-                                score_reasons.append(f"EMA distance {ema_distance_pct*100:.2f}%")
-                        
-                        # Fator 2: Volume (movimento forte?)
-                        if len(df) >= 20:
-                            current_volume = df['volume'].iloc[-1]
-                            avg_volume_20 = df['volume'].rolling(window=20).mean().iloc[-1]
-                            volume_ratio = current_volume / avg_volume_20 if avg_volume_20 > 0 else 0
-                            
-                            if volume_ratio >= self.cfg.TP_VOLUME_RATIO_THRESHOLD:
-                                tp_score += 1
-                                score_reasons.append(f"Volume {volume_ratio:.2f}x")
-                        
-                        # Fator 3: Força do Ratio (sinal forte?)
-                        if len(self._ratio_3_history) >= 1:
-                            current_ratio = self._ratio_3_history[-1]
-                            if side == "buy" and current_ratio >= self.cfg.TP_RATIO_STRENGTH_THRESHOLD:
-                                tp_score += 1
-                                score_reasons.append(f"Ratio LONG {current_ratio:.3f}")
-                            elif side == "sell" and current_ratio <= (2.0 - self.cfg.TP_RATIO_STRENGTH_THRESHOLD):
-                                tp_score += 1
-                                score_reasons.append(f"Ratio SHORT {current_ratio:.3f}")
-                        
-                        # Determinar multiplicador baseado na pontuação
-                        if tp_score <= 1:
-                            tp_multiplier = self.cfg.TP_CONSERVATIVE  # 1.8x - Conservador
-                        elif tp_score == 2:
-                            tp_multiplier = self.cfg.TP_BALANCED      # 2.5x - Balanceado
-                        else:  # tp_score == 3
-                            tp_multiplier = self.cfg.TP_AGGRESSIVE    # 3.5x - Agressivo
-                        
-                        self._log(f"🧠 TP Inteligente: Score={tp_score}/3 ({', '.join(score_reasons) if score_reasons else 'nenhum fator'}) → Mult={tp_multiplier}x", level="INFO")
-                    
-                    # Calcular preço do Take Profit
-                    tp_distance = atr * tp_multiplier
-                    if side == "buy":
-                        tp_price = current_price + tp_distance
-                    else:  # sell
-                        tp_price = current_price - tp_distance
-                    
-                    tp_side = "sell" if side == "buy" else "buy"
-                    
-                    self._log(f"[TAKE_PROFIT] ATR={atr:.6f}, Multiplicador={tp_multiplier:.1f}x, "
-                             f"Distância={tp_distance:.6f}, TP={tp_price:.6f}", level="DEBUG")
-                    
-                    # Criar ordem limit de Take Profit
-                    tp_order = self._subconta_dex.create_order(
-                        self.trading_symbol,
-                        "limit",
-                        tp_side,
-                        amount,
-                        tp_price,
-                        {"reduceOnly": True}
-                    )
-                    
-                    self._take_profit_order_id = tp_order.get('id') if isinstance(tp_order, dict) else None
-                    self._log(f"💰 Take Profit criado: {tp_side} @ {tp_price:.6f} ({tp_multiplier:.1f}x ATR) | Ordem: {tp_order}", level="INFO")
-                    
-                except Exception as e:
-                    self._log(f"⚠️  Erro criando Take Profit: {e}", level="WARN")
-
-            # Notificar
-            self._notify_trade("open", side, current_price, amount, f"Entrada por ratio", include_hl=False)
-            self._log(f"✅ POSIÇÃO ABERTA: {side.upper()} {amount:.2f} @ {current_price:.6f}", level="INFO")
-
-        except Exception as e:
-            error_msg = str(e).lower()
-            error_str = str(e)
-            self._log(f"[ENTRADA] Erro ao tentar abrir posição: {e}", level="ERROR")
-            
-            # Log detalhado do motivo do fallback
-            if not self._subconta_dex.exchange:
-                self._log(f"[ENTRADA] Fallback para modo demo: Exchange não inicializada.", level="WARN")
-            elif any(x in error_msg for x in ['user parameter', 'wallet address', 'authentication', 'credential']):
-                self._log(f"[ENTRADA] Fallback para modo demo: Credenciais ausentes ou inválidas.", level="WARN")
-            elif 'does not have market symbol' in error_msg or 'market' in error_msg:
-                self._log(f"[ENTRADA] Fallback para modo demo: Mercado {self.trading_symbol} não disponível na Hyperliquid.", level="WARN")
-            elif "(0, 32)" in error_str:
-                self._log(f"[ENTRADA] Fallback para modo demo: Erro Hyperliquid (0, 32) - Possíveis causas:", level="WARN")
-                self._log(f"  • Saldo insuficiente na subconta", level="WARN")
-                self._log(f"  • Quantidade menor que o mínimo permitido", level="WARN")
-                self._log(f"  • Precisão da quantidade incorreta", level="WARN")
-                self._log(f"  • Verifique se a subconta tem USDC suficiente", level="WARN")
-            else:
-                self._log(f"[ENTRADA] Fallback para modo demo: Erro inesperado: {e}", level="WARN")
-            
-    def _close_position(self, df: pd.DataFrame, open_reverse: bool = True):
-        """
-        Fecha posição atual e opcionalmente abre posição invertida
-        
-        Args:
-            df: DataFrame com dados de mercado
-            open_reverse: Se True, abre posição invertida após fechar
-        """
-        try:
-            import time as _time
-            
-            pos = self._posicao_aberta()
-            if not pos:
-                return
-                
-            side = self._norm_side(pos.get("side"))
-            amount_raw = abs(float(pos.get("contracts", 0)))
-            
-            if amount_raw <= 0:
+            if not analysis:
+                log("⚠️ Análise falhou, pulando ciclo", "WARN")
                 return
             
-            # Arredondar quantidade para precisão da exchange
-            amount = self._round_amount(amount_raw)
-            self._log(f"[CLOSE] Quantidade a fechar: {amount_raw:.8f} → arredondada: {amount:.8f}", level="DEBUG")
+            # Verificar sinais de compra
+            buy_step = self.check_buy_signals(analysis)
+            if buy_step is not None:
+                self.execute_buy(buy_step, analysis)
             
-            # Cancelar ordem de Take Profit se existir
-            if self._take_profit_order_id:
-                try:
-                    self._subconta_dex.cancel_order(self._take_profit_order_id, self.trading_symbol)
-                    self._log(f"[CLOSE] Take Profit cancelado: {self._take_profit_order_id}", level="DEBUG")
-                except Exception as e:
-                    self._log(f"[CLOSE] Erro ao cancelar Take Profit (pode já ter sido executado): {e}", level="DEBUG")
-                finally:
-                    self._take_profit_order_id = None
-                
-            # Determinar lado de fechamento
-            close_side = "sell" if side == "buy" else "buy"
-            current_price = self._preco_atual()
+            # Verificar sinais de venda
+            sell_step = self.check_sell_signals(analysis)
+            if sell_step is not None:
+                self.execute_sell(sell_step, analysis)
             
-            # Fechar posição
-            self._subconta_dex.create_order(self.trading_symbol, "market", close_side, amount, current_price, {"reduceOnly": True})
-            
-            # Limpar estado
-            self._position_entry_time = None
-            self._last_pos_side = None
-            self._entry_price = None  # Limpar preço de entrada
-            
-            # Resetar flags de órfão
-            self._orphan_position_detected = False
-            self._orphan_last_ratio = None
-            
-            # Notificar
-            self._notify_trade("close", side, current_price, amount, "Fechamento", include_hl=False)
-            self._log(f"🚪 POSIÇÃO FECHADA: {side.upper()} {amount:.2f} @ {current_price:.6f}", level="INFO")
-            
-            # INVERSÃO AUTOMÁTICA CONDICIONAL (Opção B)
-            if open_reverse and self.cfg.ENABLE_AUTO_REVERSE:
-                self._log(f"🔍 Avaliando se deve inverter posição...", level="DEBUG")
-                
-                # Verificar se as condições para inversão são satisfeitas
-                should_reverse = False
-                reverse_reasons = []
-                block_reasons = []
-                
-                try:
-                    # Condição 1: Tendência clara (EMA7 distante da EMA21)
-                    if len(df) >= max(self.cfg.EMA_FAST_PERIOD, self.cfg.EMA_SLOW_PERIOD):
-                        ema_fast = df['valor_fechamento'].ewm(span=self.cfg.EMA_FAST_PERIOD, adjust=False).mean().iloc[-1]
-                        ema_slow = df['valor_fechamento'].ewm(span=self.cfg.EMA_SLOW_PERIOD, adjust=False).mean().iloc[-1]
-                        ema_distance_pct = abs((ema_fast - ema_slow) / ema_slow)
-                        
-                        if ema_distance_pct >= self.cfg.REVERSE_MIN_EMA_DISTANCE:
-                            reverse_reasons.append(f"Tendência clara: EMA distância {ema_distance_pct*100:.2f}% >= {self.cfg.REVERSE_MIN_EMA_DISTANCE*100:.2f}%")
-                        else:
-                            block_reasons.append(f"Tendência fraca: EMA distância {ema_distance_pct*100:.2f}% < {self.cfg.REVERSE_MIN_EMA_DISTANCE*100:.2f}%")
-                    
-                    # Condição 2: Sinal forte de ratio
-                    if hasattr(self, '_ratio_3_history') and len(self._ratio_3_history) > 0:
-                        current_ratio = self._ratio_3_history[-1]
-                        
-                        # Para inverter de LONG→SHORT: ratio deve estar muito baixo (<0.80)
-                        # Para inverter de SHORT→LONG: ratio deve estar muito alto (>1.20)
-                        if side == "buy":  # Fechou LONG, avaliar SHORT
-                            if current_ratio <= (2.0 - self.cfg.REVERSE_MIN_RATIO_STRENGTH):  # <0.80
-                                reverse_reasons.append(f"Ratio forte SHORT: {current_ratio:.3f} <= {2.0 - self.cfg.REVERSE_MIN_RATIO_STRENGTH:.3f}")
-                            else:
-                                block_reasons.append(f"Ratio fraco SHORT: {current_ratio:.3f} > {2.0 - self.cfg.REVERSE_MIN_RATIO_STRENGTH:.3f}")
-                        else:  # Fechou SHORT, avaliar LONG
-                            if current_ratio >= self.cfg.REVERSE_MIN_RATIO_STRENGTH:  # >1.20
-                                reverse_reasons.append(f"Ratio forte LONG: {current_ratio:.3f} >= {self.cfg.REVERSE_MIN_RATIO_STRENGTH:.3f}")
-                            else:
-                                block_reasons.append(f"Ratio fraco LONG: {current_ratio:.3f} < {self.cfg.REVERSE_MIN_RATIO_STRENGTH:.3f}")
-                    
-                    # Condição 3: Volume acima da média
-                    if 'volume' in df.columns and len(df) >= 20:
-                        current_volume = df['volume'].iloc[-1]
-                        avg_volume = df['volume'].tail(20).mean()
-                        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
-                        
-                        if volume_ratio >= self.cfg.REVERSE_MIN_VOLUME_RATIO:
-                            reverse_reasons.append(f"Volume forte: {volume_ratio:.2f}x >= {self.cfg.REVERSE_MIN_VOLUME_RATIO:.2f}x média")
-                        else:
-                            block_reasons.append(f"Volume fraco: {volume_ratio:.2f}x < {self.cfg.REVERSE_MIN_VOLUME_RATIO:.2f}x média")
-                    
-                    # Decidir se deve inverter (TODAS as condições devem ser satisfeitas)
-                    should_reverse = len(reverse_reasons) >= 3 and len(block_reasons) == 0
-                    
-                except Exception as e:
-                    self._log(f"[REVERSE] Erro avaliando condições: {e}", level="WARN")
-                    should_reverse = False
-                
-                # Executar inversão se aprovado
-                if should_reverse:
-                    self._log(f"✅ INVERSÃO APROVADA:", level="INFO")
-                    for reason in reverse_reasons:
-                        self._log(f"   ✓ {reason}", level="INFO")
-                    
-                    time.sleep(1)  # Pequeno delay para garantir que a posição foi fechada
-                    
-                    # Determinar o lado invertido
-                    reverse_side = "sell" if side == "buy" else "buy"
-                    
-                    # Abrir nova posição no lado oposto
-                    self._log(f"🔄 Abrindo posição INVERTIDA: {reverse_side.upper()}", level="INFO")
-                    self._enter_position(reverse_side, self.cfg.TRADE_SIZE_USD, df)
-                else:
-                    self._log(f"⛔ INVERSÃO BLOQUEADA:", level="INFO")
-                    for reason in block_reasons:
-                        self._log(f"   ✗ {reason}", level="INFO")
-                    self._log(f"   → Aguardando novo sinal de entrada normal", level="INFO")
+            log("✅ Ciclo concluído", "INFO")
             
         except Exception as e:
-            self._log(f"Erro fechando posição: {e}", level="ERROR")
-            
-    def _calculate_stop_price(self, entry_price: float, side: str, leverage: int = None) -> Optional[float]:
-        """
-        Calcula preço do stop loss baseado em 20% de perda do CAPITAL INVESTIDO.
-        
-        Com leverage, a variação de preço necessária é menor:
-        - Leverage 10x: 20% do capital = 2% de variação no preço
-        - Leverage 5x: 20% do capital = 4% de variação no preço
-        
-        Fórmula: variação_preço = STOP_LOSS_PCT / leverage
-        """
-        try:
-            # Usar leverage configurado para o símbolo
-            if leverage is None:
-                leverage = self.cfg.get_leverage(self.symbol)
-            
-            # Calcular variação de preço ajustada pelo leverage
-            # 20% de perda do capital com 10x leverage = 2% de variação no preço
-            price_variation_pct = self.cfg.STOP_LOSS_PCT / leverage
-            
-            if side == "buy":
-                # LONG: stop abaixo (preço cai)
-                stop_price = entry_price * (1 - price_variation_pct)
-                self._log(f"[STOP_CALC] LONG: entry={entry_price:.6f}, leverage={leverage}x, var={price_variation_pct:.1%}, stop={stop_price:.6f}", level="DEBUG")
-                return stop_price
-            else:
-                # SHORT: stop acima (preço sobe)
-                stop_price = entry_price * (1 + price_variation_pct)
-                self._log(f"[STOP_CALC] SHORT: entry={entry_price:.6f}, leverage={leverage}x, var={price_variation_pct:.1%}, stop={stop_price:.6f}", level="DEBUG")
-                return stop_price
-        except Exception as e:
-            self._log(f"Erro calculando stop price: {e}", level="ERROR")
-            return None
+            log(f"❌ Erro no ciclo: {e}", "ERROR")
+            import traceback
+            traceback.print_exc()
 
-    def _norm_side(self, raw: Optional[str]) -> Optional[str]:
-        """Normaliza lado da posição"""
-        if raw is None:
-            return None
-        raw_clean = str(raw).lower().strip()
-        if raw_clean in ["buy", "long"]:
-            return "buy"
-        elif raw_clean in ["sell", "short"]:
-            return "sell"
-        else:
-            return raw_clean
-
-    def _notify_trade(self, kind: str, side: Optional[str], price: Optional[float], amount: Optional[float], note: str = "", include_hl: bool = False):
-        """Notifica trade com Discord e log local"""
-        side_str = side or "?"
-        price_str = f"{price:.6f}" if price else "?"
-        amount_str = f"{amount:.2f}" if amount else "?"
-        
-        msg = f"🔔 {kind.upper()}: {side_str} {amount_str} @ {price_str}"
-        if note:
-            msg += f" ({note})"
-            
-        # Log local
-        self._log(msg, level="INFO")
-        
-        # Notificação Discord
-        if price and amount and side:
-            try:
-                if kind.lower() == "open":
-                    discord_notifier.notify_trade_open(
-                        symbol=self.symbol,
-                        side=side,
-                        price=price,
-                        amount=amount,
-                        reason=note
-                    )
-                elif kind.lower() == "close":
-                    # Tentar calcular P&L se possível
-                    pnl_pct = None
-                    if hasattr(self, '_entry_price') and self._entry_price:
-                        if side.lower() == "buy":
-                            pnl_pct = (price - self._entry_price) / self._entry_price * 100
-                        else:
-                            pnl_pct = (self._entry_price - price) / self._entry_price * 100
-                    
-                    discord_notifier.notify_trade_close(
-                        symbol=self.symbol,
-                        side=side,
-                        price=price,
-                        amount=amount,
-                        pnl_pct=pnl_pct,
-                        reason=note
-                    )
-            except Exception as e:
-                self._log(f"Erro enviando notificação Discord: {e}", level="WARN")
-
-    def _preco_atual(self) -> float:
-        """Obtém preço atual do ativo"""
-        try:
-            cache_key = f"ticker_{self.trading_symbol}"
-            t = _get_cached_api_call(cache_key, self._subconta_dex.fetch_ticker, self.trading_symbol)
-            return float(t.get('last', 0))
-        except Exception as e:
-            self._log(f"Erro obtendo preço atual: {e}", level="WARN")
-            return 0.0
-    
-    def _round_amount(self, amount: float) -> float:
-        """Arredonda quantidade para precisão correta da exchange"""
-        try:
-            return float(self._subconta_dex.amount_to_precision(self.trading_symbol, amount))
-        except Exception as e:
-            self._log(f"Aviso: não foi possível arredondar amount, usando valor bruto: {e}", level="DEBUG")
-            return float(amount)
-
-    def _posicao_aberta(self, force_fresh: bool = False) -> Optional[Dict[str, Any]]:
-        """Verifica se há posição aberta"""
-        try:
-            cache_key = f"positions_{self.trading_symbol}"
-            
-            if force_fresh:
-                pos = self._subconta_dex.fetch_positions([self.trading_symbol])  # Opera na subconta
-            else:
-                pos = _get_cached_api_call(cache_key, self._subconta_dex.fetch_positions, [self.trading_symbol])  # Opera na subconta
-            
-            if pos and len(pos) > 0:
-                return pos[0]  # Retorna primeira posição
-            return None
-        except Exception as e:
-            # Verificar se é erro de autenticação, credenciais ou mercado não disponível
-            error_msg = str(e).lower()
-            if any(x in error_msg for x in ['user parameter', 'wallet address', 'authentication', 'credential']):
-                # Erro de credenciais - log discreto DEBUG
-                self._log(f"💤 Sem credenciais para verificar posições", level="DEBUG")
-            elif 'does not have market symbol' in error_msg:
-                # Mercado não disponível - log discreto DEBUG  
-                self._log(f"💤 Mercado {self.trading_symbol} não listado na exchange", level="DEBUG")
-            else:
-                # Outros erros realmente problemáticos - manter WARN
-                self._log(f"Erro verificando posição: {e}", level="WARN")
-            return None
-
-# ===== FUNÇÃO PRINCIPAL DE BUILD DE DADOS =====
-def build_df(symbol: str = "BTCUSDT", tf: str = "15m", limit: int = 260, source: str = "auto") -> pd.DataFrame:
-    """Constrói DataFrame com dados de mercado (simplificado)"""
-    try:
-        _log_global("DATA", f"Iniciando build_df symbol={symbol} tf={tf} alvo={limit}", "INFO")
-        
-        # Usar Binance via ccxt como fonte principal
-        exchange = ccxt.binance({
-            'sandbox': False,
-            'options': {'defaultType': 'spot'}
-        })
-        
-        # Buscar dados
-        ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=limit)
-        
-        if not ohlcv:
-            raise MarketDataUnavailable(f"Nenhum dado disponível para {symbol}")
-        
-        # Converter para DataFrame
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-        
-        # Renomear colunas para compatibilidade
-        df = df.rename(columns={
-            'open': 'valor_abertura',
-            'high': 'valor_alta', 
-            'low': 'valor_baixa',
-            'close': 'valor_fechamento',
-            'volume': 'volume'
-        })
-        
-        _log_global("DATA", f"Total candles retornados: {len(df)}", "INFO")
-        return df
-        
-    except Exception as e:
-        _log_global("DATA", f"Erro no build_df: {e}", "ERROR")
-        raise MarketDataUnavailable(f"Erro obtendo dados para {symbol}: {e}")
-
-# ===== FUNÇÃO PRINCIPAL DO SISTEMA =====
+# ===== MAIN =====
 def main():
-    """Função principal do sistema de trading simplificado"""
-    # Configurar arquivo de log
+    """Função principal"""
     setup_log_file()
     
-    print("🚀 SISTEMA DE TRADING SIMPLIFICADO - SimpleRatioStrategy")
-    print("📊 Assets: PUMPUSDT, AVNTUSDT (dados) → PUMP/USDC:USDC, AVNT/USDC:USDC (trading)")
-    print("💰 Trade size: $3 USD, Leverage: 10x (PUMP) / 5x (AVNT), Stop: 20%")
-    print("⚡ Estratégia: Entradas/saídas por inversão de ratio avg_buy/sell")
-    print("🔄 Execução contínua a cada 20 segundos")
+    log("=" * 80, "INFO")
+    log("🚀 INICIANDO SISTEMA DE TRADING DCA - SOL LONG ONLY", "INFO")
+    log("=" * 80, "INFO")
     
-    # Verificar variáveis de ambiente
-    wallet_address = os.getenv("WALLET_ADDRESS")
-    private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-    subaccount = os.getenv("HYPERLIQUID_SUBACCOUNT")
-    
-    print("\n🔧 CONFIGURAÇÃO DE AMBIENTE:")
-    print(f"   📋 Wallet Address: {'✅ Configurado' if wallet_address else '❌ Não configurado'}")
-    print(f"   🔐 Private Key: {'✅ Configurado' if private_key else '❌ Não configurado'}")
-    print(f"   🏦 Subaccount: {'✅ ' + subaccount if subaccount else '❌ Não configurado'}")
-    
-    if not wallet_address or not private_key:
-        print("\n⚠️  MODO DEMONSTRAÇÃO: Algumas credenciais não estão configuradas")
-        print("   Para operação completa, configure as variáveis de ambiente:")
-        print("   - WALLET_ADDRESS")
-        print("   - HYPERLIQUID_PRIVATE_KEY")
-        print("   - HYPERLIQUID_SUBACCOUNT (opcional)")
-    print()
+    # Carregar variáveis de ambiente
+    try:
+        from dotenv import load_dotenv
+        # Tentar carregar .env.dca primeiro, senão .env padrão
+        if os.path.exists('.env.dca'):
+            load_dotenv('.env.dca')
+            log("✅ Carregado .env.dca", "INFO")
+        else:
+            load_dotenv()
+            log("✅ Carregado .env", "INFO")
+    except ImportError:
+        log("⚠️ python-dotenv não instalado, usando variáveis de ambiente do sistema", "WARN")
     
     # Configuração
-    cfg = SimpleRatioConfig()
+    cfg = DCAConfig()
     
-    # Usar configuração baseada em variáveis de ambiente
-    wallet_config = get_wallet_config()
-    dex = wallet_config.get_dex_instance()
+    log(f"⚙️  Configuração:", "INFO")
+    log(f"   Asset: {cfg.SYMBOL} ({cfg.LEVERAGE}x leverage)", "INFO")
+    log(f"   Histórico: {cfg.HISTORICAL_DAYS} dias ({cfg.TIMEFRAME})", "INFO")
+    log(f"   Degraus de compra: {cfg.BUY_STEPS}", "INFO")
+    log(f"   Degraus de venda: {cfg.SELL_STEPS}", "INFO")
+    log(f"   Cooldown compra: {cfg.BUY_COOLDOWN_DAYS} dias", "INFO")
+    log(f"   Cooldown venda: {cfg.SELL_COOLDOWN_DAYS} dias", "INFO")
     
-    print(f"🏦 Usando carteira: {wallet_config.name}")
-    print()
+    # Criar estratégia
+    strategy = DCAStrategy(cfg)
     
-    # Criar estratégias uma vez só (para preservar histórico)
-    print("🎯 Inicializando estratégias...")
-    strategies = {}
-    for symbol in cfg.ASSETS:
-        strategies[symbol] = SimpleRatioStrategy(dex, symbol, cfg, wallet_config=wallet_config)
-        print(f"    ✅ Estratégia criada para {symbol}")
-    print()
+    # Loop principal
+    log("🔁 Entrando no loop principal (Ctrl+C para parar)", "INFO")
     
-    cycle_count = 0
+    # Intervalo de verificação (a cada 60 segundos para monitoramento rápido)
+    check_interval = 60  # 60 segundos
     
-    # Loop contínuo
-    while True:
-        try:
-            cycle_count += 1
-            print(f"\n🔄 CICLO #{cycle_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    try:
+        while True:
+            strategy.run_cycle()
             
-            # Loop principal para cada asset
-            for symbol in cfg.ASSETS:
-                try:
-                    print(f"🔍 Processando {symbol}...")
-                    
-                    # Buscar dados com timeout de debug
-                    start_time = time.time()
-                    print(f"    📊 Buscando dados de {symbol}...")
-                    df = build_df(symbol, "15m", 100)
-                    data_time = time.time() - start_time
-                    print(f"    ✅ Dados obtidos em {data_time:.2f}s ({len(df)} candles)")
-                    
-                    # Usar estratégia existente (preservando histórico)
-                    strategy = strategies[symbol]
-                    
-                    # Executar step
-                    print(f"    🚀 Executando step...")
-                    step_start = time.time()
-                    strategy.step(df)
-                    step_time = time.time() - step_start
-                    print(f"    ✅ Step executado em {step_time:.2f}s")
-                    
-                except Exception as e:
-                    _log_global("MAIN", f"Erro processando {symbol}: {e}", "ERROR")
-                    print(f"    ❌ Erro: {e}")
+            log(f"⏰ Próximo ciclo em {check_interval} segundos...", "INFO")
+            time.sleep(check_interval)
             
-            print("✅ Ciclo completo!")
-            print(f"⏰ Aguardando 20 segundos para próximo ciclo...")
-            time.sleep(20)
-            
-        except KeyboardInterrupt:
-            print("\n🛑 Trading interrompido pelo usuário!")
-            break
-        except Exception as e:
-            _log_global("MAIN", f"Erro no loop principal: {e}", "ERROR")
-            print(f"❌ Erro no ciclo, aguardando 20s antes de tentar novamente...")
-            time.sleep(20)
+    except KeyboardInterrupt:
+        log("🛑 Sistema interrompido pelo usuário", "INFO")
+    except Exception as e:
+        log(f"❌ Erro fatal: {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+    
+    log("👋 Sistema encerrado", "INFO")
 
 if __name__ == "__main__":
     main()
-
