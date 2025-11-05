@@ -3104,6 +3104,127 @@ WALLET_CONFIGS = [
 # Cache global para instâncias DEX
 _dex_instances = {}
 
+def _check_and_create_tp_sl_for_wallet(wallet_config: WalletConfig, symbol: str, position_info: Dict, sl_pct: float = 0.40, tp_pct: float = 0.10):
+    """
+    Verifica se existem ordens de TP e SL para uma carteira específica e cria se não existirem.
+    
+    Args:
+        wallet_config: Configuração da carteira
+        symbol: Símbolo do ativo (ex: SOL/USDC:USDC)
+        position_info: Informações da posição (side, entry_price, amount)
+        sl_pct: Percentual de stop loss (0.40 = 40%)
+        tp_pct: Percentual de take profit (0.10 = 10%)
+    """
+    try:
+        # Inicializar DEX para esta carteira
+        wallet_dex = _init_dex_if_needed(wallet_config)
+        
+        # Buscar ordens abertas
+        open_orders = wallet_dex.fetch_open_orders(symbol)
+        
+        # Verificar se já existem TP e SL
+        has_sl = any(o.get('type') == 'stop_market' and o.get('reduceOnly') for o in open_orders)
+        has_tp = any(o.get('type') == 'limit' and o.get('reduceOnly') for o in open_orders)
+        
+        side = position_info.get('side', 'long')
+        entry_price = position_info.get('entry_price', 0)
+        amount = position_info.get('amount', 0)
+        
+        if amount == 0 or entry_price == 0:
+            _log_global("TP_SL_CHECK", f"[{wallet_config.name}] Sem posição ativa para {symbol}", level="DEBUG")
+            return
+        
+        # Calcular preços de proteção
+        if side == 'long':
+            sl_price = entry_price * (1 - sl_pct)  # 40% abaixo
+            tp_price = entry_price * (1 + tp_pct)  # 10% acima
+            sl_side = 'sell'
+            tp_side = 'sell'
+        else:  # short
+            sl_price = entry_price * (1 + sl_pct)  # 40% acima
+            tp_price = entry_price * (1 - tp_pct)  # 10% abaixo
+            sl_side = 'buy'
+            tp_side = 'buy'
+        
+        # Criar SL se não existir
+        if not has_sl:
+            try:
+                sl_params = {
+                    "reduceOnly": True,
+                    "triggerPrice": sl_price,
+                    "trigger": "mark"
+                }
+                stop_order = wallet_dex.create_order(
+                    symbol,
+                    "stop_market",
+                    sl_side,
+                    amount,
+                    sl_price,
+                    sl_params
+                )
+                _log_global("TP_SL_CHECK", f"[{wallet_config.name}] ✅ SL criado: {stop_order.get('id', 'N/A')} @ {sl_price:.6f}", level="INFO")
+            except Exception as e:
+                _log_global("TP_SL_CHECK", f"[{wallet_config.name}] ❌ Erro criando SL: {e}", level="ERROR")
+        else:
+            _log_global("TP_SL_CHECK", f"[{wallet_config.name}] ✓ SL já existe", level="DEBUG")
+        
+        # Criar TP se não existir
+        if not has_tp:
+            try:
+                tp_order = wallet_dex.create_order(
+                    symbol,
+                    "limit",
+                    tp_side,
+                    amount,
+                    tp_price,
+                    {"reduceOnly": True, "postOnly": False}
+                )
+                _log_global("TP_SL_CHECK", f"[{wallet_config.name}] ✅ TP criado: {tp_order.get('id', 'N/A')} @ {tp_price:.6f}", level="INFO")
+            except Exception as e:
+                _log_global("TP_SL_CHECK", f"[{wallet_config.name}] ❌ Erro criando TP: {e}", level="ERROR")
+        else:
+            _log_global("TP_SL_CHECK", f"[{wallet_config.name}] ✓ TP já existe", level="DEBUG")
+            
+    except Exception as e:
+        _log_global("TP_SL_CHECK", f"[{wallet_config.name}] ❌ Erro geral na verificação de TP/SL: {e}", level="ERROR")
+
+def _check_and_create_tp_sl_all_wallets(symbol: str):
+    """
+    Verifica e cria TP/SL para todas as carteiras configuradas que tenham posições abertas.
+    
+    Args:
+        symbol: Símbolo do ativo (ex: SOL/USDC:USDC)
+    """
+    _log_global("TP_SL_CHECK", f"🔍 Verificando TP/SL para todas as carteiras em {symbol}", level="INFO")
+    
+    for wallet_config in WALLET_CONFIGS:
+        try:
+            # Inicializar DEX para esta carteira
+            wallet_dex = _init_dex_if_needed(wallet_config)
+            
+            # Buscar posição atual
+            positions = wallet_dex.fetch_positions([symbol])
+            
+            for pos in positions:
+                if pos.get('symbol') == symbol:
+                    contracts = float(pos.get('contracts', 0))
+                    if abs(contracts) > 0:
+                        position_info = {
+                            'side': 'long' if contracts > 0 else 'short',
+                            'entry_price': float(pos.get('entryPrice', 0)),
+                            'amount': abs(contracts)
+                        }
+                        
+                        _log_global("TP_SL_CHECK", f"[{wallet_config.name}] Posição encontrada: {contracts:.4f} @ {position_info['entry_price']:.6f}", level="INFO")
+                        
+                        # Verificar e criar TP/SL
+                        _check_and_create_tp_sl_for_wallet(wallet_config, symbol, position_info)
+                    else:
+                        _log_global("TP_SL_CHECK", f"[{wallet_config.name}] Sem posição em {symbol}", level="DEBUG")
+                        
+        except Exception as e:
+            _log_global("TP_SL_CHECK", f"[{wallet_config.name}] ❌ Erro verificando posição: {e}", level="ERROR")
+
 def _init_dex_if_needed(wallet_config: WalletConfig = None, dex_timeout: int = 45000):
     """Inicializa conexão DEX para uma carteira específica"""
     # Se não especificar carteira, usar a principal (compatibilidade)
@@ -7243,7 +7364,16 @@ if __name__ == "__main__":
                 except Exception as e:
                     _log_global("BALANCE", f"⚠️ Erro na verificação de saldos: {e}", level="WARN")
 
-                # 🚀 OTIMIZAÇÃO: BUSCAR DADOS EM PARALELO
+                # �️ VERIFICAR E CRIAR TP/SL PARA TODAS AS CARTEIRAS
+                try:
+                    _log_global("TP_SL_SYSTEM", "🛡️ Verificando TP/SL em todas as carteiras...")
+                    for asset in ASSET_SETUPS:
+                        _check_and_create_tp_sl_all_wallets(asset.hl_symbol)
+                    _log_global("TP_SL_SYSTEM", "✅ Verificação de TP/SL completa")
+                except Exception as e:
+                    _log_global("TP_SL_SYSTEM", f"⚠️ Erro na verificação de TP/SL: {e}", level="WARN")
+
+                # �🚀 OTIMIZAÇÃO: BUSCAR DADOS EM PARALELO
                 _log_global("ENGINE", "🚀 Iniciando coleta paralela de dados...")
                 batch_start = _time.time()
                 
