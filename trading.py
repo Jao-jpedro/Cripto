@@ -84,6 +84,25 @@ def _hl_get_user_state(wallet: str):
     data = _http_post_json(_HL_INFO_URL, {"type": "clearinghouseState", "user": wallet})
     return data
 
+def _hl_get_user_fills(wallet: str, limit: int = 100):
+    """
+    Busca histórico de trades (fills) do usuário via API Hyperliquid.
+    Retorna lista de fills ordenados por timestamp (mais recente primeiro).
+    """
+    if not wallet:
+        return []
+    
+    data = _http_post_json(_HL_INFO_URL, {
+        "type": "userFills",
+        "user": wallet
+    })
+    
+    if not data or not isinstance(data, list):
+        return []
+    
+    # Limitar quantidade de fills retornados
+    return data[:limit]
+
 # ===== LOGGING =====
 _LOG_FILE = None
 
@@ -203,9 +222,37 @@ class DCAConfig:
 class StateManager:
     """Gerencia o estado da estratégia (últimas operações, cooldowns, etc)"""
     
-    def __init__(self, state_file: str = "dca_state.json"):
+    def __init__(self, state_file: str = "dca_state.json", exchange=None):
         self.state_file = state_file
         self.state = self.load_state()
+        self.exchange = exchange
+        
+        # Auto-reconstruir estado se necessário
+        if exchange and self.needs_reconstruction():
+            log("⚠️ Detectado estado inconsistente - iniciando reconstrução...", "WARN")
+            self.reconstruct_from_hyperliquid(exchange)
+    
+    def needs_reconstruction(self) -> bool:
+        """Verifica se precisa reconstruir estado a partir da API"""
+        try:
+            if not self.exchange:
+                return False
+            
+            # Buscar posição atual
+            position = self.exchange.get_position()
+            
+            # Se tem posição aberta mas sem entries no estado, precisa reconstruir
+            if position and abs(float(position.get("contracts", 0))) > 0:
+                has_entries = len(self.state.get("position_entries", [])) > 0
+                if not has_entries:
+                    log(f"🔍 Posição detectada ({abs(float(position.get('contracts', 0))):.4f} {position.get('symbol', 'SOL')}) mas estado vazio", "WARN")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            log(f"Erro verificando necessidade de reconstrução: {e}", "DEBUG")
+            return False
     
     def load_state(self) -> dict:
         """Carrega estado do arquivo JSON"""
@@ -224,6 +271,118 @@ class StateManager:
             "last_sell_step": None,  # Último degrau de venda executado
             "position_entries": [],  # Lista de entradas com preço e quantidade
         }
+    
+    def reconstruct_from_hyperliquid(self, exchange):
+        """
+        Reconstrói o estado a partir do histórico de trades da Hyperliquid.
+        Chamado quando detecta posição aberta mas estado vazio.
+        """
+        try:
+            log("🔍 Reconstruindo estado do histórico Hyperliquid...", "INFO")
+            
+            # Buscar fills recentes da Hyperliquid
+            vault_address = os.getenv("HYPERLIQUID_SUBACCOUNT")
+            if not vault_address:
+                log("❌ HYPERLIQUID_SUBACCOUNT não configurado", "ERROR")
+                return False
+            
+            # Chamar a função helper global
+            fills = _hl_get_user_fills(vault_address, limit=100)
+            
+            if not fills:
+                log("❌ Nenhum fill encontrado no histórico", "WARN")
+                return False
+            
+            log(f"📊 Encontrados {len(fills)} fills no histórico", "INFO")
+            
+            # Reconstruir position_entries a partir dos fills de compra (Open Long)
+            entries = []
+            last_buy_time = None
+            last_buy_step = None
+            last_sell_time = None
+            last_sell_step = None
+            
+            # Processar do mais antigo para o mais recente
+            for fill in reversed(fills):
+                try:
+                    coin = fill.get("coin", "")
+                    direction = fill.get("dir", "")
+                    px = float(fill.get("px", 0))
+                    sz = float(fill.get("sz", 0))
+                    time_ms = int(fill.get("time", 0))
+                    
+                    # Filtrar apenas SOL
+                    if coin != "SOL":
+                        continue
+                    
+                    # Converter timestamp
+                    timestamp = datetime.fromtimestamp(time_ms / 1000.0)
+                    
+                    # Detectar COMPRAS: "Open Long" ou "Open Short" (que seria fechar uma short anterior)
+                    if "Open Long" in direction or direction == "Open Long":
+                        # É uma compra
+                        entries.append({
+                            "price": px,
+                            "amount": sz,
+                            "timestamp": timestamp.isoformat()
+                        })
+                        last_buy_time = timestamp
+                        log(f"   🟢 Compra: {sz:.4f} SOL @ ${px:.4f} em {timestamp.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
+                    
+                    # Detectar VENDAS: "Close Long" (fechar posição long) ou "Open Short" (vender a descoberto)
+                    elif "Close Long" in direction or direction == "Close Long":
+                        # É uma venda (fechando long)
+                        last_sell_time = timestamp
+                        
+                        # Remover proporcionalmente dos entries (FIFO - first in, first out)
+                        remaining_to_sell = sz
+                        i = 0
+                        while i < len(entries) and remaining_to_sell > 0:
+                            if entries[i]["amount"] <= remaining_to_sell:
+                                # Remove entrada completamente
+                                remaining_to_sell -= entries[i]["amount"]
+                                entries.pop(i)
+                            else:
+                                # Remove parcialmente
+                                entries[i]["amount"] -= remaining_to_sell
+                                remaining_to_sell = 0
+                                i += 1
+                        
+                        log(f"   🔴 Venda: {sz:.4f} SOL @ ${px:.4f} em {timestamp.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
+                        
+                except Exception as e:
+                    log(f"Erro processando fill: {e}", "DEBUG")
+                    continue
+            
+            # Atualizar estado
+            if entries:
+                self.state["position_entries"] = entries
+                avg_price = sum(e["price"] * e["amount"] for e in entries) / sum(e["amount"] for e in entries)
+                total_amount = sum(e["amount"] for e in entries)
+                log(f"✅ Reconstruído: {len(entries)} entradas, {total_amount:.4f} SOL @ preço médio ${avg_price:.4f}", "INFO")
+            
+            if last_buy_time:
+                self.state["last_buy_timestamp"] = last_buy_time.isoformat()
+                # Tentar inferir o degrau de compra baseado no % abaixo do máximo
+                if last_buy_step is not None:
+                    self.state["last_buy_step"] = last_buy_step
+                log(f"✅ Última compra: {last_buy_time.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
+                
+            if last_sell_time:
+                self.state["last_sell_timestamp"] = last_sell_time.isoformat()
+                # Tentar inferir o degrau de venda baseado no ganho obtido
+                if last_sell_step is not None:
+                    self.state["last_sell_step"] = last_sell_step
+                log(f"✅ Última venda: {last_sell_time.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
+            
+            self.save_state()
+            return True
+            
+        except Exception as e:
+            log(f"❌ Erro reconstruindo estado: {e}", "ERROR")
+            import traceback
+            log(traceback.format_exc(), "DEBUG")
+            return False
     
     def save_state(self):
         """Salva estado no arquivo JSON"""
@@ -305,9 +464,24 @@ class StateManager:
         self.save_state()
     
     def get_average_entry_price(self) -> float:
-        """Calcula preço médio de entrada baseado nas entradas registradas"""
+        """
+        Calcula preço médio de entrada baseado nas entradas registradas.
+        Se não houver entries mas houver posição, tenta buscar da API como fallback.
+        """
         entries = self.state["position_entries"]
         if not entries:
+            # Fallback: tentar buscar da posição atual se exchange está disponível
+            if self.exchange:
+                try:
+                    position = self.exchange.get_position()
+                    if position and position.get("size", 0) > 0:
+                        entry_price = position.get("entryPrice", 0)
+                        if entry_price > 0:
+                            log(f"⚠️ Usando entry_price da posição como fallback: ${entry_price:.4f}", "WARN")
+                            return float(entry_price)
+                except Exception as e:
+                    log(f"Erro buscando entry_price da posição: {e}", "DEBUG")
+            
             return 0.0
         
         total_value = sum(e["price"] * e["amount"] for e in entries)
@@ -573,8 +747,9 @@ class DCAStrategy:
     
     def __init__(self, cfg: DCAConfig):
         self.cfg = cfg
-        self.state = StateManager()
         self.exchange = ExchangeConnector(cfg)
+        # StateManager precisa do exchange para reconstruir estado
+        self.state = StateManager(exchange=self.exchange)
     
     def analyze_market(self) -> Dict[str, Any]:
         """Analisa o mercado e retorna informações"""
