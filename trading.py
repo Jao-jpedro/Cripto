@@ -211,11 +211,11 @@ class DCAConfig:
         if self.SELL_STEPS is None:
             # (% de ganho, % da posição a vender)
             self.SELL_STEPS = [
-                (10, 20),  # +10% de ganho → vende 20% da posição
-                (20, 20),  # +20% de ganho → vende 20% da posição
-                (30, 20),  # +30% de ganho → vende 20% da posição
-                (40, 20),  # +40% de ganho → vende 20% da posição
-                (50, 20),  # +50% de ganho → vende 20% da posição
+                (10, 30),  # +10% de ganho → vende 30% da posição
+                (20, 30),  # +20% de ganho → vende 30% da posição
+                (30, 30),  # +30% de ganho → vende 30% da posição
+                (40, 30),  # +40% de ganho → vende 30% da posição
+                (50, 30),  # +50% de ganho → vende 30% da posição
             ]
 
 # ===== GERENCIADOR DE ESTADO =====
@@ -751,6 +751,43 @@ class DCAStrategy:
         # StateManager precisa do exchange para reconstruir estado
         self.state = StateManager(exchange=self.exchange)
     
+    def calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Calcula o RSI (Relative Strength Index) do DataFrame"""
+        try:
+            if len(df) < period + 1:
+                log("⚠️ Dados insuficientes para calcular RSI", "WARN")
+                return 50.0  # Valor neutro como fallback
+            
+            # Calcular variações de preço
+            delta = df['close'].diff()
+            
+            # Separar ganhos e perdas
+            gain = delta.where(delta > 0, 0)
+            loss = -delta.where(delta < 0, 0)
+            
+            # Calcular médias móveis exponenciais
+            avg_gain = gain.rolling(window=period).mean()
+            avg_loss = loss.rolling(window=period).mean()
+            
+            # Calcular RS (Relative Strength)
+            rs = avg_gain / avg_loss
+            
+            # Calcular RSI
+            rsi = 100 - (100 / (1 + rs))
+            
+            # Retornar último valor
+            rsi_value = rsi.iloc[-1]
+            
+            # Tratar casos especiais (NaN, inf)
+            if pd.isna(rsi_value) or np.isinf(rsi_value):
+                return 50.0
+            
+            return float(rsi_value)
+            
+        except Exception as e:
+            log(f"⚠️ Erro calculando RSI: {e}", "WARN")
+            return 50.0  # Valor neutro como fallback
+    
     def analyze_market(self) -> Dict[str, Any]:
         """Analisa o mercado e retorna informações"""
         # Buscar dados históricos
@@ -759,6 +796,9 @@ class DCAStrategy:
         if df.empty:
             log("❌ Sem dados históricos disponíveis", "ERROR")
             return {}
+        
+        # Calcular RSI
+        rsi = self.calculate_rsi(df)
         
         # Calcular máximo dos últimos 30 dias
         max_price_30d = df['high'].max()
@@ -783,6 +823,7 @@ class DCAStrategy:
             "current_price": current_price,
             "max_price_30d": max_price_30d,
             "pct_below_max": pct_below_max,
+            "rsi": rsi,  # Adicionar RSI à análise
             "position": position,
             "balance": balance,
             "has_position": position is not None,
@@ -841,13 +882,19 @@ class DCAStrategy:
                 log(f"   ✅ Acima de todos os degraus de venda!", "INFO")
         
         log(f"📊 Análise: Preço=${current_price:.4f} | Max 30d=${max_price_30d:.4f} | "
-            f"Abaixo do max={pct_below_max:.2f}% | Posição={'SIM' if position else 'NÃO'}", "INFO")
+            f"Abaixo do max={pct_below_max:.2f}% | RSI={rsi:.1f} | Posição={'SIM' if position else 'NÃO'}", "INFO")
         
         return analysis
     
     def check_buy_signals(self, analysis: Dict) -> Optional[int]:
         """Verifica se deve comprar e retorna o degrau"""
         pct_below_max = analysis.get("pct_below_max", 0)
+        rsi = analysis.get("rsi", 50.0)
+        
+        # FILTRO RSI: Só comprar se RSI < 25 (sobrevendido)
+        if rsi >= 25:
+            log(f"⛔ RSI muito alto para compra: {rsi:.1f} >= 25 (aguardando sobrevenda)", "DEBUG")
+            return None
         
         # Verificar cada degrau de compra (do maior para o menor threshold)
         # Precisamos manter o índice original para identificar corretamente o degrau
@@ -857,7 +904,7 @@ class DCAStrategy:
             if pct_below_max >= threshold:
                 # Verificar se pode comprar (cooldown)
                 if self.state.can_buy(step_idx, self.cfg.BUY_COOLDOWN_DAYS):
-                    log(f"🚨 SINAL DE COMPRA: Degrau {step_idx} ativado ({pct_below_max:.2f}% >= {threshold}%) → {capital_pct}% do capital", "INFO")
+                    log(f"🚨 SINAL DE COMPRA: Degrau {step_idx} ativado ({pct_below_max:.2f}% >= {threshold}%) | RSI={rsi:.1f} < 25 ✅ → {capital_pct}% do capital", "INFO")
                     return step_idx
                 else:
                     log(f"⏳ Degrau {step_idx} ativado mas em cooldown", "DEBUG")
