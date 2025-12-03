@@ -180,7 +180,8 @@ class DCAConfig:
     
     # Dados históricos
     HISTORICAL_DAYS: int = 30  # Últimos 30 dias
-    TIMEFRAME: str = "1d"       # Gráfico de 1 dia
+    TIMEFRAME_DAILY: str = "1d"   # Gráfico de 1 dia (para máximos)
+    TIMEFRAME_RSI: str = "1h"     # Gráfico de 1 hora (para RSI)
     
     # Degraus de COMPRA (% abaixo do máximo 30 dias)
     # Formato: (% abaixo do máximo, % do capital disponível a investir)
@@ -562,25 +563,38 @@ class ExchangeConnector:
         
         log("✅ Conexões estabelecidas: Binance (dados) + Hyperliquid (execução)", "INFO")
     
-    def fetch_historical_data(self, days: int) -> pd.DataFrame:
+    def fetch_historical_data(self, days: int, timeframe: str = None) -> pd.DataFrame:
         """Busca dados históricos da Binance"""
         try:
             # Binance usa SOLUSDT para futuros
             symbol_binance = "SOL/USDT:USDT"
             
+            # Usar timeframe específico ou default (diário)
+            tf = timeframe if timeframe else self.cfg.TIMEFRAME_DAILY
+            
+            # Calcular limite de candles baseado no timeframe
+            if tf == "1h":
+                limit = days * 24 + 20  # dias * 24 horas + margem
+            elif tf == "4h":
+                limit = days * 6 + 10   # dias * 6 candles + margem
+            elif tf == "1d":
+                limit = days + 5        # dias + margem
+            else:
+                limit = days + 5
+            
             since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
             
             ohlcv = self.binance.fetch_ohlcv(
                 symbol_binance,
-                timeframe=self.cfg.TIMEFRAME,
+                timeframe=tf,
                 since=since,
-                limit=days + 5  # Alguns dias extras para garantir
+                limit=limit
             )
             
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            log(f"📊 Dados históricos: {len(df)} candles, {df['timestamp'].min()} até {df['timestamp'].max()}", "INFO")
+            log(f"📊 Dados históricos ({tf}): {len(df)} candles, {df['timestamp'].min()} até {df['timestamp'].max()}", "INFO")
             
             return df
             
@@ -790,18 +804,31 @@ class DCAStrategy:
     
     def analyze_market(self) -> Dict[str, Any]:
         """Analisa o mercado e retorna informações"""
-        # Buscar dados históricos
-        df = self.exchange.fetch_historical_data(self.cfg.HISTORICAL_DAYS)
+        # Buscar dados históricos DIÁRIOS (para máximos)
+        df_daily = self.exchange.fetch_historical_data(
+            self.cfg.HISTORICAL_DAYS, 
+            timeframe=self.cfg.TIMEFRAME_DAILY
+        )
         
-        if df.empty:
-            log("❌ Sem dados históricos disponíveis", "ERROR")
+        if df_daily.empty:
+            log("❌ Sem dados históricos diários disponíveis", "ERROR")
             return {}
         
-        # Calcular RSI
-        rsi = self.calculate_rsi(df)
+        # Buscar dados históricos HORÁRIOS (para RSI)
+        df_hourly = self.exchange.fetch_historical_data(
+            self.cfg.HISTORICAL_DAYS,
+            timeframe=self.cfg.TIMEFRAME_RSI
+        )
         
-        # Calcular máximo dos últimos 30 dias
-        max_price_30d = df['high'].max()
+        if df_hourly.empty:
+            log("❌ Sem dados históricos horários disponíveis", "ERROR")
+            return {}
+        
+        # Calcular RSI do timeframe horário (mais sensível)
+        rsi = self.calculate_rsi(df_hourly)
+        
+        # Calcular máximo dos últimos 30 dias (timeframe diário)
+        max_price_30d = df_daily['high'].max()
         
         # Preço atual
         current_price = self.exchange.get_current_price()
@@ -882,7 +909,7 @@ class DCAStrategy:
                 log(f"   ✅ Acima de todos os degraus de venda!", "INFO")
         
         log(f"📊 Análise: Preço=${current_price:.4f} | Max 30d=${max_price_30d:.4f} | "
-            f"Abaixo do max={pct_below_max:.2f}% | RSI={rsi:.1f} | Posição={'SIM' if position else 'NÃO'}", "INFO")
+            f"Abaixo do max={pct_below_max:.2f}% | RSI(1h)={rsi:.1f} | Posição={'SIM' if position else 'NÃO'}", "INFO")
         
         return analysis
     
@@ -1069,7 +1096,9 @@ def main():
     
     log(f"⚙️  Configuração:", "INFO")
     log(f"   Asset: {cfg.SYMBOL} ({cfg.LEVERAGE}x leverage)", "INFO")
-    log(f"   Histórico: {cfg.HISTORICAL_DAYS} dias ({cfg.TIMEFRAME})", "INFO")
+    log(f"   Histórico: {cfg.HISTORICAL_DAYS} dias", "INFO")
+    log(f"   Timeframe máximos: {cfg.TIMEFRAME_DAILY} (diário)", "INFO")
+    log(f"   Timeframe RSI: {cfg.TIMEFRAME_RSI} (horário - mais sensível)", "INFO")
     log(f"   Degraus de compra: {cfg.BUY_STEPS}", "INFO")
     log(f"   Degraus de venda: {cfg.SELL_STEPS}", "INFO")
     log(f"   Cooldown compra: {cfg.BUY_COOLDOWN_DAYS} dias", "INFO")
