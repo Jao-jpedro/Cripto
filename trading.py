@@ -179,44 +179,31 @@ class DCAConfig:
     LEVERAGE: int = 5
     
     # Dados históricos
-    HISTORICAL_DAYS: int = 30  # Últimos 30 dias
-    TIMEFRAME_DAILY: str = "1d"   # Gráfico de 1 dia (para máximos)
-    TIMEFRAME_RSI: str = "1h"     # Gráfico de 1 hora (para RSI)
+    HISTORICAL_DAYS: int = 14  # Últimos 14 dias para RSI
+    TIMEFRAME_RSI: str = "1h"  # Gráfico de 1 hora (para RSI)
+    RSI_PERIOD: int = 14       # Período do RSI
+    RSI_THRESHOLD: float = 25  # RSI < 25 = sobrevendido (compra)
     
-    # Degraus de COMPRA (% abaixo do máximo 30 dias)
-    # Formato: (% abaixo do máximo, % do capital disponível a investir)
-    BUY_STEPS: List[tuple] = None
+    # Estratégia de COMPRA
+    BUY_CAPITAL_PCT: float = 30.0  # Compra sempre 30% do capital disponível
+    BUY_COOLDOWN_HOURS: int = 24   # Cooldown de 1 dia (24h) entre compras
     
-    # Degraus de VENDA (% de ganho da posição)
-    # Formato: (% de ganho, % da posição a vender)
-    SELL_STEPS: List[tuple] = None
-    
-    # Cooldowns
-    BUY_COOLDOWN_DAYS: int = 5   # Cooldown entre compras (ou até próximo degrau)
-    SELL_COOLDOWN_DAYS: int = 3  # Cooldown entre vendas (ou até próximo degrau)
+    # Estratégia de VENDA (Ordens limite automáticas)
+    # Formato: (% de lucro do preço de entrada, % da posição a vender)
+    SELL_ORDERS: List[tuple] = None
     
     # Gestão de capital
     MIN_ORDER_USD: float = 10.0  # Mínimo $10 para ordem Hyperliquid
     
     def __post_init__(self):
-        if self.BUY_STEPS is None:
-            # (% abaixo do max, % do capital)
-            self.BUY_STEPS = [
-                (10, 15),  # -10% do máximo → investe 15% do capital
-                (20, 30),  # -20% do máximo → investe 30% do capital
-                (30, 50),  # -30% do máximo → investe 50% do capital
-                (40, 50),  # -40% do máximo → investe 50% do capital
-                (50, 50),  # -50% do máximo → investe 50% do capital
-            ]
-        
-        if self.SELL_STEPS is None:
-            # (% de ganho, % da posição a vender)
-            self.SELL_STEPS = [
-                (10, 30),  # +10% de ganho → vende 30% da posição
-                (20, 30),  # +20% de ganho → vende 30% da posição
-                (30, 30),  # +30% de ganho → vende 30% da posição
-                (40, 30),  # +40% de ganho → vende 30% da posição
-                (50, 30),  # +50% de ganho → vende 30% da posição
+        if self.SELL_ORDERS is None:
+            # (% de lucro, % da posição a vender)
+            self.SELL_ORDERS = [
+                (10, 20),  # +10% de lucro → vende 20% da posição
+                (20, 20),  # +20% de lucro → vende 20% da posição
+                (30, 20),  # +30% de lucro → vende 20% da posição
+                (45, 20),  # +45% de lucro → vende 20% da posição
+                (60, 20),  # +60% de lucro → vende 20% da posição
             ]
 
 # ===== GERENCIADOR DE ESTADO =====
@@ -393,59 +380,28 @@ class StateManager:
         except Exception as e:
             log(f"Erro salvando estado: {e}", "ERROR")
     
-    def can_buy(self, current_step: int, cooldown_days: int) -> bool:
-        """Verifica se pode comprar (respeita cooldown ou avanço de degrau)"""
+    def can_buy(self, cooldown_hours: int) -> bool:
+        """Verifica se pode comprar (respeita cooldown em horas)"""
         if self.state["last_buy_timestamp"] is None:
             return True
         
         last_timestamp = datetime.fromisoformat(self.state["last_buy_timestamp"])
         time_diff = datetime.now() - last_timestamp
         
-        # Se avançou para um degrau maior (pior), pode comprar imediatamente
-        last_step = self.state["last_buy_step"]
-        if last_step is not None and current_step > last_step:
-            log(f"✅ Avanço de degrau: {last_step} → {current_step}, pode comprar", "INFO")
-            return True
+        # Calcular diferença em horas
+        hours_passed = time_diff.total_seconds() / 3600
         
-        # Senão, respeita cooldown
-        cooldown_passed = time_diff.days >= cooldown_days
+        cooldown_passed = hours_passed >= cooldown_hours
         if not cooldown_passed:
-            log(f"⏳ Cooldown de compra: {time_diff.days}/{cooldown_days} dias", "DEBUG")
+            log(f"⏳ Cooldown de compra: {hours_passed:.1f}/{cooldown_hours}h", "DEBUG")
         return cooldown_passed
     
-    def can_sell(self, current_step: int, cooldown_days: int) -> bool:
-        """Verifica se pode vender (respeita cooldown ou avanço de degrau)"""
-        if self.state["last_sell_timestamp"] is None:
-            return True
-        
-        last_timestamp = datetime.fromisoformat(self.state["last_sell_timestamp"])
-        time_diff = datetime.now() - last_timestamp
-        
-        # Se avançou para um degrau maior (melhor lucro), pode vender imediatamente
-        last_step = self.state["last_sell_step"]
-        if last_step is not None and current_step > last_step:
-            log(f"✅ Avanço de degrau: {last_step} → {current_step}, pode vender", "INFO")
-            return True
-        
-        # Não pode vender no mesmo degrau ou inferior dentro do cooldown
-        if last_step is not None and current_step <= last_step:
-            if time_diff.days < cooldown_days:
-                log(f"⏳ Cooldown de venda: degrau {current_step} <= {last_step}, aguardar {cooldown_days - time_diff.days} dias", "DEBUG")
-                return False
-        
-        cooldown_passed = time_diff.days >= cooldown_days
-        if not cooldown_passed:
-            log(f"⏳ Cooldown de venda: {time_diff.days}/{cooldown_days} dias", "DEBUG")
-        return cooldown_passed
-    
-    def record_buy(self, step: int, price: float, amount: float):
+    def record_buy(self, price: float, amount: float):
         """Registra uma compra"""
         now = datetime.now()
         self.state["last_buy_timestamp"] = now.isoformat()
-        self.state["last_buy_step"] = step
         self.state["position_entries"].append({
             "timestamp": now.isoformat(),
-            "step": step,
             "price": price,
             "amount": amount
         })
@@ -453,16 +409,9 @@ class StateManager:
         
         log(f"💾 COMPRA REGISTRADA NO ESTADO:", "INFO")
         log(f"   📅 Data/Hora: {now.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
-        log(f"   🎯 Degrau: {step}", "INFO")
         log(f"   💰 Preço: ${price:.4f}", "INFO")
         log(f"   🪙 Quantidade: {amount:.4f} SOL", "INFO")
-        log(f"   ⏰ Próxima compra: após {now + timedelta(days=5)} (ou avanço de degrau)", "INFO")
-    
-    def record_sell(self, step: int):
-        """Registra uma venda"""
-        self.state["last_sell_timestamp"] = datetime.now().isoformat()
-        self.state["last_sell_step"] = step
-        self.save_state()
+        log(f"   ⏰ Próxima compra: após {(now + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M')}", "INFO")
     
     def get_average_entry_price(self) -> float:
         """
@@ -498,20 +447,10 @@ class StateManager:
         # Última compra
         if self.state["last_buy_timestamp"]:
             last_buy = datetime.fromisoformat(self.state["last_buy_timestamp"])
-            days_since_buy = (datetime.now() - last_buy).days
-            log(f"   🟢 Última compra: {last_buy.strftime('%Y-%m-%d %H:%M:%S')} ({days_since_buy} dias atrás)", "INFO")
-            log(f"      Degrau: {self.state['last_buy_step']}", "INFO")
+            hours_since_buy = (datetime.now() - last_buy).total_seconds() / 3600
+            log(f"   🟢 Última compra: {last_buy.strftime('%Y-%m-%d %H:%M:%S')} ({hours_since_buy:.1f}h atrás)", "INFO")
         else:
             log(f"   🟢 Última compra: Nenhuma", "INFO")
-        
-        # Última venda
-        if self.state["last_sell_timestamp"]:
-            last_sell = datetime.fromisoformat(self.state["last_sell_timestamp"])
-            days_since_sell = (datetime.now() - last_sell).days
-            log(f"   🔴 Última venda: {last_sell.strftime('%Y-%m-%d %H:%M:%S')} ({days_since_sell} dias atrás)", "INFO")
-            log(f"      Degrau: {self.state['last_sell_step']}", "INFO")
-        else:
-            log(f"   🔴 Última venda: Nenhuma", "INFO")
         
         # Entradas registradas
         entries = self.state["position_entries"]
@@ -519,7 +458,7 @@ class StateManager:
             log(f"   📊 Total de entradas: {len(entries)}", "INFO")
             for i, entry in enumerate(entries, 1):
                 entry_time = datetime.fromisoformat(entry["timestamp"])
-                log(f"      {i}. {entry_time.strftime('%Y-%m-%d %H:%M')} | Degrau {entry.get('step', '?')} | ${entry['price']:.4f} | {entry['amount']:.4f} SOL", "INFO")
+                log(f"      {i}. {entry_time.strftime('%Y-%m-%d %H:%M')} | ${entry['price']:.4f} | {entry['amount']:.4f} SOL", "INFO")
         else:
             log(f"   📊 Total de entradas: 0", "INFO")
         
@@ -563,30 +502,23 @@ class ExchangeConnector:
         
         log("✅ Conexões estabelecidas: Binance (dados) + Hyperliquid (execução)", "INFO")
     
-    def fetch_historical_data(self, days: int, timeframe: str = None) -> pd.DataFrame:
-        """Busca dados históricos da Binance"""
+    def fetch_historical_data(self, days: int) -> pd.DataFrame:
+        """Busca dados históricos da Binance (sempre 1h para RSI)"""
         try:
             # Binance usa SOLUSDT para futuros
             symbol_binance = "SOL/USDT:USDT"
             
-            # Usar timeframe específico ou default (diário)
-            tf = timeframe if timeframe else self.cfg.TIMEFRAME_DAILY
+            # Sempre usar timeframe de 1h
+            timeframe = self.cfg.TIMEFRAME_RSI
             
-            # Calcular limite de candles baseado no timeframe
-            if tf == "1h":
-                limit = days * 24 + 20  # dias * 24 horas + margem
-            elif tf == "4h":
-                limit = days * 6 + 10   # dias * 6 candles + margem
-            elif tf == "1d":
-                limit = days + 5        # dias + margem
-            else:
-                limit = days + 5
+            # Calcular limite de candles: dias * 24 horas + margem
+            limit = days * 24 + 20
             
             since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
             
             ohlcv = self.binance.fetch_ohlcv(
                 symbol_binance,
-                timeframe=tf,
+                timeframe=timeframe,
                 since=since,
                 limit=limit
             )
@@ -594,7 +526,7 @@ class ExchangeConnector:
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            log(f"📊 Dados históricos ({tf}): {len(df)} candles, {df['timestamp'].min()} até {df['timestamp'].max()}", "INFO")
+            log(f"📊 Dados históricos ({timeframe}): {len(df)} candles, {df['timestamp'].min()} até {df['timestamp'].max()}", "INFO")
             
             return df
             
@@ -803,42 +735,23 @@ class DCAStrategy:
             return 50.0  # Valor neutro como fallback
     
     def analyze_market(self) -> Dict[str, Any]:
-        """Analisa o mercado e retorna informações"""
-        # Buscar dados históricos DIÁRIOS (para máximos)
-        df_daily = self.exchange.fetch_historical_data(
-            self.cfg.HISTORICAL_DAYS, 
-            timeframe=self.cfg.TIMEFRAME_DAILY
-        )
+        """Analisa o mercado e retorna informações (apenas RSI)"""
+        # Buscar dados históricos de 1h
+        df = self.exchange.fetch_historical_data(self.cfg.HISTORICAL_DAYS)
         
-        if df_daily.empty:
-            log("❌ Sem dados históricos diários disponíveis", "ERROR")
+        if df.empty:
+            log("❌ Sem dados históricos disponíveis", "ERROR")
             return {}
         
-        # Buscar dados históricos HORÁRIOS (para RSI)
-        df_hourly = self.exchange.fetch_historical_data(
-            self.cfg.HISTORICAL_DAYS,
-            timeframe=self.cfg.TIMEFRAME_RSI
-        )
-        
-        if df_hourly.empty:
-            log("❌ Sem dados históricos horários disponíveis", "ERROR")
-            return {}
-        
-        # Calcular RSI do timeframe horário (mais sensível)
-        rsi = self.calculate_rsi(df_hourly)
-        
-        # Calcular máximo dos últimos 30 dias (timeframe diário)
-        max_price_30d = df_daily['high'].max()
+        # Calcular RSI
+        rsi = self.calculate_rsi(df, period=self.cfg.RSI_PERIOD)
         
         # Preço atual
         current_price = self.exchange.get_current_price()
         
-        if current_price <= 0 or max_price_30d <= 0:
-            log("❌ Preços inválidos", "ERROR")
+        if current_price <= 0:
+            log("❌ Preço inválido", "ERROR")
             return {}
-        
-        # Calcular % abaixo do máximo
-        pct_below_max = ((max_price_30d - current_price) / max_price_30d) * 100
         
         # Posição atual
         position = self.exchange.get_position()
@@ -848,9 +761,7 @@ class DCAStrategy:
         
         analysis = {
             "current_price": current_price,
-            "max_price_30d": max_price_30d,
-            "pct_below_max": pct_below_max,
-            "rsi": rsi,  # Adicionar RSI à análise
+            "rsi": rsi,
             "position": position,
             "balance": balance,
             "has_position": position is not None,
@@ -867,7 +778,6 @@ class DCAStrategy:
             margin_used = float(position.get('marginUsed', 0))
             
             # % de ganho baseado no PNL real sobre a margem usada
-            # Isso já reflete o impacto da alavancagem!
             if margin_used > 0:
                 pct_gain_real = (unrealized_pnl / margin_used) * 100
             else:
@@ -880,7 +790,7 @@ class DCAStrategy:
             price_change_pct = ((current_price - entry_price) / entry_price) * 100
             
             analysis["entry_price"] = entry_price
-            analysis["pct_gain"] = pct_gain_real  # Usar o PNL real!
+            analysis["pct_gain"] = pct_gain_real
             analysis["position_size"] = position_size
             analysis["position_value"] = position_value
             analysis["unrealized_pnl"] = unrealized_pnl
@@ -895,150 +805,130 @@ class DCAStrategy:
             log(f"   💵 Valor atual da posição: ${position_value:.2f}", "INFO")
             log(f"   {'📈' if pct_gain_real >= 0 else '📉'} **PNL REAL (c/ {self.cfg.LEVERAGE}x leverage): {pct_gain_real:+.2f}%** | ${unrealized_pnl:+.2f}", "INFO")
             
-            # Mostrar próximos degraus de venda
-            next_sell_step = None
-            for i, (threshold, _) in enumerate(self.cfg.SELL_STEPS):
-                if pct_gain_real < threshold:
-                    next_sell_step = threshold
-                    break
-            
-            if next_sell_step:
-                points_to_next = next_sell_step - pct_gain_real
-                log(f"   🎯 Próximo degrau de venda: +{next_sell_step}% PNL (faltam {points_to_next:.2f}%)", "INFO")
-            else:
-                log(f"   ✅ Acima de todos os degraus de venda!", "INFO")
+            # Mostrar próximas ordens de venda
+            log(f"   🎯 Ordens de venda ativas:", "INFO")
+            for profit_pct, size_pct in self.cfg.SELL_ORDERS:
+                target_price = entry_price * (1 + profit_pct / 100.0)
+                status = "✅" if current_price >= target_price else "⏳"
+                log(f"      {status} {size_pct}% @ ${target_price:.4f} (+{profit_pct}%)", "INFO")
         
-        log(f"📊 Análise: Preço=${current_price:.4f} | Max 30d=${max_price_30d:.4f} | "
-            f"Abaixo do max={pct_below_max:.2f}% | RSI(1h)={rsi:.1f} | Posição={'SIM' if position else 'NÃO'}", "INFO")
+        log(f"📊 Análise: Preço=${current_price:.4f} | RSI(1h)={rsi:.1f} | Posição={'SIM' if position else 'NÃO'}", "INFO")
         
         return analysis
     
-    def check_buy_signals(self, analysis: Dict) -> Optional[int]:
-        """Verifica se deve comprar e retorna o degrau"""
-        pct_below_max = analysis.get("pct_below_max", 0)
+    def check_buy_signal(self, analysis: Dict) -> bool:
+        """Verifica se deve comprar (RSI < 25)"""
         rsi = analysis.get("rsi", 50.0)
         
-        # FILTRO RSI: Só comprar se RSI < 25 (sobrevendido)
-        if rsi >= 25:
-            log(f"⛔ RSI muito alto para compra: {rsi:.1f} >= 25 (aguardando sobrevenda)", "DEBUG")
-            return None
+        # FILTRO RSI: Só comprar se RSI < threshold configurado
+        if rsi >= self.cfg.RSI_THRESHOLD:
+            log(f"⛔ RSI muito alto para compra: {rsi:.1f} >= {self.cfg.RSI_THRESHOLD} (aguardando sobrevenda)", "DEBUG")
+            return False
         
-        # Verificar cada degrau de compra (do maior para o menor threshold)
-        # Precisamos manter o índice original para identificar corretamente o degrau
-        for step_idx in range(len(self.cfg.BUY_STEPS) - 1, -1, -1):  # De trás pra frente
-            threshold, capital_pct = self.cfg.BUY_STEPS[step_idx]
-            
-            if pct_below_max >= threshold:
-                # Verificar se pode comprar (cooldown)
-                if self.state.can_buy(step_idx, self.cfg.BUY_COOLDOWN_DAYS):
-                    log(f"🚨 SINAL DE COMPRA: Degrau {step_idx} ativado ({pct_below_max:.2f}% >= {threshold}%) | RSI={rsi:.1f} < 25 ✅ → {capital_pct}% do capital", "INFO")
-                    return step_idx
-                else:
-                    log(f"⏳ Degrau {step_idx} ativado mas em cooldown", "DEBUG")
+        # Verificar cooldown
+        if not self.state.can_buy(self.cfg.BUY_COOLDOWN_HOURS):
+            return False
         
-        return None
+        log(f"🚨 SINAL DE COMPRA: RSI={rsi:.1f} < {self.cfg.RSI_THRESHOLD} ✅", "INFO")
+        return True
     
-    def check_sell_signals(self, analysis: Dict) -> Optional[int]:
-        """Verifica se deve vender e retorna o degrau"""
-        if not analysis.get("has_position"):
-            return None
-        
-        pct_gain = analysis.get("pct_gain", 0)
-        
-        # Verificar cada degrau de venda (do maior para o menor threshold)
-        # Precisamos manter o índice original para identificar corretamente o degrau
-        for step_idx in range(len(self.cfg.SELL_STEPS) - 1, -1, -1):  # De trás pra frente
-            threshold, position_pct = self.cfg.SELL_STEPS[step_idx]
-            
-            if pct_gain >= threshold:
-                # Verificar se pode vender (cooldown)
-                if self.state.can_sell(step_idx, self.cfg.SELL_COOLDOWN_DAYS):
-                    log(f"🚨 SINAL DE VENDA: Degrau {step_idx} ativado ({pct_gain:.2f}% >= {threshold}%) → {position_pct}% da posição", "INFO")
-                    return step_idx
-                else:
-                    log(f"⏳ Degrau {step_idx} ativado mas em cooldown", "DEBUG")
-        
-        return None
-    
-    def execute_buy(self, step: int, analysis: Dict) -> bool:
-        """Executa compra no degrau especificado"""
-        threshold, capital_pct = self.cfg.BUY_STEPS[step]
-        
+    def execute_buy(self, analysis: Dict) -> bool:
+        """Executa compra de 30% do capital disponível"""
         balance = analysis["balance"]
         current_price = analysis["current_price"]
         
-        # Calcular quanto investir (em USD da carteira)
-        amount_usd = balance * (capital_pct / 100.0)
+        # Calcular quanto investir (30% do capital)
+        amount_usd = balance * (self.cfg.BUY_CAPITAL_PCT / 100.0)
         
-        # Com leverage 5x: se investe $4, valor nocional = $20
+        # Com leverage: valor nocional
         notional_value = amount_usd * self.cfg.LEVERAGE
         amount_coins = notional_value / current_price
         
-        # IMPORTANTE: Verificar mínimo usando valor NOCIONAL (alavancado), não valor da carteira
+        # Verificar mínimo
         if notional_value < self.cfg.MIN_ORDER_USD:
             log(f"⚠️ Valor nocional muito baixo: ${notional_value:.2f} < ${self.cfg.MIN_ORDER_USD}", "WARN")
-            log(f"   (${amount_usd:.2f} da carteira × {self.cfg.LEVERAGE}x leverage = ${notional_value:.2f})", "WARN")
             return False
         
-        log(f"🟢 COMPRANDO: Degrau {step} ({threshold}% abaixo do máximo)", "INFO")
-        log(f"   💰 Capital da carteira: ${balance:.2f}", "INFO")
-        log(f"   📊 {capital_pct}% do capital = ${amount_usd:.2f}", "INFO")
+        log(f"� COMPRANDO: {self.cfg.BUY_CAPITAL_PCT}% do capital", "INFO")
+        log(f"   💰 Capital disponível: ${balance:.2f}", "INFO")
+        log(f"   📊 Investindo: ${amount_usd:.2f}", "INFO")
         log(f"   🔧 Leverage {self.cfg.LEVERAGE}x → Valor nocional: ${notional_value:.2f}", "INFO")
         log(f"   🪙 Quantidade SOL: {amount_coins:.4f} @ ${current_price:.4f}", "INFO")
         
-        # Executar ordem
+        # Executar ordem MARKET
         success = self.exchange.create_market_order("buy", amount_usd, self.cfg.LEVERAGE)
         
         if success:
-            # Registrar compra (usar valor nocional para cálculo correto)
-            self.state.record_buy(step, current_price, amount_coins)
+            # Registrar compra
+            self.state.record_buy(current_price, amount_coins)
+            
+            # Criar ordens LIMIT de venda
+            self.create_sell_orders(current_price, amount_coins)
             
             # Notificar Discord
             discord.send(
                 "🟢 COMPRA EXECUTADA",
-                f"**Degrau:** {step} ({threshold}% abaixo do máximo)\n"
                 f"**Preço:** ${current_price:.4f}\n"
-                f"**Capital usado:** ${amount_usd:.2f} ({capital_pct}% do saldo)\n"
+                f"**Capital usado:** ${amount_usd:.2f} ({self.cfg.BUY_CAPITAL_PCT}% do saldo)\n"
                 f"**Leverage:** {self.cfg.LEVERAGE}x\n"
                 f"**Valor nocional:** ${notional_value:.2f}\n"
-                f"**Quantidade SOL:** {amount_coins:.4f}",
+                f"**Quantidade SOL:** {amount_coins:.4f}\n\n"
+                f"**Ordens de venda criadas:**\n" + 
+                "\n".join([f"• {size}% @ +{profit}%" for profit, size in self.cfg.SELL_ORDERS]),
                 0x00ff00
             )
         
         return success
     
-    def execute_sell(self, step: int, analysis: Dict) -> bool:
-        """Executa venda no degrau especificado"""
-        threshold, position_pct = self.cfg.SELL_STEPS[step]
+    def create_sell_orders(self, entry_price: float, total_amount: float):
+        """Cria ordens limite de venda baseadas no preço de entrada"""
+        log(f"📤 Criando ordens LIMIT de venda...", "INFO")
         
-        pct_gain = analysis.get("pct_gain", 0)
-        current_price = analysis["current_price"]
-        
-        log(f"🔴 VENDENDO: Degrau {step} | {position_pct}% da posição | Ganho {pct_gain:.2f}%", "INFO")
-        
-        # Executar ordem
-        success = self.exchange.close_position_partial(position_pct)
-        
-        if success:
-            # Registrar venda
-            self.state.record_sell(step)
+        for profit_pct, size_pct in self.cfg.SELL_ORDERS:
+            # Calcular preço alvo
+            target_price = entry_price * (1 + profit_pct / 100.0)
             
-            # Notificar Discord
-            discord.send(
-                "🔴 VENDA EXECUTADA",
-                f"**Degrau:** {step} ({threshold}% de ganho)\n"
-                f"**Preço:** ${current_price:.4f}\n"
-                f"**Ganho:** +{pct_gain:.2f}%\n"
-                f"**Posição vendida:** {position_pct}%",
-                0xff9900
-            )
-        
-        return success
+            # Calcular quantidade
+            amount = total_amount * (size_pct / 100.0)
+            amount = float(self.exchange.hyperliquid.amount_to_precision(self.cfg.SYMBOL, amount))
+            
+            # Verificar mínimo
+            notional = amount * target_price
+            if notional < self.cfg.MIN_ORDER_USD:
+                log(f"   ⚠️ Ordem muito pequena ({size_pct}% @ +{profit_pct}%): ${notional:.2f} < ${self.cfg.MIN_ORDER_USD}", "WARN")
+                continue
+            
+            try:
+                order = self.exchange.hyperliquid.create_order(
+                    symbol=self.cfg.SYMBOL,
+                    type='limit',
+                    side='sell',
+                    amount=amount,
+                    price=target_price,
+                    params={'reduceOnly': True, 'postOnly': False}
+                )
+                log(f"   ✅ Ordem criada: {size_pct}% ({amount:.4f} SOL) @ ${target_price:.4f} (+{profit_pct}%)", "INFO")
+            except Exception as e:
+                log(f"   ❌ Erro criando ordem {size_pct}% @ +{profit_pct}%: {e}", "ERROR")
+    
+    def cancel_all_orders(self):
+        """Cancela todas as ordens abertas"""
+        try:
+            orders = self.exchange.hyperliquid.fetch_open_orders(self.cfg.SYMBOL)
+            if orders:
+                log(f"🗑️  Cancelando {len(orders)} ordens abertas...", "INFO")
+                for order in orders:
+                    self.exchange.hyperliquid.cancel_order(order['id'], self.cfg.SYMBOL)
+                    log(f"   ✅ Ordem {order['id']} cancelada", "DEBUG")
+            else:
+                log(f"   ℹ️  Nenhuma ordem aberta para cancelar", "DEBUG")
+        except Exception as e:
+            log(f"❌ Erro cancelando ordens: {e}", "ERROR")
     
     def run_cycle(self):
         """Executa um ciclo da estratégia"""
         log("=" * 80, "INFO")
-        log("🔄 INICIANDO CICLO DCA", "INFO")
+        log("🔄 INICIANDO CICLO", "INFO")
         log("=" * 80, "INFO")
         
         # Mostrar estado atual
@@ -1052,15 +942,12 @@ class DCAStrategy:
                 log("⚠️ Análise falhou, pulando ciclo", "WARN")
                 return
             
-            # Verificar sinais de compra
-            buy_step = self.check_buy_signals(analysis)
-            if buy_step is not None:
-                self.execute_buy(buy_step, analysis)
-            
-            # Verificar sinais de venda
-            sell_step = self.check_sell_signals(analysis)
-            if sell_step is not None:
-                self.execute_sell(sell_step, analysis)
+            # Verificar sinal de compra (RSI < 25)
+            if self.check_buy_signal(analysis):
+                # Cancelar todas as ordens abertas antes de comprar
+                self.cancel_all_orders()
+                # Executar compra e criar novas ordens de venda
+                self.execute_buy(analysis)
             
             log("✅ Ciclo concluído", "INFO")
             
@@ -1096,13 +983,11 @@ def main():
     
     log(f"⚙️  Configuração:", "INFO")
     log(f"   Asset: {cfg.SYMBOL} ({cfg.LEVERAGE}x leverage)", "INFO")
-    log(f"   Histórico: {cfg.HISTORICAL_DAYS} dias", "INFO")
-    log(f"   Timeframe máximos: {cfg.TIMEFRAME_DAILY} (diário)", "INFO")
-    log(f"   Timeframe RSI: {cfg.TIMEFRAME_RSI} (horário - mais sensível)", "INFO")
-    log(f"   Degraus de compra: {cfg.BUY_STEPS}", "INFO")
-    log(f"   Degraus de venda: {cfg.SELL_STEPS}", "INFO")
-    log(f"   Cooldown compra: {cfg.BUY_COOLDOWN_DAYS} dias", "INFO")
-    log(f"   Cooldown venda: {cfg.SELL_COOLDOWN_DAYS} dias", "INFO")
+    log(f"   Timeframe RSI: {cfg.TIMEFRAME_RSI} ({cfg.RSI_PERIOD} períodos)", "INFO")
+    log(f"   Filtro de compra: RSI < {cfg.RSI_THRESHOLD}", "INFO")
+    log(f"   Capital por compra: {cfg.BUY_CAPITAL_PCT}%", "INFO")
+    log(f"   Cooldown compra: {cfg.BUY_COOLDOWN_HOURS}h (1 dia)", "INFO")
+    log(f"   Ordens de venda: {cfg.SELL_ORDERS}", "INFO")
     
     # Criar estratégia
     strategy = DCAStrategy(cfg)
