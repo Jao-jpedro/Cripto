@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 """
-Sistema de Trading DCA (Dollar Cost Averaging) - SOL Long Only
-Estratégia de degraus de compra e venda baseada em % do preço máximo/ganho
+Sistema de Trading com RSI - Long e Short
+Estratégia: Baseada apenas em RSI
+- LONG quando RSI < 20 (sobrevendido)
+- SHORT quando RSI > 80 (sobrecomprado)
 """
 
 import os
@@ -169,42 +171,43 @@ class DiscordNotifier:
 
 discord = DiscordNotifier()
 
-# ===== CONFIGURAÇÃO DCA =====
+# ===== CONFIGURAÇÃO =====
 @dataclass
-class DCAConfig:
-    """Configuração da estratégia DCA"""
+class TradingConfig:
+    """Configuração da estratégia"""
     
-    # Asset
-    SYMBOL: str = "SOL/USDC:USDC"
+    # Assets a operar (lista de símbolos)
+    SYMBOLS: List[str] = None
     LEVERAGE: int = 5
     
     # Dados históricos
-    HISTORICAL_DAYS: int = 14  # Últimos 14 dias para RSI
-    TIMEFRAME_RSI: str = "1h"  # Gráfico de 1 hora (para RSI)
-    RSI_PERIOD: int = 14       # Período do RSI
-    RSI_THRESHOLD: float = 25  # RSI < 25 = sobrevendido (compra)
+    HISTORICAL_DAYS: int = 30       # Últimos 30 dias para RSI
+    TIMEFRAME: str = "1h"           # Gráfico de 1 hora
     
-    # Estratégia de COMPRA
-    BUY_CAPITAL_PCT: float = 30.0  # Compra sempre 30% do capital disponível
-    BUY_COOLDOWN_HOURS: int = 24   # Cooldown de 1 dia (24h) entre compras
+    # Indicadores
+    RSI_PERIOD: int = 14             # Período do RSI
     
-    # Estratégia de VENDA (Ordens limite automáticas)
-    # Formato: (% de lucro do preço de entrada, % da posição a vender)
-    SELL_ORDERS: List[tuple] = None
+    # Sinais de entrada
+    RSI_LONG_THRESHOLD: float = 20   # RSI < 20 para LONG (sobrevendido)
+    RSI_SHORT_THRESHOLD: float = 80  # RSI > 80 para SHORT (sobrecomprado)
+    
+    # Estratégia de entrada
+    ENTRY_CAPITAL_PCT: float = 30.0   # Usa 30% do capital por entrada
+    ENTRY_COOLDOWN_HOURS: int = 48    # Cooldown de 48h entre entradas no mesmo asset
+    
+    # Estratégia de SAÍDA (Stop Loss e Take Profit)
+    # Com leverage 5x:
+    #   - 2% de movimento no preço = 10% ROI
+    #   - 4% de movimento no preço = 20% ROI
+    STOP_LOSS_PRICE_PCT: float = 2.0    # 2% no preço = 10% ROI (ambos lados)
+    TAKE_PROFIT_PRICE_PCT: float = 4.0  # 4% no preço = 20% ROI (ambos lados)
     
     # Gestão de capital
     MIN_ORDER_USD: float = 10.0  # Mínimo $10 para ordem Hyperliquid
     
     def __post_init__(self):
-        if self.SELL_ORDERS is None:
-            # (% de lucro, % da posição a vender)
-            self.SELL_ORDERS = [
-                (10, 20),  # +10% de lucro → vende 20% da posição
-                (20, 20),  # +20% de lucro → vende 20% da posição
-                (30, 20),  # +30% de lucro → vende 20% da posição
-                (45, 20),  # +45% de lucro → vende 20% da posição
-                (60, 20),  # +60% de lucro → vende 20% da posição
-            ]
+        if self.SYMBOLS is None:
+            self.SYMBOLS = ["SOL/USDC:USDC", "XRP/USDC:USDC"]
 
 # ===== GERENCIADOR DE ESTADO =====
 class StateManager:
@@ -411,7 +414,7 @@ class StateManager:
         log(f"   📅 Data/Hora: {now.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
         log(f"   💰 Preço: ${price:.4f}", "INFO")
         log(f"   🪙 Quantidade: {amount:.4f} SOL", "INFO")
-        log(f"   ⏰ Próxima compra: após {(now + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M')}", "INFO")
+        log(f"   ⏰ Próxima compra: após {(now + timedelta(hours=48)).strftime('%Y-%m-%d %H:%M')}", "INFO")
     
     def get_average_entry_price(self) -> float:
         """
@@ -468,7 +471,7 @@ class StateManager:
 class ExchangeConnector:
     """Gerencia conexões com Binance (dados) e Hyperliquid (execução)"""
     
-    def __init__(self, cfg: DCAConfig):
+    def __init__(self, cfg: TradingConfig):
         self.cfg = cfg
         
         # Binance para dados históricos
@@ -502,17 +505,19 @@ class ExchangeConnector:
         
         log("✅ Conexões estabelecidas: Binance (dados) + Hyperliquid (execução)", "INFO")
     
-    def fetch_historical_data(self, days: int) -> pd.DataFrame:
-        """Busca dados históricos da Binance (sempre 1h para RSI)"""
+    def fetch_historical_data(self, symbol: str, days: int) -> pd.DataFrame:
+        """Busca dados históricos da Binance"""
         try:
-            # Binance usa SOLUSDT para futuros
-            symbol_binance = "SOL/USDT:USDT"
+            # Converter símbolo Hyperliquid para Binance
+            # SOL/USDC:USDC -> SOL/USDT:USDT
+            # XRP/USDC:USDC -> XRP/USDT:USDT
+            coin = symbol.split('/')[0]  # SOL ou XRP
+            symbol_binance = f"{coin}/USDT:USDT"
             
-            # Sempre usar timeframe de 1h
-            timeframe = self.cfg.TIMEFRAME_RSI
+            timeframe = self.cfg.TIMEFRAME
             
             # Calcular limite de candles: dias * 24 horas + margem
-            limit = days * 24 + 20
+            limit = days * 24 + 50
             
             since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
             
@@ -526,23 +531,27 @@ class ExchangeConnector:
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            log(f"📊 Dados históricos ({timeframe}): {len(df)} candles, {df['timestamp'].min()} até {df['timestamp'].max()}", "INFO")
+            log(f"📊 Dados históricos {coin} ({timeframe}): {len(df)} candles, {df['timestamp'].min()} até {df['timestamp'].max()}", "INFO")
             
             return df
             
         except Exception as e:
-            log(f"❌ Erro buscando dados históricos: {e}", "ERROR")
+            log(f"❌ Erro buscando dados históricos {symbol}: {e}", "ERROR")
             return pd.DataFrame()
     
-    def get_current_price(self) -> float:
-        """Busca preço atual do SOL"""
+    def get_current_price(self, symbol: str) -> float:
+        """Busca preço atual de um símbolo"""
         try:
-            ticker = self.binance.fetch_ticker("SOL/USDT:USDT")
+            # Converter para formato Binance
+            coin = symbol.split('/')[0]
+            symbol_binance = f"{coin}/USDT:USDT"
+            
+            ticker = self.binance.fetch_ticker(symbol_binance)
             price = ticker['last']
-            log(f"💰 Preço atual SOL: ${price:.4f}", "DEBUG")
+            log(f"💰 Preço atual {coin}: ${price:.4f}", "DEBUG")
             return price
         except Exception as e:
-            log(f"❌ Erro buscando preço: {e}", "ERROR")
+            log(f"❌ Erro buscando preço {symbol}: {e}", "ERROR")
             return 0.0
     
     def get_balance(self) -> float:
@@ -555,20 +564,20 @@ class ExchangeConnector:
             log(f"❌ Erro buscando saldo: {e}", "ERROR")
             return 0.0
     
-    def get_position(self) -> Optional[Dict]:
+    def get_position(self, symbol: str) -> Optional[Dict]:
         """Retorna posição aberta (se houver) via API direta Hyperliquid"""
         try:
             # Usar API direta para obter estado do usuário
             user_state = _hl_get_user_state(self.wallet_address)
             
             if not user_state or "assetPositions" not in user_state:
-                log("⚠️ Nenhuma posição encontrada na resposta da API", "DEBUG")
+                log(f"⚠️ Nenhuma posição encontrada na resposta da API para {symbol}", "DEBUG")
                 return None
             
             asset_positions = user_state["assetPositions"]
             
-            # Procurar posição do SOL
-            coin_name = self.cfg.SYMBOL.replace('/USDC:USDC', '')  # "SOL"
+            # Procurar posição do asset específico
+            coin_name = symbol.replace('/USDC:USDC', '')  # "SOL" ou "XRP"
             
             for pos in asset_positions:
                 position_coin = pos.get("position", {}).get("coin", "")
@@ -581,7 +590,7 @@ class ExchangeConnector:
                     log(f"✅ Posição encontrada: {size} {coin_name} @ ${entry_px:.4f}", "DEBUG")
                     
                     return {
-                        "symbol": self.cfg.SYMBOL,
+                        "symbol": symbol,
                         "contracts": size,
                         "entryPrice": entry_px,
                         "side": "long" if size > 0 else "short",
@@ -589,33 +598,33 @@ class ExchangeConnector:
                         "marginUsed": float(pos.get("position", {}).get("marginUsed", 0)),
                     }
             
-            log("⚠️ Nenhuma posição de SOL encontrada", "DEBUG")
+            log(f"⚠️ Nenhuma posição de {coin_name} encontrada", "DEBUG")
             return None
             
         except Exception as e:
-            log(f"❌ Erro buscando posição: {e}", "ERROR")
+            log(f"❌ Erro buscando posição {symbol}: {e}", "ERROR")
             return None
     
-    def create_market_order(self, side: str, amount_usd: float, leverage: int) -> bool:
+    def create_market_order(self, symbol: str, side: str, amount_usd: float, leverage: int) -> bool:
         """Cria ordem market na Hyperliquid"""
         try:
             # Configurar leverage primeiro
-            log(f"🔧 Configurando leverage {leverage}x para {self.cfg.SYMBOL}", "DEBUG")
-            self.hyperliquid.set_leverage(leverage, self.cfg.SYMBOL, {"marginMode": "isolated"})
+            log(f"🔧 Configurando leverage {leverage}x para {symbol}", "DEBUG")
+            self.hyperliquid.set_leverage(leverage, symbol, {"marginMode": "isolated"})
             
             # Buscar preço atual
-            current_price = self.get_current_price()
+            current_price = self.get_current_price(symbol)
             if current_price <= 0:
                 log("❌ Preço inválido, não é possível criar ordem", "ERROR")
                 return False
             
-            # Calcular quantidade de SOL com alavancagem
+            # Calcular quantidade de coins com alavancagem
             # Fórmula: amount = (USD_a_gastar * leverage) / preço
             notional = amount_usd * leverage
             amount = notional / current_price
             
             # Arredondar quantidade conforme precisão do mercado
-            amount = float(self.hyperliquid.amount_to_precision(self.cfg.SYMBOL, amount))
+            amount = float(self.hyperliquid.amount_to_precision(symbol, amount))
             
             # Verificar valor mínimo
             notional_value = amount * current_price
@@ -623,7 +632,8 @@ class ExchangeConnector:
                 log(f"❌ Valor nocional muito baixo: ${notional_value:.2f} < ${self.cfg.MIN_ORDER_USD}", "ERROR")
                 return False
             
-            log(f"📤 Criando ordem: {side} {amount:.4f} SOL", "INFO")
+            coin = symbol.split('/')[0]
+            log(f"📤 Criando ordem: {side} {amount:.4f} {coin}", "INFO")
             log(f"   💰 USD investidos: ${amount_usd:.2f}", "INFO")
             log(f"   📊 Leverage: {leverage}x", "INFO")
             log(f"   💵 Valor nocional: ${notional:.2f}", "INFO")
@@ -631,7 +641,7 @@ class ExchangeConnector:
             
             # Criar ordem market (Hyperliquid exige price para calcular slippage)
             order = self.hyperliquid.create_order(
-                symbol=self.cfg.SYMBOL,
+                symbol=symbol,
                 type='market',
                 side=side,
                 amount=amount,
@@ -687,11 +697,11 @@ class ExchangeConnector:
             log(f"❌ Erro fechando posição: {e}", "ERROR")
             return False
 
-# ===== ESTRATÉGIA DCA =====
-class DCAStrategy:
-    """Estratégia DCA com degraus de compra e venda"""
+# ===== ESTRATÉGIA =====
+class TradingStrategy:
+    """Estratégia com EMA 200 para determinar tendência"""
     
-    def __init__(self, cfg: DCAConfig):
+    def __init__(self, cfg: TradingConfig):
         self.cfg = cfg
         self.exchange = ExchangeConnector(cfg)
         # StateManager precisa do exchange para reconstruir estado
@@ -734,111 +744,137 @@ class DCAStrategy:
             log(f"⚠️ Erro calculando RSI: {e}", "WARN")
             return 50.0  # Valor neutro como fallback
     
-    def analyze_market(self) -> Dict[str, Any]:
-        """Analisa o mercado e retorna informações (apenas RSI)"""
-        # Buscar dados históricos de 1h
-        df = self.exchange.fetch_historical_data(self.cfg.HISTORICAL_DAYS)
+    def calculate_ema(self, df: pd.DataFrame, period: int = 200) -> float:
+        """Calcula a EMA (Exponential Moving Average) do DataFrame"""
+        try:
+            if len(df) < period:
+                log(f"⚠️ Dados insuficientes para calcular EMA {period}", "WARN")
+                return 0.0
+            
+            # Calcular EMA
+            ema = df['close'].ewm(span=period, adjust=False).mean()
+            
+            # Retornar último valor
+            ema_value = ema.iloc[-1]
+            
+            # Tratar casos especiais (NaN, inf)
+            if pd.isna(ema_value) or np.isinf(ema_value):
+                return 0.0
+            
+            return float(ema_value)
+            
+        except Exception as e:
+            log(f"⚠️ Erro calculando EMA: {e}", "WARN")
+            return 0.0
+    
+    def analyze_asset(self, symbol: str) -> Dict[str, Any]:
+        """Analisa um asset específico e determina se deve entrar LONG ou SHORT"""
+        # Buscar dados históricos
+        df = self.exchange.fetch_historical_data(symbol, self.cfg.HISTORICAL_DAYS)
         
         if df.empty:
-            log("❌ Sem dados históricos disponíveis", "ERROR")
+            log(f"❌ Sem dados históricos para {symbol}", "ERROR")
             return {}
         
-        # Calcular RSI
+        # Calcular indicadores
         rsi = self.calculate_rsi(df, period=self.cfg.RSI_PERIOD)
         
         # Preço atual
-        current_price = self.exchange.get_current_price()
+        current_price = self.exchange.get_current_price(symbol)
         
         if current_price <= 0:
-            log("❌ Preço inválido", "ERROR")
+            log(f"❌ Preço inválido para {symbol}", "ERROR")
             return {}
         
-        # Posição atual
-        position = self.exchange.get_position()
+        # Posição atual neste asset
+        position = self.exchange.get_position(symbol)
         
-        # Saldo disponível
-        balance = self.exchange.get_balance()
+        # Determinar sinal de entrada baseado apenas no RSI
+        signal = None
+        if rsi < self.cfg.RSI_LONG_THRESHOLD:
+            signal = "LONG"  # RSI sobrevendido
+        elif rsi > self.cfg.RSI_SHORT_THRESHOLD:
+            signal = "SHORT"  # RSI sobrecomprado
+        
+        coin = symbol.split('/')[0]
         
         analysis = {
+            "symbol": symbol,
+            "coin": coin,
             "current_price": current_price,
             "rsi": rsi,
+            "signal": signal,
             "position": position,
-            "balance": balance,
             "has_position": position is not None,
         }
         
-        # Se tem posição, calcular % de ganho REAL (considerando alavancagem)
+        # Log da análise
+        log(f"", "INFO")
+        log(f"📊 {coin}: Preço=${current_price:.4f} | RSI={rsi:.1f} | Sinal: {signal if signal else 'NENHUM'}", "INFO")
+        
+        # Se tem posição, calcular % de ganho
         if position:
-            entry_price = self.state.get_average_entry_price()
-            position_size = abs(float(position.get('contracts', 0)))
-            position_value = position_size * current_price
+            entry_price = float(position.get('entryPrice', 0))
+            position_size = float(position.get('contracts', 0))
+            side = position.get('side', '')
             
-            # PNL real da posição (já considera alavancagem)
             unrealized_pnl = float(position.get('unrealizedPnl', 0))
             margin_used = float(position.get('marginUsed', 0))
             
-            # % de ganho baseado no PNL real sobre a margem usada
+            # % de ganho baseado no PNL real
             if margin_used > 0:
                 pct_gain_real = (unrealized_pnl / margin_used) * 100
             else:
-                # Fallback: calcular manualmente com alavancagem
+                # Fallback
                 price_change_pct = ((current_price - entry_price) / entry_price) * 100
+                if side == "short":
+                    price_change_pct = -price_change_pct
                 pct_gain_real = price_change_pct * self.cfg.LEVERAGE
-            
-            # Variação de preço (para referência)
-            price_diff = current_price - entry_price
-            price_change_pct = ((current_price - entry_price) / entry_price) * 100
             
             analysis["entry_price"] = entry_price
             analysis["pct_gain"] = pct_gain_real
             analysis["position_size"] = position_size
-            analysis["position_value"] = position_value
             analysis["unrealized_pnl"] = unrealized_pnl
             
-            # Log detalhado da posição
-            log(f"", "INFO")
-            log(f"📈 POSIÇÃO ABERTA:", "INFO")
-            log(f"   🪙 Quantidade: {position_size:.4f} SOL", "INFO")
-            log(f"   💰 Preço de entrada: ${entry_price:.4f}", "INFO")
-            log(f"   📊 Preço atual: ${current_price:.4f}", "INFO")
-            log(f"    Variação de preço: ${price_diff:+.4f} ({price_change_pct:+.2f}%)", "INFO")
-            log(f"   💵 Valor atual da posição: ${position_value:.2f}", "INFO")
-            log(f"   {'📈' if pct_gain_real >= 0 else '📉'} **PNL REAL (c/ {self.cfg.LEVERAGE}x leverage): {pct_gain_real:+.2f}%** | ${unrealized_pnl:+.2f}", "INFO")
-            
-            # Mostrar próximas ordens de venda
-            log(f"   🎯 Ordens de venda ativas:", "INFO")
-            for profit_pct, size_pct in self.cfg.SELL_ORDERS:
-                target_price = entry_price * (1 + profit_pct / 100.0)
-                status = "✅" if current_price >= target_price else "⏳"
-                log(f"      {status} {size_pct}% @ ${target_price:.4f} (+{profit_pct}%)", "INFO")
-        
-        log(f"📊 Análise: Preço=${current_price:.4f} | RSI(1h)={rsi:.1f} | Posição={'SIM' if position else 'NÃO'}", "INFO")
+            log(f"   � Posição: {side.upper()} {abs(position_size):.4f} {coin} @ ${entry_price:.4f}", "INFO")
+            log(f"   {'📈' if pct_gain_real >= 0 else '📉'} PNL: {pct_gain_real:+.2f}% | ${unrealized_pnl:+.2f}", "INFO")
         
         return analysis
     
-    def check_buy_signal(self, analysis: Dict) -> bool:
-        """Verifica se deve comprar (RSI < 25)"""
-        rsi = analysis.get("rsi", 50.0)
+    def should_enter(self, analysis: Dict) -> bool:
+        """Verifica se deve entrar na posição"""
+        # Se já tem posição aberta neste asset, não faz nada
+        if analysis.get("has_position"):
+            log(f"⏭️  {analysis['coin']}: Já tem posição aberta, ignorando", "DEBUG")
+            return False
         
-        # FILTRO RSI: Só comprar se RSI < threshold configurado
-        if rsi >= self.cfg.RSI_THRESHOLD:
-            log(f"⛔ RSI muito alto para compra: {rsi:.1f} >= {self.cfg.RSI_THRESHOLD} (aguardando sobrevenda)", "DEBUG")
+        # Se não tem sinal de entrada, não faz nada
+        if not analysis.get("signal"):
+            log(f"⏭️  {analysis['coin']}: Sem sinal de entrada", "DEBUG")
             return False
         
         # Verificar cooldown
-        if not self.state.can_buy(self.cfg.BUY_COOLDOWN_HOURS):
+        symbol = analysis["symbol"]
+        if not self.state.can_buy(self.cfg.ENTRY_COOLDOWN_HOURS):
             return False
         
-        log(f"🚨 SINAL DE COMPRA: RSI={rsi:.1f} < {self.cfg.RSI_THRESHOLD} ✅", "INFO")
+        signal = analysis["signal"]
+        rsi = analysis["rsi"]
+        
+        log(f"🚨 SINAL DE ENTRADA {signal}: {analysis['coin']}", "INFO")
+        log(f"   RSI: {rsi:.1f}", "INFO")
         return True
     
-    def execute_buy(self, analysis: Dict) -> bool:
-        """Executa compra de 30% do capital disponível"""
-        balance = analysis["balance"]
+    def execute_entry(self, analysis: Dict) -> bool:
+        """Executa entrada (LONG ou SHORT)"""
+        balance = self.exchange.get_balance()
         current_price = analysis["current_price"]
+        signal = analysis["signal"]
+        symbol = analysis["symbol"]
+        coin = analysis["coin"]
         
-        # Calcular quanto investir (30% do capital)
-        amount_usd = balance * (self.cfg.BUY_CAPITAL_PCT / 100.0)
+        # Calcular quanto investir
+        amount_usd = balance * (self.cfg.ENTRY_CAPITAL_PCT / 100.0)
         
         # Com leverage: valor nocional
         notional_value = amount_usd * self.cfg.LEVERAGE
@@ -849,84 +885,111 @@ class DCAStrategy:
             log(f"⚠️ Valor nocional muito baixo: ${notional_value:.2f} < ${self.cfg.MIN_ORDER_USD}", "WARN")
             return False
         
-        log(f"� COMPRANDO: {self.cfg.BUY_CAPITAL_PCT}% do capital", "INFO")
+        side = "buy" if signal == "LONG" else "sell"
+        
+        log(f"🎯 ENTRANDO {signal}: {self.cfg.ENTRY_CAPITAL_PCT}% do capital em {coin}", "INFO")
         log(f"   💰 Capital disponível: ${balance:.2f}", "INFO")
         log(f"   📊 Investindo: ${amount_usd:.2f}", "INFO")
         log(f"   🔧 Leverage {self.cfg.LEVERAGE}x → Valor nocional: ${notional_value:.2f}", "INFO")
-        log(f"   🪙 Quantidade SOL: {amount_coins:.4f} @ ${current_price:.4f}", "INFO")
+        log(f"   🪙 Quantidade: {amount_coins:.4f} {coin} @ ${current_price:.4f}", "INFO")
         
         # Executar ordem MARKET
-        success = self.exchange.create_market_order("buy", amount_usd, self.cfg.LEVERAGE)
+        success = self.exchange.create_market_order(symbol, side, amount_usd, self.cfg.LEVERAGE)
         
         if success:
-            # Registrar compra
+            # Registrar entrada
             self.state.record_buy(current_price, amount_coins)
             
-            # Criar ordens LIMIT de venda
-            self.create_sell_orders(current_price, amount_coins)
+            # Criar ordens de Stop Loss e Take Profit
+            self.create_exit_orders(symbol, signal, current_price, amount_coins)
             
             # Notificar Discord
+            stop_loss_roi = self.cfg.STOP_LOSS_PRICE_PCT * self.cfg.LEVERAGE
+            take_profit_roi = self.cfg.TAKE_PROFIT_PRICE_PCT * self.cfg.LEVERAGE
+            
             discord.send(
-                "🟢 COMPRA EXECUTADA",
+                f"{'🟢' if signal == 'LONG' else '🔴'} ENTRADA {signal} - {coin}",
                 f"**Preço:** ${current_price:.4f}\n"
-                f"**Capital usado:** ${amount_usd:.2f} ({self.cfg.BUY_CAPITAL_PCT}% do saldo)\n"
+                f"**Capital usado:** ${amount_usd:.2f} ({self.cfg.ENTRY_CAPITAL_PCT}% do saldo)\n"
                 f"**Leverage:** {self.cfg.LEVERAGE}x\n"
                 f"**Valor nocional:** ${notional_value:.2f}\n"
-                f"**Quantidade SOL:** {amount_coins:.4f}\n\n"
-                f"**Ordens de venda criadas:**\n" + 
-                "\n".join([f"• {size}% @ +{profit}%" for profit, size in self.cfg.SELL_ORDERS]),
-                0x00ff00
+                f"**Quantidade:** {amount_coins:.4f} {coin}\n\n"
+                f"**Ordens criadas:**\n"
+                f"🔴 Stop Loss: {self.cfg.STOP_LOSS_PRICE_PCT:+.1f}% = {-stop_loss_roi:+.0f}% ROI\n"
+                f"🟢 Take Profit: {self.cfg.TAKE_PROFIT_PRICE_PCT:+.1f}% = {take_profit_roi:+.0f}% ROI",
+                0x00ff00 if signal == "LONG" else 0xff0000
             )
         
         return success
     
-    def create_sell_orders(self, entry_price: float, total_amount: float):
-        """Cria ordens limite de venda baseadas no preço de entrada"""
-        log(f"📤 Criando ordens LIMIT de venda...", "INFO")
+    def create_exit_orders(self, symbol: str, signal: str, entry_price: float, total_amount: float):
+        """Cria ordens de Stop Loss e Take Profit baseadas no preço de entrada"""
+        coin = symbol.split('/')[0]
+        log(f"📤 Criando ordens de saída (SL e TP) para {coin}...", "INFO")
         
-        for profit_pct, size_pct in self.cfg.SELL_ORDERS:
-            # Calcular preço alvo
-            target_price = entry_price * (1 + profit_pct / 100.0)
-            
-            # Calcular quantidade
-            amount = total_amount * (size_pct / 100.0)
-            amount = float(self.exchange.hyperliquid.amount_to_precision(self.cfg.SYMBOL, amount))
-            
-            # Verificar mínimo
-            notional = amount * target_price
-            if notional < self.cfg.MIN_ORDER_USD:
-                log(f"   ⚠️ Ordem muito pequena ({size_pct}% @ +{profit_pct}%): ${notional:.2f} < ${self.cfg.MIN_ORDER_USD}", "WARN")
-                continue
-            
-            try:
-                order = self.exchange.hyperliquid.create_order(
-                    symbol=self.cfg.SYMBOL,
-                    type='limit',
-                    side='sell',
-                    amount=amount,
-                    price=target_price,
-                    params={'reduceOnly': True, 'postOnly': False}
-                )
-                log(f"   ✅ Ordem criada: {size_pct}% ({amount:.4f} SOL) @ ${target_price:.4f} (+{profit_pct}%)", "INFO")
-            except Exception as e:
-                log(f"   ❌ Erro criando ordem {size_pct}% @ +{profit_pct}%: {e}", "ERROR")
-    
-    def cancel_all_orders(self):
-        """Cancela todas as ordens abertas"""
+        # Arredondar quantidade
+        amount = float(self.exchange.hyperliquid.amount_to_precision(symbol, total_amount))
+        
+        # ROI real com leverage
+        stop_loss_roi = self.cfg.STOP_LOSS_PRICE_PCT * self.cfg.LEVERAGE
+        take_profit_roi = self.cfg.TAKE_PROFIT_PRICE_PCT * self.cfg.LEVERAGE
+        
+        if signal == "LONG":
+            # LONG: SL abaixo, TP acima
+            stop_loss_price = entry_price * (1 - self.cfg.STOP_LOSS_PRICE_PCT / 100.0)
+            take_profit_price = entry_price * (1 + self.cfg.TAKE_PROFIT_PRICE_PCT / 100.0)
+            exit_side = 'sell'  # Sair de LONG = vender
+        else:
+            # SHORT: SL acima, TP abaixo
+            stop_loss_price = entry_price * (1 + self.cfg.STOP_LOSS_PRICE_PCT / 100.0)
+            take_profit_price = entry_price * (1 - self.cfg.TAKE_PROFIT_PRICE_PCT / 100.0)
+            exit_side = 'buy'  # Sair de SHORT = comprar
+        
+        # Criar Stop Loss (ordem limit)
         try:
-            orders = self.exchange.hyperliquid.fetch_open_orders(self.cfg.SYMBOL)
+            sl_order = self.exchange.hyperliquid.create_order(
+                symbol=symbol,
+                type='limit',
+                side=exit_side,
+                amount=amount,
+                price=stop_loss_price,
+                params={'reduceOnly': True, 'postOnly': False}
+            )
+            log(f"   🔴 Stop Loss: 100% ({amount:.4f} {coin}) @ ${stop_loss_price:.4f} (-{stop_loss_roi:.0f}% ROI)", "INFO")
+        except Exception as e:
+            log(f"   ❌ Erro criando Stop Loss: {e}", "ERROR")
+        
+        # Criar Take Profit (ordem limit)
+        try:
+            tp_order = self.exchange.hyperliquid.create_order(
+                symbol=symbol,
+                type='limit',
+                side=exit_side,
+                amount=amount,
+                price=take_profit_price,
+                params={'reduceOnly': True, 'postOnly': False}
+            )
+            log(f"   🟢 Take Profit: 100% ({amount:.4f} {coin}) @ ${take_profit_price:.4f} (+{take_profit_roi:.0f}% ROI)", "INFO")
+        except Exception as e:
+            log(f"   ❌ Erro criando Take Profit: {e}", "ERROR")
+    
+    def cancel_all_orders(self, symbol: str):
+        """Cancela todas as ordens abertas de um símbolo"""
+        try:
+            orders = self.exchange.hyperliquid.fetch_open_orders(symbol)
             if orders:
-                log(f"🗑️  Cancelando {len(orders)} ordens abertas...", "INFO")
+                coin = symbol.split('/')[0]
+                log(f"🗑️  Cancelando {len(orders)} ordens de {coin}...", "INFO")
                 for order in orders:
-                    self.exchange.hyperliquid.cancel_order(order['id'], self.cfg.SYMBOL)
+                    self.exchange.hyperliquid.cancel_order(order['id'], symbol)
                     log(f"   ✅ Ordem {order['id']} cancelada", "DEBUG")
             else:
-                log(f"   ℹ️  Nenhuma ordem aberta para cancelar", "DEBUG")
+                log(f"   ℹ️  Nenhuma ordem aberta para {symbol}", "DEBUG")
         except Exception as e:
-            log(f"❌ Erro cancelando ordens: {e}", "ERROR")
+            log(f"❌ Erro cancelando ordens de {symbol}: {e}", "ERROR")
     
     def run_cycle(self):
-        """Executa um ciclo da estratégia"""
+        """Executa um ciclo da estratégia para todos os assets"""
         log("=" * 80, "INFO")
         log("🔄 INICIANDO CICLO", "INFO")
         log("=" * 80, "INFO")
@@ -934,21 +997,31 @@ class DCAStrategy:
         # Mostrar estado atual
         self.state.show_state_summary()
         
+        # Mostrar saldo disponível
+        balance = self.exchange.get_balance()
+        log(f"💰 Saldo disponível: ${balance:.2f}", "INFO")
+        
         try:
-            # Analisar mercado
-            analysis = self.analyze_market()
+            # Analisar cada asset
+            for symbol in self.cfg.SYMBOLS:
+                coin = symbol.split('/')[0]
+                log(f"", "INFO")
+                log(f"🔍 Analisando {coin}...", "INFO")
+                
+                analysis = self.analyze_asset(symbol)
+                
+                if not analysis:
+                    log(f"⚠️ Análise falhou para {coin}, pulando", "WARN")
+                    continue
+                
+                # Verificar sinal de entrada
+                if self.should_enter(analysis):
+                    # Cancelar todas as ordens abertas antes de entrar
+                    self.cancel_all_orders(symbol)
+                    # Executar entrada (LONG ou SHORT)
+                    self.execute_entry(analysis)
             
-            if not analysis:
-                log("⚠️ Análise falhou, pulando ciclo", "WARN")
-                return
-            
-            # Verificar sinal de compra (RSI < 25)
-            if self.check_buy_signal(analysis):
-                # Cancelar todas as ordens abertas antes de comprar
-                self.cancel_all_orders()
-                # Executar compra e criar novas ordens de venda
-                self.execute_buy(analysis)
-            
+            log("", "INFO")
             log("✅ Ciclo concluído", "INFO")
             
         except Exception as e:
@@ -962,7 +1035,7 @@ def main():
     setup_log_file()
     
     log("=" * 80, "INFO")
-    log("🚀 INICIANDO SISTEMA DE TRADING DCA - SOL LONG ONLY", "INFO")
+    log("🚀 INICIANDO SISTEMA DE TRADING - EMA 200 + RSI", "INFO")
     log("=" * 80, "INFO")
     
     # Carregar variáveis de ambiente
@@ -979,18 +1052,21 @@ def main():
         log("⚠️ python-dotenv não instalado, usando variáveis de ambiente do sistema", "WARN")
     
     # Configuração
-    cfg = DCAConfig()
+    cfg = TradingConfig()
     
     log(f"⚙️  Configuração:", "INFO")
-    log(f"   Asset: {cfg.SYMBOL} ({cfg.LEVERAGE}x leverage)", "INFO")
-    log(f"   Timeframe RSI: {cfg.TIMEFRAME_RSI} ({cfg.RSI_PERIOD} períodos)", "INFO")
-    log(f"   Filtro de compra: RSI < {cfg.RSI_THRESHOLD}", "INFO")
-    log(f"   Capital por compra: {cfg.BUY_CAPITAL_PCT}%", "INFO")
-    log(f"   Cooldown compra: {cfg.BUY_COOLDOWN_HOURS}h (1 dia)", "INFO")
-    log(f"   Ordens de venda: {cfg.SELL_ORDERS}", "INFO")
+    log(f"   Assets: {', '.join([s.split('/')[0] for s in cfg.SYMBOLS])} ({cfg.LEVERAGE}x leverage)", "INFO")
+    log(f"   Timeframe: {cfg.TIMEFRAME}", "INFO")
+    log(f"   RSI: {cfg.RSI_PERIOD} períodos", "INFO")
+    log(f"   Entrada LONG: RSI < {cfg.RSI_LONG_THRESHOLD} (sobrevendido)", "INFO")
+    log(f"   Entrada SHORT: RSI > {cfg.RSI_SHORT_THRESHOLD} (sobrecomprado)", "INFO")
+    log(f"   Capital por entrada: {cfg.ENTRY_CAPITAL_PCT}%", "INFO")
+    log(f"   Cooldown entrada: {cfg.ENTRY_COOLDOWN_HOURS}h (2 dias)", "INFO")
+    log(f"   Stop Loss: {cfg.STOP_LOSS_PRICE_PCT:.1f}% preço = 10% ROI", "INFO")
+    log(f"   Take Profit: {cfg.TAKE_PROFIT_PRICE_PCT:.1f}% preço = 20% ROI", "INFO")
     
     # Criar estratégia
-    strategy = DCAStrategy(cfg)
+    strategy = TradingStrategy(cfg)
     
     # Loop principal
     log("🔁 Entrando no loop principal (Ctrl+C para parar)", "INFO")
